@@ -92,7 +92,6 @@ func TestNotImplementedCommands(t *testing.T) {
 		{"import", []string{"import", "channels.m3u"}, "import"},
 		{"epg ids", []string{"epg", "ids"}, "epg"},
 		{"epg match", []string{"epg", "match"}, "epg"},
-		{"healthcheck", []string{"healthcheck"}, "healthcheck"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

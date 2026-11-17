@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/KingOfKalk/wg-stream-proxy/internal/config"
 	"github.com/KingOfKalk/wg-stream-proxy/internal/server"
@@ -44,6 +45,8 @@ type cli struct {
 	// listening, if set, is called with the listen address before
 	// serving starts.
 	listening func(net.Addr)
+	// healthTimeout bounds the healthcheck request; 0 means the default.
+	healthTimeout time.Duration
 }
 
 // run dispatches the subcommand in args and returns the process exit code.
@@ -72,7 +75,9 @@ func (c *cli) run(args []string) int {
 		return c.serve(args)
 	case "check":
 		return c.check(args)
-	case "import", "epg", "healthcheck":
+	case "healthcheck":
+		return c.healthcheck(args)
+	case "import", "epg":
 		_, _ = fmt.Fprintf(c.stderr, "wg-stream-proxy: %s: not implemented yet\n", cmd)
 		return 1
 	default:

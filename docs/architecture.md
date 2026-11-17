@@ -469,7 +469,7 @@ in v0.1. All of them are part of v0.1.
 
 | Package | Role | Status |
 |---|---|---|
-| `cmd/wg-stream-proxy` | Subcommand dispatch; `serve`, `check` and `version` work, the others follow with their packages | exists |
+| `cmd/wg-stream-proxy` | Subcommand dispatch; `serve`, `check`, `healthcheck` and `version` work, the others follow with their packages | exists |
 | `internal/config` | Config dir resolution (`Resolve`), loading and validation of `config.toml` and channel files (`Load`), slugs (`Slug`), route resolution | exists |
 | `internal/config/wgquick` | Tunnel file parser (`Parse`), UAPI conversion (`UAPIConfig`), `AllowedIPs` check (`Allows`) | exists |
 | `internal/hls` | Type detection (`Detect`), playlist rewriter (`Rewrite`), signed `/r/` URLs (`Signer`), signing key (`LoadSigningKey`); pure functions, no I/O | exists |
