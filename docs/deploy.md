@@ -19,13 +19,15 @@ wg-stream-proxy serve --config-dir ./config
 
 ## Docker and Compose (v0.1)
 
-Image: `ghcr.io/kingofkalk/wg-stream-proxy`, base `distroless/static:nonroot` (UID 65532), `linux/amd64` + `linux/arm64`.
+Image: `ghcr.io/kingofkalk/wg-stream-proxy` (public), base `distroless/static:nonroot` (UID 65532), `linux/amd64` + `linux/arm64`.
+
+Tags: version tags (e.g. `0.1.0`) on release; `edge` on every push to `main` (unreleased, may break). Pin a version tag.
 
 ```bash
 docker run -d --name wg-stream-proxy -p 2349:2349 \
   -v ./config:/etc/wg-stream-proxy:ro \
   -e WG_STREAM_PROXY_SIGNING_KEY_FILE=/etc/wg-stream-proxy/signing.key \
-  ghcr.io/kingofkalk/wg-stream-proxy:latest
+  ghcr.io/kingofkalk/wg-stream-proxy:0.1.0
 ```
 
 - Host files must be readable by UID 65532 (e.g. `chown -R 65532 config` and `chmod 640` on tunnel files and `signing.key`).
@@ -34,7 +36,7 @@ docker run -d --name wg-stream-proxy -p 2349:2349 \
 # deploy/compose/compose.yaml
 services:
   wg-stream-proxy:
-    image: ghcr.io/kingofkalk/wg-stream-proxy:latest
+    image: ghcr.io/kingofkalk/wg-stream-proxy:0.1.0
     restart: unless-stopped
     read_only: true
     cap_drop: [ALL]

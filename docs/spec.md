@@ -309,14 +309,15 @@ wg-stream-proxy version
 
 ## 10. Roadmap
 
-- **v0.1 Core:** everything in this spec, plus Dockerfile, Compose file and the v0.1 test layers in [testing.md](testing.md).
+- **v0.1 Core:** everything in this spec, plus Dockerfile, Compose file and the v0.1 test layers in [testing.md](testing.md). Publishes the container image `ghcr.io/kingofkalk/wg-stream-proxy` (`linux/amd64` + `linux/arm64`, public package): tag `edge` on every push to `main`, version tags on release.
 - **v0.2 Experience:** placeholder and error clips with seamless switchover (own design doc), per-request prefetch, file-watch reload.
 - **v0.3 Distribution:** GoReleaser, systemd unit, launchd plist, Kustomize.
 - **Later:** 32-bit ARM, scaling beyond 3 viewers, EPG proxy mode, logo proxying, per-tunnel overrides, ad-hoc proxy endpoint, DASH.
 
 ## 11. Risks
 
-- WireGuard encryption is CPU-bound on small ARM boards; 3 HD streams on a Raspberry Pi 4 are expected to fit, not yet measured.
+- WireGuard encryption is CPU-bound on small ARM boards; 3 HD streams are expected to fit on a Raspberry Pi 5 (tested) and a Raspberry Pi 4 (no device available for testing, performance unmeasured).
+- Geo-IP databases may disagree on a tunnel's exit country; a broadcaster can see a different country than expected and block the stream.
 - Some upstreams need cookies or tokens from a website session; only static headers are supported.
 
 Prior art: wireproxy (userspace WireGuard proxy, one tunnel per process), MediaFlow Proxy (HLS proxy with per-domain proxy routing), Dispatcharr (IPTV manager with one VPN via Gluetun). None selects a tunnel per channel inside one process.
