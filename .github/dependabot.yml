@@ -10,3 +10,16 @@ updates:
       include: scope
     labels:
       - chore
+  # Changes the binary: listed under Bug Fixes.
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: fix
+      include: scope
+    labels:
+      - fix
+    ignore:
+      # Moves only together with wireguard-go (spec 9).
+      - dependency-name: gvisor.dev/gvisor

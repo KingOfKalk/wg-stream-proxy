@@ -127,7 +127,7 @@ dependencies weekly ([`.github/dependabot.yml`](.github/dependabot.yml)):
 | Ecosystem | Commit prefix | Changelog section |
 | --- | --- | --- |
 | `github-actions` | `chore(deps)` | Chores, CI only |
-| `gomod` (once `go.mod` exists) | `fix(deps)` | Bug Fixes, changes the binary |
+| `gomod` | `fix(deps)` | Bug Fixes, changes the binary |
 
 - Minor and patch updates are auto-merged (squash) once the required
   checks pass
@@ -156,6 +156,34 @@ Do not tag, bump versions, or edit `CHANGELOG.md` by hand.
 
 ## Checks
 
-CI arrives with the first Go code: build, test and lint jobs as in
-[docs/testing.md](docs/testing.md#ci-and-coverage), required by the `main`
-ruleset.
+CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs on every
+pull request and push to `main`. `lint`, `vulncheck`, `test` and `build`
+are the required checks of the `main` ruleset.
+
+| Check | What |
+| --- | --- |
+| `lint` | golangci-lint with [`.golangci.yml`](.golangci.yml): `standard` linters (incl. `errcheck`, `staticcheck`) and `gofumpt` |
+| `vulncheck` | govulncheck |
+| `test` | `go test -race ./...`, with `goleak` in every package's `TestMain` |
+| `cross-compile (<os>/<arch>)` | `linux/amd64`, `linux/arm64`, `darwin/arm64`, `CGO_ENABLED=0`, version from `git describe` via `-ldflags "-X main.version=…"`; binary uploaded as workflow artifact `wg-stream-proxy-<os>-<arch>` |
+| `build` | passes when all `cross-compile` jobs pass |
+
+Run them locally in throwaway containers (no Go toolchain needed, see
+[AGENTS.md](AGENTS.md) rule 12), with the versions from `go.mod` and
+`ci.yml`:
+
+```sh
+run() {
+  docker run --rm -v "$PWD":"$PWD" -w "$PWD" \
+    --user "$(id -u):$(id -g)" -e HOME=/tmp "$@"
+}
+run golang:1.27.4 go vet ./...
+run golang:1.27.4 go test -race ./...
+run golang:1.27.4 go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+run golangci/golangci-lint:v2.15.0 golangci-lint run ./...
+run -e CGO_ENABLED=0 -e GOOS=darwin -e GOARCH=arm64 golang:1.27.4 \
+  go build -o /dev/null ./cmd/wg-stream-proxy
+```
+
+Dependabot doesn't track the golangci-lint and govulncheck versions in
+`ci.yml`; bump them by hand together with this section.
