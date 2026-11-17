@@ -88,5 +88,8 @@ Proxy in-process with a test config dir, fixture upstreams as `httptest.Server`s
 ## CI and coverage
 
 - Every push: `golangci-lint` (incl. `gofumpt`, `errcheck`, `staticcheck`), `govulncheck`, L1, L2 short, L3, L4, L5.
-- Nightly: L2 long, capacity 5 minutes, native arm64 run.
+- Nightly ([`nightly.yml`](../.github/workflows/nightly.yml), not a required check): L2 long, capacity 5 minutes, native arm64 run.
+  - L2 long: every fuzz target (found with `go test -list '^Fuzz' ./...`) for 10 minutes with `-fuzzminimizetime 2s` (the default 60s stalls `FuzzRewrite`); a failing input is attached to the run as an artifact.
+  - Capacity: `TestCapacity` in `internal/server/capacitytest` with `-race`. `WSP_CAPACITY` sets the duration (`5m` nightly; `30s` or `1` for the 30s run on push); unset, the test skips, so plain `go test ./...` does not run it. Bounds: every segment arrives, in order and unaltered, within 3 target durations of being published; goroutines grow by at most 20 and the heap in use (after GC) by at most 32 MiB over the first sample after the warm-up; `goleak` after shutdown.
+  - arm64: `go test -race ./...` on `ubuntu-26.04-arm`; no QEMU fallback, the job fails if the runner is not arm64.
 - Coverage target 80% for `internal/hls`, `internal/config`, `internal/route`, `internal/server`; none for `cmd/`.
