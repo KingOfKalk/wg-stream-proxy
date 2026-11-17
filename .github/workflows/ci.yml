@@ -8,13 +8,18 @@ on:
 
 permissions: {}
 
-# Required checks in the main ruleset: lint, vulncheck, test, build.
+# Required checks in the main ruleset (job names): Lint, Test, Security, Build.
+# Order: Lint -> Test and Security in parallel -> Cross-compile -> Build.
+# Every job writes a short summary to the run page ($GITHUB_STEP_SUMMARY).
 jobs:
   lint:
+    name: Lint
     runs-on: ubuntu-26.04
     timeout-minutes: 15
     permissions:
       contents: read
+    env:
+      GOLANGCI_LINT_VERSION: v2.15.0
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -22,25 +27,35 @@ jobs:
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
-      # go run instead of golangci-lint-action: only GitHub-owned actions are
-      # allowed, and the module checksum database verifies the source.
-      - run: go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0 run ./...
-
-  vulncheck:
-    runs-on: ubuntu-26.04
-    timeout-minutes: 15
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
-        with:
-          go-version-file: go.mod
-      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+      # go install instead of golangci-lint-action: only GitHub-owned actions
+      # are allowed, and the module checksum database verifies the source.
+      - name: Install golangci-lint
+        run: GOBIN="$RUNNER_TEMP/bin" go install "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@${GOLANGCI_LINT_VERSION}"
+      - name: golangci-lint
+        run: |
+          set +e
+          "$RUNNER_TEMP/bin/golangci-lint" run ./... > "$RUNNER_TEMP/lint.txt" 2>&1
+          rc=$?
+          set -e
+          cat "$RUNNER_TEMP/lint.txt"
+          {
+            echo "## Lint"
+            echo
+            if [ "$rc" -eq 0 ]; then
+              echo "No issues (golangci-lint ${GOLANGCI_LINT_VERSION})."
+            else
+              echo "golangci-lint ${GOLANGCI_LINT_VERSION} failed (exit ${rc}):"
+              echo
+              echo '~~~'
+              cat "$RUNNER_TEMP/lint.txt"
+              echo '~~~'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$rc"
 
   test:
+    name: Test
+    needs: lint
     runs-on: ubuntu-26.04
     timeout-minutes: 15
     permissions:
@@ -52,10 +67,60 @@ jobs:
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
-      - run: go test -race ./...
+      - name: go test
+        run: |
+          set +e
+          go test -race -cover -json ./... > "$RUNNER_TEMP/test.json"
+          rc=$?
+          set -e
+          jq -j 'select(.Action == "output") | .Output' "$RUNNER_TEMP/test.json"
+          jq -rs -f .github/scripts/test-summary.jq "$RUNNER_TEMP/test.json" >> "$GITHUB_STEP_SUMMARY"
+          exit "$rc"
+
+  # Security checks of code and dependencies; govulncheck for now.
+  security:
+    name: Security
+    needs: lint
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      GOVULNCHECK_VERSION: v1.9.0
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+      - name: Install govulncheck
+        run: GOBIN="$RUNNER_TEMP/bin" go install "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}"
+      - name: govulncheck
+        run: |
+          set +e
+          "$RUNNER_TEMP/bin/govulncheck" ./... > "$RUNNER_TEMP/vuln.txt" 2>&1
+          rc=$?
+          set -e
+          cat "$RUNNER_TEMP/vuln.txt"
+          {
+            echo "## Security"
+            echo
+            if [ "$rc" -eq 0 ]; then
+              echo "No vulnerabilities found (govulncheck ${GOVULNCHECK_VERSION})."
+            else
+              echo "govulncheck ${GOVULNCHECK_VERSION} failed (exit ${rc}):"
+              echo
+              echo '~~~'
+              cat "$RUNNER_TEMP/vuln.txt"
+              echo '~~~'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$rc"
 
   cross-compile:
-    name: cross-compile (${{ matrix.goos }}/${{ matrix.goarch }})
+    name: Cross-compile (${{ matrix.goos }}/${{ matrix.goarch }})
+    needs: [test, security]
     runs-on: ubuntu-26.04
     timeout-minutes: 15
     permissions:
@@ -100,9 +165,23 @@ jobs:
           name: wg-stream-proxy-${{ matrix.goos }}-${{ matrix.goarch }}
           path: dist/wg-stream-proxy
           if-no-files-found: error
+      - name: Summary
+        env:
+          TARGET: ${{ matrix.goos }}/${{ matrix.goarch }}
+          ARTIFACT: wg-stream-proxy-${{ matrix.goos }}-${{ matrix.goarch }}
+        run: |
+          {
+            echo "## Cross-compile ${TARGET}"
+            echo
+            echo "| Artifact | Version | Size | SHA-256 |"
+            echo "| --- | --- | --- | --- |"
+            echo "| \`${ARTIFACT}\` | \`${VERSION}\` | $(stat -c %s dist/wg-stream-proxy) bytes | \`$(sha256sum dist/wg-stream-proxy | cut -d' ' -f1)\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
 
-  # Stable name for the required check, independent of the matrix.
+  # Stable name for the required check, independent of the matrix. Runs
+  # always, so it also fails when an earlier job failed and the rest skipped.
   build:
+    name: Build
     if: always()
     needs: cross-compile
     runs-on: ubuntu-26.04
@@ -111,4 +190,14 @@ jobs:
     steps:
       - env:
           RESULT: ${{ needs.cross-compile.result }}
-        run: test "$RESULT" = success
+        run: |
+          {
+            echo "## Build"
+            echo
+            if [ "$RESULT" = success ]; then
+              echo "All targets built; binaries are attached to this run as artifacts."
+            else
+              echo "Cross-compile result: \`${RESULT}\` (an earlier stage failed or was skipped)."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          test "$RESULT" = success
