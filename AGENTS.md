@@ -44,8 +44,7 @@ comment, is world-readable and permanent.
     (`git config user.name` / `user.email`); no other personal data in
     commits, issues or docs.
 11. No AI attribution: not in commits, branch names, issues or PRs. No
-    co-authoring. For Claude Code, [`.claude/settings.json`](.claude/settings.json)
-    turns it off.
+    co-authoring.
 
 ## Toolchain
 

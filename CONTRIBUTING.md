@@ -94,8 +94,6 @@ stateDiagram-v2
 
 Development is AI-assisted, but commit messages and PR descriptions
 contain **no AI co-authoring attribution at all**.
-[`.claude/settings.json`](.claude/settings.json) turns it off for Claude
-Code.
 
 ## Commit conventions
 
@@ -161,8 +159,7 @@ Do not tag, bump versions, or edit `CHANGELOG.md` by hand.
 CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs on every
 PR; its jobs are required by the `main` ruleset:
 
-- `lint`: JSON syntax of `.claude/settings.json` and the release-please
-  files
+- `lint`: JSON syntax of the release-please files
 
 Go build, test and lint jobs join with the first Go code
 ([docs/testing.md](docs/testing.md#ci-and-coverage)).
