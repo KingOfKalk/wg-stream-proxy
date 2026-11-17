@@ -44,7 +44,8 @@ wg-stream-proxy
 ### 2.1 Tunnels
 
 - One WireGuard device per tunnel file, shared by all channels and viewers using it (one key, one UDP session).
-- Each tunnel has its own `http.Transport` dialing through the netstack: keep-alive, `ForceAttemptHTTP2 = true`, `MaxIdleConnsPerHost = 16`.
+- Each tunnel has its own `http.Transport` dialing through the netstack: keep-alive, `ForceAttemptHTTP2 = true`, `MaxIdleConnsPerHost = 16`, no environment proxy.
+- IPv4 and IPv6 addresses of a host are tried Happy-Eyeballs style (RFC 8305, simplified): families interleaved starting with the first DNS answer; the next address starts after 300ms or as soon as the previous attempt fails; the first connection wins. A tunnel with `::/0` but no working IPv6 upstream thus falls back to IPv4 after 300ms.
 - DNS for upstream hosts is resolved inside the tunnel, using the `DNS` servers of the tunnel file.
 - The `Endpoint` hostname is resolved by the host resolver when the tunnel starts.
 - Lifecycle:
@@ -94,20 +95,25 @@ Resources under `/r/` use the same detection (steps 2.2-2.4): playlists are rewr
 - Request headers to upstream:
   - `User-Agent`: from merged `upstream.headers` if set, else `[upstream] user_agent`.
   - Merged `upstream.headers` (header names case-insensitive, canonicalised).
-  - From the client only: `Range`, `If-Range`, `Icy-MetaData`. `Range` is not forwarded for URLs whose path ends in `.m3u8` or `.m3u`.
-- `HEAD` requests: handled like `GET`, response headers relayed, upstream body closed immediately, no body sent.
+  - From the client only: `Range`, `If-Range`, `Icy-MetaData`. `Range` is not forwarded for URLs whose path ends in `.m3u8` or `.m3u` (case-insensitive, query ignored).
+  - The same rules apply on every redirect hop; no automatic `Referer`.
+- `HEAD` requests: handled like `GET` (the upstream request is always `GET`), response headers relayed, upstream body closed immediately, no body sent.
 - Response headers copied to the client: `Content-Type`, `Content-Range`, `Accept-Ranges`, `Cache-Control`, `Last-Modified`, `icy-*`; `Content-Length` and `ETag` only if the body is neither rewritten nor transparently decompressed.
 - Rewritten playlists: `Content-Type: application/vnd.apple.mpegurl`, uncompressed, `Cache-Control: no-cache`, status `200` (a playlist answered with `206` is refetched without `Range`).
-- Status mapping: upstream `2xx` and `4xx` passed through; upstream `5xx` and connection errors return `502`; timeouts return `504`.
-- Limits: max 10 redirects (each hop goes through the guard), playlist body max 2 MiB, upstream URL max 4096 bytes.
+- Status mapping: upstream `2xx` and `4xx` passed through; upstream `5xx`, other statuses (e.g. a `3xx` that is not followed) and connection errors return `502`; timeouts return `504`.
+- Limits: max 10 redirects (`301`, `302`, `303`, `307`, `308` with `Location`; each hop goes through the guard), playlist body max 2 MiB, upstream URL max 4096 bytes (redirect targets included).
 - Timeouts (`[upstream]`): `connect_timeout` (10s), `header_timeout` until response headers (15s), `read_timeout` between body reads (30s, implemented as a resettable timer). No total timeout.
+  - `connect_timeout` covers DNS lookup and TCP connect of one connection; running out counts as a connection error (`502`), like a tunnel without handshake (2.1).
+  - `header_timeout` runs from the start of the request until the final response headers, across redirects; `504`.
+  - `read_timeout` runs only while waiting for upstream data, not while the client is slow to accept it; `504` if it fires before the response starts, else the stream ends.
 
 ### 3.5 Private-range guard
 
 - Applies to every upstream HTTP dial on every route, checked on the resolved IP at connect time (covers redirects and DNS rebinding).
 - Not applied to: the WireGuard `Endpoint` (UDP, host side) and the tunnel's `DNS` servers.
-- Blocked: loopback, RFC 1918, RFC 6598, link-local, IPv6 ULA, unspecified, multicast, IPv4-mapped forms of these. Public IPs and any port are allowed.
+- Blocked: loopback, RFC 1918, RFC 6598, link-local, IPv6 ULA, unspecified (`0.0.0.0/8`, `::`), multicast, IPv4-mapped forms of these. Public IPs and any port are allowed.
 - Exceptions per route: `[upstream.allow_private] direct = ["192.168.1.0/24"]`, `gr = ["10.8.0.0/24"]`.
+- Blocked addresses of a DNS answer are skipped; if none is left, the request fails like a connection error with `502` (metrics reason `guard`).
 
 ## 4. Resource URLs
 
@@ -308,7 +314,7 @@ wg-stream-proxy version               # print version and source URL (AGPL secti
 ## 8. Operations and security
 
 - Intended for LAN use; exposure to the internet needs an authenticating reverse proxy.
-- WireGuard keys only in tunnel files and never logged; upstream URLs logged without query strings.
+- WireGuard keys only in tunnel files and never logged; upstream URLs logged without query strings (and without fragment and user info).
 - Container: non-root, read-only root filesystem, all capabilities dropped, single replica. Details: [deploy.md](deploy.md).
 
 ## 9. Engineering rules
