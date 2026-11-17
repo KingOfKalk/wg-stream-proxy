@@ -47,11 +47,12 @@ wg-stream-proxy
 - Each tunnel has its own `http.Transport` dialing through the netstack: keep-alive, `ForceAttemptHTTP2 = true`, `MaxIdleConnsPerHost = 16`, no environment proxy.
 - IPv4 and IPv6 addresses of a host are tried Happy-Eyeballs style (RFC 8305, simplified): families interleaved starting with the first DNS answer; the next address starts after 300ms or as soon as the previous attempt fails; the first connection wins. A tunnel with `::/0` but no working IPv6 upstream thus falls back to IPv4 after 300ms.
 - DNS for upstream hosts is resolved inside the tunnel, using the `DNS` servers of the tunnel file.
-- The `Endpoint` hostname is resolved by the host resolver when the tunnel starts.
+- Inside a tunnel, IPv4 addresses are tried first. An IPv6 connect through a tunnel that also carries IPv4 gives up after 2s, so a broken IPv6 path falls back to IPv4 well before `connect_timeout`.
+- The `Endpoint` hostname is resolved by the host resolver when the tunnel starts (IPv4 preferred).
 - Lifecycle:
   - Lazy start on the first request; concurrent first requests share one start.
   - Closed after `[tunnels] idle_timeout` (default `60m`) without activity. Activity = any in-flight request or open stream.
-  - Start failure or no handshake within `connect_timeout`: request fails with `502`; the next request retries.
+  - Start failure or no handshake within `[upstream] connect_timeout`: request fails with `502`; the next request retries. A request that waits for a start has one `connect_timeout` deadline for the start, DNS inside the tunnel and the connect together.
   - On shutdown or reload removal: drain in-flight requests for max 30s, then close.
 - `direct` uses a plain `http.Transport` on the host network with the same settings.
 
