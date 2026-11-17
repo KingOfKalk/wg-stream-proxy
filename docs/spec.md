@@ -270,7 +270,7 @@ wg-stream-proxy import <file.m3u> [--tunnel T] [--match-epg] [--out FILE]
 wg-stream-proxy epg ids               # list id and display-name from epg.url
 wg-stream-proxy epg match             # suggest tvg_id per channel, print TOML, write nothing
 wg-stream-proxy healthcheck           # GET /healthz on the listen address, exit 0/1
-wg-stream-proxy version
+wg-stream-proxy version               # print version and source URL (AGPL section 13)
 ```
 
 `import`:
