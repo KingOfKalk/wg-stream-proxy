@@ -227,6 +227,8 @@ url = "https://daserste-live.ard-mcdn.de/daserste/live/hls/de/master.m3u8"
   - Forbidden: `EXTM3U`, `EXTINF`, `EXTGRP` (conflicts with `group-title`), `EXT-X-*`.
   - No line breaks in keys or values; keys must not be empty.
 - `playlist.logo`: `http(s)://` URL (scheme case-insensitive) passed through; a plain file name (no `/` or `\`) existing in `assets/logos/` is served as `/logos/{file}`; anything else is written as-is (player-side logo paths).
+  - `GET/HEAD /logos/{file}` serves any regular file directly in `<config-dir>/assets/logos/`, not only the names channels use, so a logo added while running works. `{file}` is one path segment: empty, dot-leading (`.`, `..`, hidden files), over 255 bytes, or containing `/`, `\` or a control character gives `404`, as does a missing logos dir, a directory, or a symbolic link whose target is outside the logos dir (links inside it work; the logos dir itself may be a link). Encoded forms are decoded once, then checked like plain ones.
+  - `Content-Type` by extension (`png`, `jpg`/`jpeg`, `gif`, `webp`, `svg`, `ico`, `avif`; else the system type or `application/octet-stream`), `X-Content-Type-Options: nosniff`, a restrictive `Content-Security-Policy` (no scripts in SVG), `Cache-Control: public, max-age=3600`, `Last-Modified` and conditional and range requests.
 
 ### 5.5 Tunnel files
 
@@ -276,7 +278,7 @@ http://wsp.lan:2349/c/ert-world.m3u8
 | `GET/HEAD /playlist.m3u8` | Channel list |
 | `GET/HEAD /c/{id}`, `/c/{id}.m3u8` | Channel entry |
 | `GET/HEAD /r/{channel}/{sig}/{b64url}/{name}` | Signed resource |
-| `GET /logos/{file}` | Local logo, flat directory, no traversal |
+| `GET/HEAD /logos/{file}` | Local logo, flat directory, no traversal (5.4) |
 | `GET /healthz` | 200 while serving; body: version and source URL (AGPL section 13) |
 | `GET /metrics` | Prometheus |
 
@@ -298,6 +300,8 @@ wg-stream-proxy version               # print version and source URL (AGPL secti
 `serve` stops on `SIGINT` or `SIGTERM`: it accepts no new connections, gives in-flight requests up to 30s (2.1), then closes the remaining connections and the tunnels; a second signal exits at once.
 
 `check` also parses the tunnel files and the signing key variables (4), lists every error found and starts nothing.
+
+`healthcheck` resolves the config like `serve` (same flags and environment), sends `GET /healthz` to the listen address (an unspecified host such as `:2349` or `0.0.0.0` becomes `127.0.0.1`, `[::]` becomes `[::1]`) with a 3s timeout, follows no redirect and prints nothing on `200` (exit 0). Any other result, a connection error or an invalid config prints one line to stderr and exits 1. It needs no shell or curl, so it serves as the `HEALTHCHECK` of the container image.
 
 `import`:
 - `tvg-id`, `tvg-logo`, `group-title` to their fields, `tvg-name` dropped (generated from `name`), other `#EXTINF` attributes to `playlist.attrs`.
