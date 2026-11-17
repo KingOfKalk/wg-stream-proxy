@@ -1,0 +1,22 @@
+# Example config.toml (spec 5.3). Every key is optional; the values shown
+# are the defaults.
+
+listen = ":2349"
+log_level = "info"                    # debug | info | warn | error
+log_format = "text"                   # text | json
+public_base_url = ""                  # default: from Host / X-Forwarded-Proto / X-Forwarded-Host
+
+[upstream]
+user_agent = "Mozilla/5.0 (X11; Linux x86_64) Firefox/132.0"
+connect_timeout = "10s"
+header_timeout = "15s"
+read_timeout = "30s"
+
+[upstream.allow_private]              # optional, per route name
+direct = []
+
+[tunnels]
+idle_timeout = "60m"
+
+# [epg]
+# url = "https://epg.example.com/epg.xml.gz"  # optional, no default

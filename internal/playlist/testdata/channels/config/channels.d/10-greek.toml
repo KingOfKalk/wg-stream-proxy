@@ -1,0 +1,38 @@
+group = "Ελληνικά"
+tunnel = "gr"
+
+[defaults.playlist]
+attrs = { parent-code = "1234" }
+
+[[channel]]
+name = "ΕΡΤ1, Ειδήσεις"
+url = "https://upstream.example.com/ert1/index.m3u8?token=abc"
+
+[channel.playlist]
+tvg_id = "ert1.gr"
+logo = "https://logos.example.com/ert1.png"
+attrs = { tvg-chno = "1", catchup = "", x-quote = 'say "hi"' }
+
+[[channel]]
+name = 'Σκάι "Live", HD'
+url = "https://upstream.example.com/skai/live"
+
+[channel.upstream]
+type = "hls"
+
+[channel.playlist]
+logo = "skai.png"
+attrs = { parent-code = "" }
+
+[[channel]]
+name = "Disabled channel"
+url = "https://upstream.example.com/off.m3u8"
+enabled = false
+
+[[channel]]
+name = "News 24"
+group = "News"
+url = "https://upstream.example.com/news/MASTER.M3U8"
+
+[channel.playlist]
+logo = "news 24.png"

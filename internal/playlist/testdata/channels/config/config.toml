@@ -1,0 +1,2 @@
+[epg]
+url = "https://epg.example.com/guide.xml.gz?a=1&b=\"2\""

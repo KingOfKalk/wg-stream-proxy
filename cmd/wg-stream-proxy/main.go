@@ -5,13 +5,16 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"strings"
-)
 
-const sourceURL = "https://github.com/KingOfKalk/wg-stream-proxy"
+	"github.com/KingOfKalk/wg-stream-proxy/internal/config"
+	"github.com/KingOfKalk/wg-stream-proxy/internal/server"
+)
 
 // version is set at build time with -ldflags "-X main.version=...".
 var version = "dev"
@@ -31,8 +34,31 @@ func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
 
+// cli holds the process environment of a command; tests replace it.
+type cli struct {
+	stdout, stderr io.Writer
+	env            config.Env
+	readFile       func(string) ([]byte, error)
+	// ctx ends the serve command, like SIGINT and SIGTERM do.
+	ctx context.Context
+	// listening, if set, is called with the listen address before
+	// serving starts.
+	listening func(net.Addr)
+}
+
 // run dispatches the subcommand in args and returns the process exit code.
 func run(args []string, stdout, stderr io.Writer) int {
+	c := &cli{
+		stdout:   stdout,
+		stderr:   stderr,
+		env:      config.OSEnv(),
+		readFile: os.ReadFile,
+		ctx:      context.Background(),
+	}
+	return c.run(args)
+}
+
+func (c *cli) run(args []string) int {
 	cmd := "serve"
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
 		cmd, args = args[0], args[1:]
@@ -41,12 +67,16 @@ func run(args []string, stdout, stderr io.Writer) int {
 	// Write errors on stderr are ignored: there is nowhere left to report them.
 	switch cmd {
 	case "version":
-		return runVersion(args, stdout, stderr)
-	case "serve", "check", "import", "epg", "healthcheck":
-		_, _ = fmt.Fprintf(stderr, "wg-stream-proxy: %s: not implemented yet\n", cmd)
+		return runVersion(args, c.stdout, c.stderr)
+	case "serve":
+		return c.serve(args)
+	case "check":
+		return c.check(args)
+	case "import", "epg", "healthcheck":
+		_, _ = fmt.Fprintf(c.stderr, "wg-stream-proxy: %s: not implemented yet\n", cmd)
 		return 1
 	default:
-		_, _ = fmt.Fprintf(stderr, "wg-stream-proxy: unknown command %q\n\n%s", cmd, usage)
+		_, _ = fmt.Fprintf(c.stderr, "wg-stream-proxy: unknown command %q\n\n%s", cmd, usage)
 		return 2
 	}
 }
@@ -56,9 +86,15 @@ func runVersion(args []string, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintln(stderr, "wg-stream-proxy: version: unexpected arguments")
 		return 2
 	}
-	if _, err := fmt.Fprintf(stdout, "wg-stream-proxy %s\nsource: %s\n", version, sourceURL); err != nil {
+	if _, err := fmt.Fprintf(stdout, "wg-stream-proxy %s\nsource: %s\n", version, server.SourceURL); err != nil {
 		_, _ = fmt.Fprintf(stderr, "wg-stream-proxy: version: %v\n", err)
 		return 1
 	}
 	return 0
+}
+
+// getenv returns an environment variable; empty means unset.
+func (c *cli) getenv(key string) string {
+	v, _ := c.env.LookupEnv(key)
+	return v
 }

@@ -89,10 +89,6 @@ func TestNotImplementedCommands(t *testing.T) {
 		args []string
 		cmd  string
 	}{
-		{"no args defaults to serve", nil, "serve"},
-		{"flags only default to serve", []string{"--listen", ":8080"}, "serve"},
-		{"serve", []string{"serve"}, "serve"},
-		{"check", []string{"check"}, "check"},
 		{"import", []string{"import", "channels.m3u"}, "import"},
 		{"epg ids", []string{"epg", "ids"}, "epg"},
 		{"epg match", []string{"epg", "match"}, "epg"},

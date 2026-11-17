@@ -1,0 +1,5 @@
+#EXTM3U x-tvg-url="https://epg.example.com/guide.xml.gz?a=1&b='2'" url-tvg="https://epg.example.com/guide.xml.gz?a=1&b='2'"
+#EXTINF:-1 tvg-id="ert1.gr" tvg-name="ΕΡΤ1, Ειδήσεις" tvg-logo="https://logos.example.com/ert1.png" group-title="Ελληνικά" parent-code="1234" tvg-chno="1" x-quote="say 'hi'",ΕΡΤ1, Ειδήσεις
+http://192.0.2.10:2349/c/ert1-eidiseis.m3u8
+#EXTINF:-1 tvg-name="Σκάι 'Live', HD" tvg-logo="http://192.0.2.10:2349/logos/skai.png" group-title="Ελληνικά",Σκάι 'Live', HD
+http://192.0.2.10:2349/c/skai-live-hd.m3u8

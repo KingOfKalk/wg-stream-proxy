@@ -1,0 +1,17 @@
+#EXTM3U
+#EXTINF:-1 tvg-name="News" group-title="TV",News
+https://tv.example.org/c/news.m3u8
+#EXTINF:-1 tvg-name="Radio" group-title="TV",Radio
+https://tv.example.org/c/radio
+#EXTINF:-1 tvg-name="Forced raw" group-title="TV",Forced raw
+https://tv.example.org/c/forced-raw.m3u8
+#EXTINF:-1 tvg-name="Forced HLS" group-title="TV",Forced HLS
+https://tv.example.org/c/forced-hls.m3u8
+#EXTINF:-1 tvg-name="Partial" group-title="TV",Partial
+https://tv.example.org/c/partial
+#EXTINF:-1 tvg-name="Always partial" group-title="TV",Always partial
+https://tv.example.org/c/always-partial
+#EXTINF:-1 tvg-name="Status" group-title="TV",Status
+https://tv.example.org/c/status
+#EXTINF:-1 tvg-name="Hang" group-title="TV",Hang
+https://tv.example.org/c/hang
