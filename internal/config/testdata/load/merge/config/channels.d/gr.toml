@@ -1,0 +1,49 @@
+# File layer: group, upstream and playlist defaults; route from the stem.
+group = "Greek TV"
+
+[defaults.upstream]
+type = "hls"
+headers = { user-agent = "OKHTTP", referer = "https://www.example.com/" }
+
+[defaults.playlist]
+logo = "default-logo"
+attrs = { parent-code = "1234", tvg-chno = "1" }
+
+[defaults.playlist.extra.KODIPROP]
+"inputstream.adaptive.manifest_type" = "hls"
+"inputstream.adaptive.stream_headers" = "a=b"
+
+# Greek name: id from the slug, headers merged case-insensitively.
+[[channel]]
+name = "Κανάλι Ένα"
+url = "https://cdn.example.com/one/master.m3u8"
+
+[channel.upstream]
+headers = { REFERER = "https://one.example.com/", x-extra = "1" }
+
+[channel.playlist]
+tvg_id = "one.gr"
+logo = "news.png"
+attrs = { tvg-chno = "5" }
+
+[channel.playlist.extra.KODIPROP]
+"inputstream.adaptive.manifest_type" = "mpd"
+
+[channel.playlist.extra.EXTVLCOPT]
+"http-user-agent" = "VLC"
+
+# Everything set on the channel.
+[[channel]]
+name = "Two, Radio"
+id = "two"
+url = "http://radio.example.com:8000/stream"
+tunnel = "de-1"
+group = "Radio"
+enabled = false
+
+[channel.upstream]
+type = "raw"
+headers = { User-Agent = "Radio/2" }
+
+[channel.playlist]
+logo = "https://logos.example.com/two.png"

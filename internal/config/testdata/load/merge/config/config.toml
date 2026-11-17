@@ -1,0 +1,7 @@
+[upstream]
+user_agent = "ExampleAgent/1.0"
+connect_timeout = "5s"
+
+[upstream.allow_private]
+direct = ["192.168.1.0/24", "fd00::/8"]
+gr = ["10.8.0.0/24"]

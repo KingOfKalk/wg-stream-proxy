@@ -1,0 +1,170 @@
+{
+  "Paths": {
+    "ConfigDir": "testdata/load/merge/config",
+    "TunnelsDir": "testdata/load/merge/config/tunnels"
+  },
+  "LogosDir": "testdata/load/merge/config/assets/logos",
+  "Listen": ":2349",
+  "LogLevel": "INFO",
+  "LogFormat": "text",
+  "PublicBaseURL": "",
+  "UserAgent": "ExampleAgent/1.0",
+  "Timeouts": {
+    "connect": "5s",
+    "header": "15s",
+    "idle": "1h0m0s",
+    "read": "30s"
+  },
+  "AllowPrivate": {
+    "direct": [
+      "192.168.1.0/24",
+      "fd00::/8"
+    ],
+    "gr": [
+      "10.8.0.0/24"
+    ]
+  },
+  "EPGURL": "",
+  "Tunnels": [
+    {
+      "Name": "de-1",
+      "Path": "testdata/load/merge/config/tunnels/de-1.conf"
+    },
+    {
+      "Name": "gr",
+      "Path": "testdata/load/merge/config/tunnels/gr.conf"
+    }
+  ],
+  "Channels": [
+    {
+      "File": "testdata/load/merge/config/channels.d/de-1.toml",
+      "ID": "drei",
+      "Name": "Drei",
+      "URL": "https://de.example.com/drei.m3u8",
+      "Route": "de-1",
+      "Group": "de-1",
+      "Enabled": true,
+      "Type": "auto",
+      "Header": {
+        "User-Agent": [
+          "ExampleAgent/1.0"
+        ]
+      },
+      "TVGID": "",
+      "Logo": "raw:special://logos/drei.png",
+      "Attrs": [],
+      "Extra": null
+    },
+    {
+      "File": "testdata/load/merge/config/channels.d/de-1.toml",
+      "ID": "vier",
+      "Name": "Vier",
+      "URL": "https://de.example.com/vier",
+      "Route": "direct",
+      "Group": "",
+      "Enabled": true,
+      "Type": "auto",
+      "Header": {
+        "User-Agent": [
+          "ExampleAgent/1.0"
+        ]
+      },
+      "TVGID": "",
+      "Logo": "none:",
+      "Attrs": [],
+      "Extra": null
+    },
+    {
+      "File": "testdata/load/merge/config/channels.d/gr.toml",
+      "ID": "kanali-ena",
+      "Name": "Κανάλι Ένα",
+      "URL": "https://cdn.example.com/one/master.m3u8",
+      "Route": "gr",
+      "Group": "Greek TV",
+      "Enabled": true,
+      "Type": "hls",
+      "Header": {
+        "Referer": [
+          "https://one.example.com/"
+        ],
+        "User-Agent": [
+          "OKHTTP"
+        ],
+        "X-Extra": [
+          "1"
+        ]
+      },
+      "TVGID": "one.gr",
+      "Logo": "local:news.png",
+      "Attrs": [
+        {
+          "Key": "parent-code",
+          "Value": "1234"
+        },
+        {
+          "Key": "tvg-chno",
+          "Value": "5"
+        }
+      ],
+      "Extra": [
+        {
+          "Directive": "EXTVLCOPT",
+          "Key": "http-user-agent",
+          "Value": "VLC"
+        },
+        {
+          "Directive": "KODIPROP",
+          "Key": "inputstream.adaptive.manifest_type",
+          "Value": "mpd"
+        },
+        {
+          "Directive": "KODIPROP",
+          "Key": "inputstream.adaptive.stream_headers",
+          "Value": "a=b"
+        }
+      ]
+    },
+    {
+      "File": "testdata/load/merge/config/channels.d/gr.toml",
+      "ID": "two",
+      "Name": "Two, Radio",
+      "URL": "http://radio.example.com:8000/stream",
+      "Route": "de-1",
+      "Group": "Radio",
+      "Enabled": false,
+      "Type": "raw",
+      "Header": {
+        "Referer": [
+          "https://www.example.com/"
+        ],
+        "User-Agent": [
+          "Radio/2"
+        ]
+      },
+      "TVGID": "",
+      "Logo": "url:https://logos.example.com/two.png",
+      "Attrs": [
+        {
+          "Key": "parent-code",
+          "Value": "1234"
+        },
+        {
+          "Key": "tvg-chno",
+          "Value": "1"
+        }
+      ],
+      "Extra": [
+        {
+          "Directive": "KODIPROP",
+          "Key": "inputstream.adaptive.manifest_type",
+          "Value": "hls"
+        },
+        {
+          "Directive": "KODIPROP",
+          "Key": "inputstream.adaptive.stream_headers",
+          "Value": "a=b"
+        }
+      ]
+    }
+  ]
+}
