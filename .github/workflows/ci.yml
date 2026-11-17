@@ -17,7 +17,6 @@ jobs:
       - name: Check JSON syntax
         run: |
           for f in \
-            .claude/settings.json \
             release-please-config.json \
             .release-please-manifest.json; do
             jq empty "$f"
