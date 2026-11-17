@@ -19,37 +19,32 @@ wg-stream-proxy serve --config-dir ./config
 
 ## Docker and Compose (v0.1)
 
-Image: `ghcr.io/kingofkalk/wg-stream-proxy` (public), base `distroless/static:nonroot` (UID 65532), `linux/amd64` + `linux/arm64`.
+Image: `ghcr.io/kingofkalk/wg-stream-proxy` (public), base `distroless/static:nonroot` (UID 65532), `linux/amd64` + `linux/arm64`. Built from the [`Dockerfile`](../Dockerfile) by [`container.yml`](../.github/workflows/container.yml).
 
-Tags: version tags (e.g. `0.1.0`) on release; `edge` on every push to `main` (unreleased, may break). Pin a version tag.
+| Tag | Published on | Use |
+|---|---|---|
+| `X.Y.Z` (e.g. `0.1.0`) | release | pin this |
+| `X.Y` (e.g. `0.1`) | release | latest patch of a minor version |
+| `edge`, `sha-<commit>` | every push to `main` | unreleased, may break |
 
+There is no `latest` tag: pin a version tag.
+
+- Entry point `/wg-stream-proxy`, default command `serve`; other commands as arguments (`docker run --rm … check`).
+- Config dir `/etc/wg-stream-proxy` (`WG_STREAM_PROXY_CONFIG_DIR`), port 2349.
+- `HEALTHCHECK`: `wg-stream-proxy healthcheck` every 30s (every 1s for the first 30s). It loads the config like `serve` but does not see `serve` flags: set options in `config.toml` or as env vars (e.g. `WG_STREAM_PROXY_LISTEN`).
+- Host files must be readable by UID 65532 (e.g. `chown -R 65532 config` and `chmod 640` on tunnel files and `signing.key`).
+
+<!-- x-release-please-start-version -->
 ```bash
 docker run -d --name wg-stream-proxy -p 2349:2349 \
+  --read-only --cap-drop ALL \
   -v ./config:/etc/wg-stream-proxy:ro \
   -e WG_STREAM_PROXY_SIGNING_KEY_FILE=/etc/wg-stream-proxy/signing.key \
   ghcr.io/kingofkalk/wg-stream-proxy:0.1.0
 ```
+<!-- x-release-please-end -->
 
-- Host files must be readable by UID 65532 (e.g. `chown -R 65532 config` and `chmod 640` on tunnel files and `signing.key`).
-
-```yaml
-# deploy/compose/compose.yaml
-services:
-  wg-stream-proxy:
-    image: ghcr.io/kingofkalk/wg-stream-proxy:0.1.0
-    restart: unless-stopped
-    read_only: true
-    cap_drop: [ALL]
-    ports: ["2349:2349"]
-    volumes:
-      - ./config:/etc/wg-stream-proxy:ro
-    environment:
-      WG_STREAM_PROXY_SIGNING_KEY_FILE: /etc/wg-stream-proxy/signing.key
-    healthcheck:
-      test: ["CMD", "/wg-stream-proxy", "healthcheck"]
-      interval: 30s
-      timeout: 5s
-```
+Compose: [`deploy/compose/compose.yaml`](../deploy/compose/compose.yaml) (`read_only`, `cap_drop: [ALL]`, config mounted read-only, signing key file, healthcheck); put the config dir next to it as `./config`, then `docker compose up -d`.
 
 - Reload: `docker kill -s HUP wg-stream-proxy`.
 - LibreELEC 12+ on Raspberry Pi 4/5: the Docker add-on runs the `linux/arm64` image.

@@ -23,3 +23,13 @@ updates:
     ignore:
       # Moves only together with wireguard-go (spec 9).
       - dependency-name: gvisor.dev/gvisor
+  # Base and builder images of the Dockerfile; changes the image: Bug Fixes.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: fix
+      include: scope
+    labels:
+      - fix
