@@ -27,6 +27,9 @@ type Options struct {
 	AllowPrivate map[string][]netip.Prefix
 	// Clock schedules all timeouts; nil means SystemClock.
 	Clock Clock
+	// Activity counts the requests in flight per route name, normally
+	// the tunnel of the route. Routes without one count nothing.
+	Activity map[string]Activity
 }
 
 // Route is one way to the upstreams: a tunnel or direct. It owns an
@@ -38,6 +41,7 @@ type Route struct {
 	guard     Guard
 	upstream  config.Upstream
 	clock     Clock
+	activity  Activity
 	transport *http.Transport
 	// icyTransport serves requests with Request.ICY: its connections
 	// accept a Shoutcast v1 "ICY" status line (spec 3.3). It has its own
@@ -53,6 +57,7 @@ func newRoute(name string, n Network, opts Options) *Route {
 		guard:    NewGuard(opts.AllowPrivate[name]),
 		upstream: opts.Upstream,
 		clock:    opts.Clock,
+		activity: opts.Activity[name],
 	}
 	if r.clock == nil {
 		r.clock = SystemClock()

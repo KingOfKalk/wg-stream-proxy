@@ -53,9 +53,17 @@ type testEnv struct {
 
 func newManager(t *testing.T, tunnels ...*wgquick.Tunnel) (*Manager, *testEnv) {
 	t.Helper()
+	return newManagerIdle(t, 0, tunnels...)
+}
+
+// newManagerIdle is newManager with an idle timeout; 0 disables idle
+// close.
+func newManagerIdle(t *testing.T, idle time.Duration, tunnels ...*wgquick.Tunnel) (*Manager, *testEnv) {
+	t.Helper()
 	env := &testEnv{clock: newFakeClock(), resolver: &recordingResolver{hosts: map[string][]netip.Addr{}}}
 	m, err := New(tunnels, Options{
 		ConnectTimeout: testConnectTimeout,
+		IdleTimeout:    idle,
 		Clock:          env.clock,
 		HostResolver:   env.resolver,
 	})
