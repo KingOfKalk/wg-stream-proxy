@@ -61,8 +61,8 @@ wg-stream-proxy
 1. Fetch the channel URL through the channel's route.
 2. Detect the type:
    1. `upstream.type = "hls"` or `"raw"` set: use it.
-   2. `Content-Type` is `application/vnd.apple.mpegurl` or `application/x-mpegurl` (case-insensitive): HLS.
-   3. Body starts with `#EXTM3U` (after optional UTF-8 BOM and whitespace): HLS.
+   2. `Content-Type` is `application/vnd.apple.mpegurl` or `application/x-mpegurl` (case-insensitive, parameters ignored): HLS.
+   3. Body starts with `#EXTM3U` (after optional UTF-8 BOM and whitespace, within the first 512 bytes): HLS.
    4. Otherwise: raw.
 3. HLS: rewrite (3.2) and return. Raw: pipe (3.3).
 
@@ -73,9 +73,14 @@ Resources under `/r/` use the same detection (steps 2.2-2.4): playlists are rewr
 - Stateless: master and media playlists are rewritten and returned; the player selects variants and renditions. Live and VOD are handled the same way.
 - Rewritten:
   - Every URI line (non-empty, not starting with `#`).
-  - Every `URI="..."` attribute in any tag.
+  - Every `URI="..."` attribute in any tag, including names ending in `-URI` (`SERVER-URI`, `X-ASSET-URI`, ...).
 - Only `http`, `https` and relative URIs are rewritten (relative ones resolved against the final URL after redirects). All other schemes (`data:`, `skd:`, ...) and all other lines stay byte for byte unchanged.
 - AES-128 and SAMPLE-AES key URIs are rewritten like any URI; the player decrypts.
+- Lines end at LF, CRLF or a lone CR (as ffmpeg reads them). Tags are lines starting with `#EXT`; other lines starting with `#` are comments. `#EXTINF` has no attribute list and is never rewritten. Other tags: attributes may be separated by commas and/or whitespace; the list is read up to the first element that is not `NAME=VALUE`. Blank lines, line endings, a leading BOM and whitespace around URI lines are kept.
+- Fail closed: the whole playlist is rejected (`502`) instead of leaving a URL the player could fetch directly, if
+  - an `http`, `https` or relative URI does not parse, or resolves to an upstream URL longer than 4096 bytes;
+  - it contains a NUL byte (a line end for ffmpeg);
+  - a tag other than `#EXTINF` contains `URI=` followed by an `http(s)` or scheme-relative URL outside a recognised attribute (unquoted value, escaped quote, broken attribute list): players parse such lines differently.
 - Not supported: `EXT-X-DEFINE` variable substitution, LL-HLS `_HLS_*` query parameters (passed through unchanged, no guarantees).
 
 ### 3.3 Raw passthrough
@@ -110,9 +115,9 @@ Resources under `/r/` use the same detection (steps 2.2-2.4): playlists are rewr
   - `{channel}`: channel id; route and headers always come from the channel config.
   - `{b64url}`: base64url (no padding) of the absolute upstream URL.
   - `{sig}`: base64url of the first 16 bytes of `HMAC-SHA256(key, channel + "\n" + upstream_url)`.
-  - `{name}`: last path segment of the upstream URL, reduced to `[A-Za-z0-9._-]`, max 64 chars with the extension kept; fallback `data`. Ignored by the server, only for player format detection.
-- Invalid signature, unknown or disabled channel: `404`. No expiry.
-- Signing key: `WG_STREAM_PROXY_SIGNING_KEY`, or a file named by `WG_STREAM_PROXY_SIGNING_KEY_FILE`; raw bytes after trimming whitespace, minimum 32 bytes, else startup error. If neither is set: random key with a warning that resource URLs do not survive restarts. Generate with `openssl rand -base64 32`.
+  - `{name}`: last path segment of the upstream URL, reduced to `[A-Za-z0-9._-]`, max 64 chars with the extension kept; fallback `data` (also for a name of only dots). Ignored by the server, only for player format detection.
+- Invalid signature, unknown or disabled channel: `404`. Only the canonical encoding is accepted (no padding, no line breaks, zero trailing bits). No expiry.
+- Signing key: `WG_STREAM_PROXY_SIGNING_KEY`, or a file named by `WG_STREAM_PROXY_SIGNING_KEY_FILE`; raw bytes after trimming leading and trailing ASCII whitespace, minimum 32 bytes, else startup error. An empty variable counts as unset; setting both is a startup error. If neither is set: random key with a warning that resource URLs do not survive restarts. Generate with `openssl rand -base64 32`.
 - `/c/{id}` URLs in the channel list are unsigned and stable.
 
 ## 5. Configuration
