@@ -82,6 +82,7 @@ func New(opts Options) (*Server, error) {
 	s.mux.HandleFunc("GET /c/{id}", s.handleChannel)
 	s.mux.HandleFunc("GET /r/", s.handleResource)
 	s.mux.HandleFunc("GET /healthz", s.handleHealth)
+	s.mux.HandleFunc("GET /logos/{file}", s.handleLogo)
 	return s, nil
 }
 
