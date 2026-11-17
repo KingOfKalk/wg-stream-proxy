@@ -1,0 +1,29 @@
+tunnel = "direct"
+
+[[channel]]
+name = "Radio, Jazz"
+url = "http://radio.example.com/jazz.mp3"
+
+[channel.playlist]
+logo = "special://home/logos/jazz.png"
+
+[channel.playlist.extra.KODIPROP]
+"inputstream.adaptive.manifest_type" = "hls"
+"a.b" = "c"
+
+[channel.playlist.extra.EXTVLCOPT]
+"http-user-agent" = "VLC"
+
+[[channel]]
+name = "Raw with playlist path"
+url = "http://radio.example.com/live.m3u8/stream"
+
+[channel.upstream]
+type = "raw"
+
+[[channel]]
+name = "Query only"
+url = "http://radio.example.com/play?file=x.m3u8"
+
+[channel.playlist]
+logo = "missing.png"

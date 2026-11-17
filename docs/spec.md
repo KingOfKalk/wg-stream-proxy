@@ -98,9 +98,9 @@ Resources under `/r/` use the same detection (steps 2.2-2.4): playlists are rewr
   - Merged `upstream.headers` (header names case-insensitive, canonicalised).
   - From the client only: `Range`, `If-Range`, `Icy-MetaData`. `Range` is not forwarded for URLs whose path ends in `.m3u8` or `.m3u` (case-insensitive, query ignored).
   - The same rules apply on every redirect hop; no automatic `Referer`.
-- `HEAD` requests: handled like `GET` (the upstream request is always `GET`), response headers relayed, upstream body closed immediately, no body sent.
+- `HEAD` requests: handled like `GET` (the upstream request is always `GET`), response headers relayed, upstream body closed immediately, no body sent; `auto` type detection uses only the `Content-Type`.
 - Response headers copied to the client: `Content-Type`, `Content-Range`, `Accept-Ranges`, `Cache-Control`, `Last-Modified`, `icy-*`; `Content-Length` and `ETag` only if the body is neither rewritten nor transparently decompressed.
-- Rewritten playlists: `Content-Type: application/vnd.apple.mpegurl`, uncompressed, `Cache-Control: no-cache`, status `200` (a playlist answered with `206` is refetched without `Range`).
+- Rewritten playlists: `Content-Type: application/vnd.apple.mpegurl`, uncompressed, `Cache-Control: no-cache`, status `200` (a playlist answered with `206` is refetched without `Range` and `If-Range`; another `206` gives `502`).
 - Status mapping: upstream `2xx` and `4xx` passed through; upstream `5xx`, other statuses (e.g. a `3xx` that is not followed) and connection errors return `502`; timeouts return `504`.
 - Limits: max 10 redirects (`301`, `302`, `303`, `307`, `308` with `Location`; each hop goes through the guard), playlist body max 2 MiB, upstream URL max 4096 bytes (redirect targets included).
 - Timeouts (`[upstream]`): `connect_timeout` (10s), `header_timeout` until response headers (15s), `read_timeout` between body reads (30s, implemented as a resettable timer). No total timeout.
@@ -252,7 +252,7 @@ url = "https://daserste-live.ard-mcdn.de/daserste/live/hls/de/master.m3u8"
 
 ## 6. Channel list
 
-- `GET /playlist.m3u8`, `Content-Type: audio/x-mpegurl; charset=utf-8`, no BOM; disabled channels omitted; optional `?group=<name>` (exact match).
+- `GET /playlist.m3u8`, `Content-Type: audio/x-mpegurl; charset=utf-8`, no BOM; disabled channels omitted; optional `?group=<name>` (exact match; empty lists all).
 - Header: `#EXTM3U x-tvg-url="<epg.url>" url-tvg="<epg.url>"` if `epg.url` is set (EPG link mode: the player fetches it).
 - Per channel:
   1. `playlist.extra` lines, sorted by directive, then key.
@@ -281,6 +281,7 @@ http://wsp.lan:2349/c/ert-world.m3u8
 | `GET /metrics` | Prometheus |
 
 Absolute URLs in responses use `public_base_url`, else `X-Forwarded-Proto` / `X-Forwarded-Host`, else the request `Host`.
+Of `X-Forwarded-Proto` / `X-Forwarded-Host` only the first comma-separated value counts; each replaces the scheme or host on its own, and invalid values (scheme other than `http`/`https`, host with characters outside `[A-Za-z0-9.:_[]-]`) are ignored. Without a usable `Host`, the local address of the connection is used.
 
 ### 7.2 CLI
 
@@ -293,6 +294,10 @@ wg-stream-proxy epg match             # suggest tvg_id per channel, print TOML, 
 wg-stream-proxy healthcheck           # GET /healthz on the listen address, exit 0/1
 wg-stream-proxy version               # print version and source URL (AGPL section 13)
 ```
+
+`serve` stops on `SIGINT` or `SIGTERM`: it accepts no new connections, gives in-flight requests up to 30s (2.1), then closes the remaining connections and the tunnels; a second signal exits at once.
+
+`check` also parses the tunnel files and the signing key variables (4), lists every error found and starts nothing.
 
 `import`:
 - `tvg-id`, `tvg-logo`, `group-title` to their fields, `tvg-name` dropped (generated from `name`), other `#EXTINF` attributes to `playlist.attrs`.
