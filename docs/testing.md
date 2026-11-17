@@ -78,10 +78,10 @@ Proxy in-process with a test config dir, fixture upstreams as `httptest.Server`s
 
 ## L6 Manual release checklist
 
-- Hardware: Raspberry Pi 4 (64-bit OS), Raspberry Pi 5, Apple Silicon.
+- Hardware: Raspberry Pi 5 (64-bit OS), Apple Silicon, amd64 PC. No Raspberry Pi 4 is available for testing.
 - Players: Kodi IPTV Simple Client with default settings, Kodi with timeshift enabled (inputstream.ffmpegdirect), VLC.
 - Streams from the real channel list: at least one per tunnel, one `direct`, one Icecast radio, one Shoutcast `/;` radio. EPG and logos visible, parental lock (`parent-code`) works, channel switching within the idle timeout.
-- Load: 3 concurrent HD streams through one tunnel on the Raspberry Pi 4 for 30 minutes; record CPU, memory and throughput.
+- Load: 3 concurrent HD streams through one tunnel on the Raspberry Pi 5 for 30 minutes; record CPU, memory and throughput.
 
 ## CI and coverage
 
