@@ -1,0 +1,7 @@
+#EXTM3U
+#EXTINF:-1,Bad ÿ UTF-8
+https://bytes.example.com/a.m3u8
+#EXTINF:-1,ControlChar
+https://bytes.example.com/b.m3u8
+#EXTINF:-1,Tab	Name
+https://bytes.example.com/c.m3u8

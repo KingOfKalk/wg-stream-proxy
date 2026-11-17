@@ -1,0 +1,48 @@
+== toml ==
+tunnel = "gr"
+
+[[channel]]
+name = "Upper Case"
+url = "https://attrs.example.com/upper.m3u8"
+group = "Upper"
+
+[channel.playlist]
+tvg_id = "Upper.example"
+logo = "https://logos.example.org/u.png"
+
+[[channel]]
+name = "Spaced Name"
+url = "https://attrs.example.com/unquoted.m3u8"
+
+[channel.playlist]
+tvg_id = "unquoted"
+attrs = { catchup = "default", catchup-days = "", tvg-chno = "7" }
+
+[[channel]]
+name = "Comma, In \"Name\""
+url = "http://attrs.example.com/comma"
+
+[channel.playlist]
+tvg_id = "a,b"
+attrs = { radio = "true" }
+
+[[channel]]
+name = "Empty Fields"
+url = "http://attrs.example.com/empty"
+
+[[channel]]
+name = "Broken Attrs"
+url = "http://attrs.example.com/broken"
+
+[channel.playlist]
+tvg_id = "ok"
+
+[[channel]]
+name = "Unterminated"
+url = "http://attrs.example.com/unterminated"
+
+[channel.playlist]
+tvg_id = "ok"
+== warnings ==
+line 10: malformed #EXTINF attributes: the rest of the list is dropped, the name starts after the next comma
+line 12: malformed #EXTINF attributes: the rest of the list is dropped, the name starts after the next comma

@@ -1,0 +1,23 @@
+== toml ==
+tunnel = "gr"
+
+[[channel]]
+name = "VLC Options"
+url = "https://vlc.example.com/live.m3u8"
+
+[channel.upstream]
+headers = { Referer = "https://www.example.org/player", User-Agent = "VLC Agent/3.0" }
+
+[channel.playlist]
+tvg_id = "vlc.example"
+
+[channel.playlist.extra.EXTVLCOPT]
+"network-caching" = "1000"
+
+[[channel]]
+name = "VLC Second"
+url = "http://vlc.example.com/second.ts"
+
+[channel.upstream]
+headers = { User-Agent = "Later Wins" }
+== warnings ==

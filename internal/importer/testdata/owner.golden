@@ -1,0 +1,97 @@
+== toml ==
+# EPG from the #EXTM3U header; it belongs in config.toml:
+# [epg]
+# url = "https://epg.example.org/guide.xml.gz"
+
+tunnel = "gr"
+
+[defaults.upstream]
+headers = { User-Agent = "OKHTTP" }
+
+[defaults.playlist]
+attrs = { parent-code = "0000" }
+
+[[channel]]
+name = "Alpha One"
+url = "https://alpha-live.cdn.example.com/alpha/live/hls/master.m3u8"
+group = "Example TV"
+
+[channel.playlist]
+tvg_id = "Alpha.example"
+logo = "https://logos.example.org/tv/alpha.png"
+
+[[channel]]
+name = "Beta"
+url = "https://beta-hls.edge.example.net/hls/live/1000001/xx/high/master.m3u8"
+group = "Example TV"
+
+[channel.playlist]
+tvg_id = "Beta"
+logo = "https://logos.example.org/tv/beta.png"
+
+[[channel]]
+name = "Γάμμα Ειδήσεις"
+url = "https://gamma.cdn.example.com/bpk-tv/GammaNews/default/index.m3u8"
+group = "Ελληνική TV"
+
+[channel.playlist]
+tvg_id = "gammanews"
+logo = "GAMMANEWS"
+
+[[channel]]
+name = "Δέλτα, Κανάλι"
+url = "https://delta.cdn.example.com/live/media0/Delta/HLS/Delta.m3u8"
+group = "Ελληνική TV"
+enabled = false
+
+[channel.playlist]
+tvg_id = "delta"
+logo = "DELTA"
+
+[[channel]]
+name = "EPSILON"
+url = "https://epsilon.example.net/live/epsilon/playlist.m3u8"
+group = "Ελληνική TV"
+enabled = false
+
+[channel.playlist]
+tvg_id = "epsilon"
+logo = "EPSILON"
+
+[[channel]]
+name = "Zeta TV"
+url = "http://192.0.2.42:554/liveD/ZStream.sdp/playlist.m3u8"
+group = "Ελληνική TV"
+
+[channel.playlist]
+tvg_id = "zetatv"
+logo = "ZETATV"
+
+[[channel]]
+name = "ETA"
+url = "https://live.eta.example.org:8888/hls/eta.m3u8"
+group = "Ελληνική TV"
+
+[channel.playlist]
+tvg_id = "etatv"
+logo = "ETA"
+
+[[channel]]
+name = "Theta"
+url = "http://theta.radio.example.com/theta128"
+group = "Ελληνικό Ραδιόφωνο"
+
+[channel.playlist]
+tvg_id = "Theta.example"
+logo = "THETA"
+
+[[channel]]
+name = "Iota Island"
+url = "http://stream.example.net:8217/;"
+group = "Ελληνικό Ραδιόφωνο"
+
+[channel.playlist]
+tvg_id = "Iota 99.9 - Island"
+logo = "IOTA"
+== warnings ==
+line 21: comment dropped

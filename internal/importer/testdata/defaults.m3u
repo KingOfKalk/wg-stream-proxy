@@ -1,0 +1,9 @@
+#EXTM3U
+#KODIPROP:inputstream.adaptive.manifest_type=hls
+#KODIPROP:inputstream.adaptive.stream_headers=User-Agent=Shared&Referer=https://a.example.org/
+#EXTINF:-1 tvg-logo="shared.png" group-title="Shared" parent-code="1234" tvg-chno="1",One
+https://defaults.example.com/1.m3u8
+#KODIPROP:inputstream.adaptive.manifest_type=hls
+#KODIPROP:inputstream.adaptive.stream_headers=User-Agent=Shared&Referer=https://b.example.org/
+#EXTINF:-1 tvg-logo="shared.png" group-title="Shared" parent-code="1234" tvg-chno="2",Two
+https://defaults.example.com/2.m3u8

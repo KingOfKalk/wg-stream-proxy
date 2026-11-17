@@ -1,0 +1,10 @@
+#EXTM3U
+#EXTINF:-1,Pipe Headers
+https://pipe.example.com/live/index.m3u8|User-Agent=Test%20Agent/1.0&Referer=https%3A%2F%2Fwww.example.org%2F&X-Plus=a+b
+#EXTINF:-1,Pipe Empty
+https://pipe.example.com/radio.mp3|
+#EXTINF:-1,Pipe Invalid Parts
+https://pipe.example.com/c.ts|novalue&Bad Name=x&=empty&user-agent=lower
+#EXTINF:-1,Pipe Overrides
+#KODIPROP:inputstream.adaptive.stream_headers=User-Agent=FromKodi&Origin=https://www.example.org
+https://pipe.example.com/d.m3u8|User-Agent=FromPipe

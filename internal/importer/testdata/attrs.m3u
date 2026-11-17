@@ -1,0 +1,13 @@
+#EXTM3U
+#EXTINF:-1 TVG-ID="Upper.example" Tvg-Logo="https://logos.example.org/u.png" GROUP-TITLE="Upper" TVG-NAME="Ignored",Upper Case
+https://attrs.example.com/upper.m3u8
+#EXTINF:0 tvg-id=unquoted tvg-chno=7 catchup="default" catchup-days="" ,  Spaced Name  
+https://attrs.example.com/unquoted.m3u8
+#EXTINF:-1 tvg-id="a,b" radio="true",Comma, In "Name"
+http://attrs.example.com/comma
+#EXTINF:-1 tvg-id="" tvg-logo="" group-title="",Empty Fields
+http://attrs.example.com/empty
+#EXTINF:-1 tvg-id="ok" broken attr="x",Broken Attrs
+http://attrs.example.com/broken
+#EXTINF:-1 tvg-id="ok" unterminated="x,Unterminated
+http://attrs.example.com/unterminated

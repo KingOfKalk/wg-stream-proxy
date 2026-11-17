@@ -1,0 +1,15 @@
+== toml ==
+tunnel = "gr"
+
+[[channel]]
+name = "Solo"
+url = "https://single.example.com/solo.m3u8"
+group = "Solo"
+
+[channel.upstream]
+headers = { User-Agent = "OKHTTP" }
+
+[channel.playlist]
+tvg_id = "solo"
+attrs = { parent-code = "0000" }
+== warnings ==
