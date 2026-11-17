@@ -156,10 +156,6 @@ Do not tag, bump versions, or edit `CHANGELOG.md` by hand.
 
 ## Checks
 
-CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs on every
-PR; its jobs are required by the `main` ruleset:
-
-- `lint`: JSON syntax of the release-please files
-
-Go build, test and lint jobs join with the first Go code
-([docs/testing.md](docs/testing.md#ci-and-coverage)).
+CI arrives with the first Go code: build, test and lint jobs as in
+[docs/testing.md](docs/testing.md#ci-and-coverage), required by the `main`
+ruleset.
