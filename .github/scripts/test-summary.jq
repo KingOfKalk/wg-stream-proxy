@@ -1,4 +1,5 @@
 # Markdown summary of `go test -json` output; run with `jq -rs -f`.
+# The heading is "Test" or the value of `--arg title <title>`.
 
 # Coverage of package $p from its output lines, or "-".
 def coverage($p):
@@ -11,7 +12,7 @@ def done: .Action == "pass" or .Action == "fail" or .Action == "skip";
 . as $all
 | ([.[] | select(.Test != null and done)] | group_by(.Action)
    | map({(.[0].Action): length}) | add // {}) as $n
-| "## Test",
+| "## \($ARGS.named.title // "Test")",
   "",
   "\($n.pass // 0) passed, \($n.fail // 0) failed, \($n.skip // 0) skipped (`go test -race`).",
   "",

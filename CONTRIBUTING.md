@@ -157,14 +157,15 @@ Do not tag, bump versions, or edit `CHANGELOG.md` by hand.
 ## Checks
 
 CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs on every
-pull request and push to `main`. `Lint`, `Test`, `Security` and `Build`
-are the required checks of the `main` ruleset. Each stage starts only when
-the previous one passed:
+pull request and push to `main`. `Lint`, `Test`, `Security`, `Player` and
+`Build` are the required checks of the `main` ruleset. Each stage starts
+only when the previous one passed:
 
 ```mermaid
 flowchart LR
     Lint --> Test & Security
-    Test & Security --> cc["Cross-compile ×3"] --> Build
+    Test --> Player
+    Player & Security --> cc["Cross-compile ×3"] --> Build
 ```
 
 | Check | What | Summary on the run page |
@@ -172,6 +173,7 @@ flowchart LR
 | `Lint` | golangci-lint with [`.golangci.yml`](.golangci.yml): `standard` linters (incl. `errcheck`, `staticcheck`) and `gofumpt` | "No issues" or the findings |
 | `Test` | `go test -race -cover ./...`, with `goleak` in every package's `TestMain` | passed/failed/skipped, coverage and time per package, failed tests ([`test-summary.jq`](.github/scripts/test-summary.jq)) |
 | `Security` | security checks of code and dependencies: govulncheck | "No vulnerabilities found" or the report |
+| `Player` | L4 player tests ([testing.md](docs/testing.md#l4-player)): `WSP_PLAYER_TESTS=1 go test -race -run '^TestPlayer$' ./internal/server/playertest/` with ffmpeg from the runner's apt | passed/failed/skipped and time, failed tests, ffmpeg version |
 | `Cross-compile (<os>/<arch>)` | `linux/amd64`, `linux/arm64`, `darwin/arm64`, `CGO_ENABLED=0`, version from `git describe` via `-ldflags "-X main.version=…"`; binary uploaded as workflow artifact `wg-stream-proxy-<os>-<arch>` | artifact, version, size, SHA-256 |
 | `Build` | passes when all `Cross-compile` jobs pass; fails if an earlier stage failed | overall result |
 
@@ -190,6 +192,15 @@ run golang:1.27.4 go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
 run golangci/golangci-lint:v2.15.0 golangci-lint run ./...
 run -e CGO_ENABLED=0 -e GOOS=darwin -e GOARCH=arm64 golang:1.27.4 \
   go build -o /dev/null ./cmd/wg-stream-proxy
+```
+
+The player tests need ffmpeg; `go test ./...` skips them. Run them in a
+local throwaway image with ffmpeg:
+
+```sh
+printf 'FROM golang:1.27.4\nRUN apt-get update && apt-get install -y --no-install-recommends ffmpeg\n' |
+  docker build -t wsp-player -
+run -e WSP_PLAYER_TESTS=1 wsp-player go test -race ./internal/server/playertest/
 ```
 
 Dependabot doesn't track the golangci-lint and govulncheck versions in
