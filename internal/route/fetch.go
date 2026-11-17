@@ -55,6 +55,11 @@ type Request struct {
 	// Client holds the headers of the player's request; only Range,
 	// If-Range and Icy-MetaData are used.
 	Client http.Header
+	// ICY sends the request through the route's ICY transport, whose
+	// connections rewrite a leading "ICY " status line to "HTTP/1.0 "
+	// (spec 3.3). HTTP responses pass unchanged; only the connection pool
+	// differs.
+	ICY bool
 }
 
 // Error is an upstream request error. Its URL has no query string,
@@ -87,7 +92,11 @@ func (r *Route) Fetch(ctx context.Context, req Request) (*http.Response, error) 
 
 	ctx, cancel := context.WithCancelCause(ctx)
 	headerTimer := r.clock.AfterFunc(r.upstream.HeaderTimeout, func() { cancel(ErrHeaderTimeout) })
-	resp, u, err := r.follow(ctx, u, req)
+	t := r.transport
+	if req.ICY {
+		t = r.icyTransport
+	}
+	resp, u, err := r.follow(ctx, t, u, req)
 	if !headerTimer.Stop() && err == nil {
 		// The timer fired while the headers arrived.
 		_ = resp.Body.Close()
@@ -104,16 +113,16 @@ func (r *Route) Fetch(ctx context.Context, req Request) (*http.Response, error) 
 	return resp, nil
 }
 
-// follow sends the request and follows redirects. It returns the last URL
-// tried, for errors.
-func (r *Route) follow(ctx context.Context, u *url.URL, req Request) (*http.Response, *url.URL, error) {
+// follow sends the request through t and follows redirects. It returns
+// the last URL tried, for errors.
+func (r *Route) follow(ctx context.Context, t http.RoundTripper, u *url.URL, req Request) (*http.Response, *url.URL, error) {
 	for hop := 0; ; hop++ {
 		hreq, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 		if err != nil {
 			return nil, u, fmt.Errorf("%w: %w", errInvalidURL, err)
 		}
 		hreq.Header = requestHeader(u, req.Header, req.Client, r.upstream.UserAgent)
-		resp, err := r.transport.RoundTrip(hreq)
+		resp, err := t.RoundTrip(hreq)
 		if err != nil {
 			return nil, u, err
 		}

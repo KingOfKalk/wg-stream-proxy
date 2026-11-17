@@ -39,6 +39,10 @@ type Route struct {
 	upstream  config.Upstream
 	clock     Clock
 	transport *http.Transport
+	// icyTransport serves requests with Request.ICY: its connections
+	// accept a Shoutcast v1 "ICY" status line (spec 3.3). It has its own
+	// pool, so connections of the normal transport are never wrapped.
+	icyTransport *http.Transport
 }
 
 // newRoute builds the route name over network n.
@@ -54,6 +58,7 @@ func newRoute(name string, n Network, opts Options) *Route {
 		r.clock = SystemClock()
 	}
 	r.transport = newTransport(r.dial)
+	r.icyTransport = newTransport(r.dialICY)
 	return r
 }
 
@@ -74,5 +79,9 @@ func newTransport(dial func(ctx context.Context, network, address string) (net.C
 // Name returns the tunnel name or config.RouteDirect.
 func (r *Route) Name() string { return r.name }
 
-// CloseIdleConnections closes the route's idle upstream connections.
-func (r *Route) CloseIdleConnections() { r.transport.CloseIdleConnections() }
+// CloseIdleConnections closes the route's idle upstream connections, in
+// both transports.
+func (r *Route) CloseIdleConnections() {
+	r.transport.CloseIdleConnections()
+	r.icyTransport.CloseIdleConnections()
+}
