@@ -222,6 +222,12 @@ url = "https://daserste-live.ard-mcdn.de/daserste/live/hls/de/master.m3u8"
 - Ignored with a warning: `ListenPort`, `Table`, `SaveConfig`.
 - Config errors: more than one `[Peer]`; `PreUp`, `PostUp`, `PreDown`, `PostDown`; two tunnel files with the same `PrivateKey`.
 - Warning if the file is world-readable.
+- Format details:
+  - `#` starts a comment anywhere in a line; keys and section names are case-insensitive; a UTF-8 BOM and CRLF line endings are accepted.
+  - `Address`, `DNS` and `AllowedIPs` may repeat; values are separated by commas and/or whitespace. `Address` and `AllowedIPs` entries without prefix length are host prefixes. Every other key may appear once.
+  - Required: one `[Interface]` with `PrivateKey` and `Address`, one `[Peer]` with `PublicKey`, `Endpoint` and `AllowedIPs`. Without an IP `DNS` entry: warning, upstream host names cannot be resolved.
+  - Config errors also: unknown keys or sections, empty values, invalid values, zero `PrivateKey` or `PublicKey`, `MTU` outside 1280-65535, files over 64 KiB.
+  - Errors and warnings name the tunnel and line, never values from the file.
 
 ### 5.6 Reload
 
