@@ -350,7 +350,7 @@ func (t *Tunnel) LookupNetIP(ctx context.Context, host string) ([]netip.Addr, er
 		if len(t.dns) == 0 {
 			return nil, fmt.Errorf("tunnel %q: lookup %s: %w", t.cfg.Name, host, ErrNoDNS)
 		}
-		names, err := r.net.LookupContextHost(ctx, host)
+		names, err := lookup(ctx, r.net, host)
 		if err != nil {
 			return nil, fmt.Errorf("tunnel %q: %w", t.cfg.Name, err)
 		}
@@ -651,4 +651,26 @@ func lastHandshake(dev *device.Device) time.Time {
 		return time.Time{}
 	}
 	return time.Unix(sec, nsec)
+}
+
+// lookup resolves host with the netstack resolver and returns as soon as
+// ctx ends. The netstack resolver only honours ctx deadlines, and only
+// between its 5s per-query read timeouts; the abandoned lookup ends at
+// the latest when the device closes.
+func lookup(ctx context.Context, tnet *netstack.Net, host string) ([]string, error) {
+	type result struct {
+		names []string
+		err   error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		names, err := tnet.LookupContextHost(ctx, host)
+		ch <- result{names, err}
+	}()
+	select {
+	case res := <-ch:
+		return res.names, res.err
+	case <-ctx.Done():
+		return nil, fmt.Errorf("lookup %s: %w", host, ctx.Err())
+	}
 }

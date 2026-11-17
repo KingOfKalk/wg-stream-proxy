@@ -614,3 +614,46 @@ func TestDialRefusedReturnsNilConn(t *testing.T) {
 		t.Errorf("conn = %#v, want nil interface", c)
 	}
 }
+
+func TestCallsReturnPromptlyWhenContextEnds(t *testing.T) {
+	// Happy Eyeballs in the route layer cancels losing attempts: lookup
+	// and dial must not keep the caller waiting on a silent peer.
+	tests := map[string]func(ctx context.Context, tun *Tunnel) error{
+		"lookup": func(ctx context.Context, tun *Tunnel) error {
+			_, err := tun.LookupNetIP(ctx, "silent.test")
+			return err
+		},
+		"dial": func(ctx context.Context, tun *Tunnel) error {
+			c, err := tun.DialContext(ctx, "tcp4", tunneltest.ServerAddr4.String()+":80")
+			if c != nil {
+				_ = c.Close()
+			}
+			return err
+		},
+	}
+	for name, call := range tests {
+		t.Run(name, func(t *testing.T) {
+			peer := tunneltest.Start(t, tunneltest.Options{})
+			m, _ := newManager(t, peer.ClientTunnel(t, "gr"))
+			tun := mustTunnel(t, m, "gr")
+			if _, err := tun.LookupNetIP(t.Context(), tunneltest.ServerAddr4.String()); err != nil {
+				t.Fatalf("start: %v", err)
+			}
+			peer.SetReachable(false)
+
+			ctx, cancel := context.WithCancel(t.Context())
+			done := make(chan error, 1)
+			go func() { done <- call(ctx, tun) }()
+			cancel()
+			select {
+			case err := <-done:
+				if !errors.Is(err, context.Canceled) {
+					t.Errorf("err = %v, want canceled", err)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("call did not return within 2s after cancel")
+			}
+			_ = m.Close()
+		})
+	}
+}
