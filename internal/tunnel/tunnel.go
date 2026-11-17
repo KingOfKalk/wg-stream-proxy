@@ -7,8 +7,9 @@
 //
 // A *Tunnel is the route layer's way to the internet through the tunnel:
 // LookupNetIP resolves host names with the tunnel's DNS servers inside the
-// netstack, DialContext connects to resolved addresses. Both start the
-// device if needed; concurrent first users share one start.
+// netstack (own client, retrying lost queries after 1s), DialContext
+// connects to resolved addresses. Both start the device if needed;
+// concurrent first users share one start.
 //
 // Keys never appear in errors or logs: the UAPI text and wireguard-go's
 // own log output (which prints key fragments) are never passed on.
@@ -30,6 +31,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"golang.org/x/net/dns/dnsmessage"
 	"golang.zx2c4.com/wireguard/conn"
 	"golang.zx2c4.com/wireguard/device"
 	"golang.zx2c4.com/wireguard/tun/netstack"
@@ -350,14 +352,22 @@ func (t *Tunnel) LookupNetIP(ctx context.Context, host string) ([]netip.Addr, er
 		if len(t.dns) == 0 {
 			return nil, fmt.Errorf("tunnel %q: lookup %s: %w", t.cfg.Name, host, ErrNoDNS)
 		}
-		names, err := lookup(ctx, r.net, host)
+		// Only families the tunnel has an address for: an IPv4-only tunnel
+		// never waits for AAAA answers.
+		var types []dnsmessage.Type
+		if t.has4 {
+			types = append(types, dnsmessage.TypeA)
+		}
+		if t.has6 {
+			types = append(types, dnsmessage.TypeAAAA)
+		}
+		c := &dnsClient{net: r.net, servers: t.dns, clock: t.m.opts.Clock}
+		found, err := c.lookup(ctx, host, types)
 		if err != nil {
 			return nil, fmt.Errorf("tunnel %q: %w", t.cfg.Name, err)
 		}
-		for _, n := range names {
-			if ip, err := netip.ParseAddr(n); err == nil {
-				addrs = append(addrs, ip.Unmap())
-			}
+		for _, ip := range found {
+			addrs = append(addrs, ip.Unmap())
 		}
 	}
 	addrs = slices.DeleteFunc(addrs, func(a netip.Addr) bool { return t.check(a) != nil })
@@ -651,26 +661,4 @@ func lastHandshake(dev *device.Device) time.Time {
 		return time.Time{}
 	}
 	return time.Unix(sec, nsec)
-}
-
-// lookup resolves host with the netstack resolver and returns as soon as
-// ctx ends. The netstack resolver only honours ctx deadlines, and only
-// between its 5s per-query read timeouts; the abandoned lookup ends at
-// the latest when the device closes.
-func lookup(ctx context.Context, tnet *netstack.Net, host string) ([]string, error) {
-	type result struct {
-		names []string
-		err   error
-	}
-	ch := make(chan result, 1)
-	go func() {
-		names, err := tnet.LookupContextHost(ctx, host)
-		ch <- result{names, err}
-	}()
-	select {
-	case res := <-ch:
-		return res.names, res.err
-	case <-ctx.Done():
-		return nil, fmt.Errorf("lookup %s: %w", host, ctx.Err())
-	}
 }

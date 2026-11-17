@@ -3,9 +3,10 @@
 // Package tunneltest runs an in-process WireGuard server peer for tests
 // (testing.md, principles): a second wireguard-go device with a gVisor
 // netstack, connected to the device under test over loopback UDP, with an
-// HTTP server and a DNS server listening on its tunnel addresses. No root,
-// no kernel interfaces, no real keys: every Peer generates its own
-// test-only keys and uses documentation address ranges.
+// HTTP server and a DNS server (UDP and TCP) listening on its tunnel
+// addresses. The DNS server can lose, truncate or fail queries on demand.
+// No root, no kernel interfaces, no real keys: every Peer generates its
+// own test-only keys and uses documentation address ranges.
 package tunneltest
 
 import (
@@ -62,6 +63,9 @@ type Options struct {
 	// NoDNS omits the DNS entry from the client file. By default the
 	// client's DNS server is the first server address.
 	NoDNS bool
+	// DNS overrides the client's DNS servers. Addresses that are not
+	// server addresses swallow every query, like a dead DNS server.
+	DNS []netip.Addr
 	// Handler serves HTTP on port 80 of every server address. Default:
 	// EchoRemoteAddr.
 	Handler http.Handler
@@ -79,11 +83,21 @@ type Peer struct {
 
 	httpSrv *http.Server
 	udp     []net.PacketConn
+	tcp     []net.Listener
 	wg      sync.WaitGroup
 
-	mu      sync.Mutex
-	records map[string][]netip.Addr
-	queries []string
+	mu         sync.Mutex
+	closed     bool
+	conns      map[net.Conn]struct{}
+	records    map[string][]netip.Addr
+	cnames     map[string]string
+	queries    []string
+	tcpQueries []string
+	dropNext   int // UDP queries to drop; < 0 drops all
+	dropped    int
+	failNext   int // queries to answer with failRCode; < 0 fails all
+	failRCode  dnsmessage.RCode
+	truncate   bool
 
 	closeOnce sync.Once
 }
@@ -118,7 +132,7 @@ func start(opts Options) (*Peer, error) {
 	if opts.Handler == nil {
 		opts.Handler = EchoRemoteAddr
 	}
-	p := &Peer{opts: opts, records: map[string][]netip.Addr{}}
+	p := &Peer{opts: opts, records: map[string][]netip.Addr{}, cnames: map[string]string{}, conns: map[net.Conn]struct{}{}}
 	serverPriv, serverPub := newKeyPair()
 	clientPriv, clientPub := newKeyPair()
 	p.clientPriv, p.serverPub = clientPriv, serverPub
@@ -180,6 +194,12 @@ func (p *Peer) serve() error {
 		}
 		p.udp = append(p.udp, u)
 		p.wg.Go(func() { p.serveDNS(u) })
+		dl, err := p.net.ListenTCPAddrPort(netip.AddrPortFrom(a, 53))
+		if err != nil {
+			return err
+		}
+		p.tcp = append(p.tcp, dl)
+		p.wg.Go(func() { p.serveDNSTCP(dl) })
 	}
 	return nil
 }
@@ -193,6 +213,15 @@ func (p *Peer) Close() {
 		for _, u := range p.udp {
 			_ = u.Close()
 		}
+		for _, l := range p.tcp {
+			_ = l.Close()
+		}
+		p.mu.Lock()
+		p.closed = true
+		for c := range p.conns {
+			_ = c.Close()
+		}
+		p.mu.Unlock()
 		p.wg.Wait()
 		p.dev.Close()
 	})
@@ -210,7 +239,15 @@ func (p *Peer) ClientConfig() string {
 	b.WriteString("[Interface]\n")
 	fmt.Fprintf(&b, "PrivateKey = %s\n", base64.StdEncoding.EncodeToString(p.clientPriv[:]))
 	fmt.Fprintf(&b, "Address = %s\n", joinPrefixes(p.opts.ClientAddresses))
-	if !p.opts.NoDNS {
+	switch {
+	case p.opts.NoDNS:
+	case len(p.opts.DNS) > 0:
+		s := make([]string, len(p.opts.DNS))
+		for i, a := range p.opts.DNS {
+			s[i] = a.String()
+		}
+		fmt.Fprintf(&b, "DNS = %s\n", strings.Join(s, ", "))
+	default:
 		fmt.Fprintf(&b, "DNS = %s\n", p.opts.ServerAddresses[0])
 	}
 	b.WriteString("\n[Peer]\n")
@@ -265,12 +302,62 @@ func (p *Peer) SetHost(name string, addrs ...netip.Addr) {
 	p.records[canonicalName(name)] = addrs
 }
 
-// Queries returns the DNS questions the peer answered so far, as
-// "name TYPE" (for example "upstream.test A").
+// SetCNAME makes name an alias of target. Answers for name carry the
+// CNAME chain followed by the records of its end, like the answers of a
+// recursive resolver.
+func (p *Peer) SetCNAME(name, target string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.cnames[canonicalName(name)] = canonicalName(target)
+}
+
+// DropDNS makes the DNS server drop the next n UDP queries without an
+// answer, like a lossy path. n < 0 drops every UDP query until the next
+// DropDNS call; 0 stops dropping. TCP queries are never dropped.
+func (p *Peer) DropDNS(n int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.dropNext = n
+}
+
+// DroppedDNS returns the number of UDP queries dropped so far.
+func (p *Peer) DroppedDNS() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.dropped
+}
+
+// FailDNS answers the next n queries with rcode (for example
+// dnsmessage.RCodeServerFailure) and no records. n < 0 fails every query
+// until the next FailDNS call; 0 stops failing.
+func (p *Peer) FailDNS(n int, rcode dnsmessage.RCode) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.failNext, p.failRCode = n, rcode
+}
+
+// SetTruncate switches truncation of UDP answers: while on, every UDP
+// answer has the TC bit set and no records, so clients retry over TCP.
+func (p *Peer) SetTruncate(on bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.truncate = on
+}
+
+// Queries returns the DNS questions the peer answered so far, over UDP
+// and TCP, as "name TYPE" (for example "upstream.test A").
 func (p *Peer) Queries() []string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return append([]string(nil), p.queries...)
+}
+
+// TCPQueries returns the DNS questions the peer answered over TCP, in
+// the format of Queries.
+func (p *Peer) TCPQueries() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]string(nil), p.tcpQueries...)
 }
 
 func canonicalName(name string) string {
@@ -284,7 +371,10 @@ func (p *Peer) serveDNS(c net.PacketConn) {
 		if err != nil {
 			return
 		}
-		resp, ok := p.answer(buf[:n])
+		if p.dropUDP() {
+			continue
+		}
+		resp, ok := p.answer(buf[:n], false)
 		if !ok {
 			continue
 		}
@@ -292,7 +382,71 @@ func (p *Peer) serveDNS(c net.PacketConn) {
 	}
 }
 
-func (p *Peer) answer(req []byte) ([]byte, bool) {
+// dropUDP reports whether to drop the UDP query just received, and
+// counts it if so.
+func (p *Peer) dropUDP() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.dropNext == 0 {
+		return false
+	}
+	if p.dropNext > 0 {
+		p.dropNext--
+	}
+	p.dropped++
+	return true
+}
+
+func (p *Peer) serveDNSTCP(l net.Listener) {
+	for {
+		c, err := l.Accept()
+		if err != nil {
+			return
+		}
+		p.mu.Lock()
+		if p.closed {
+			p.mu.Unlock()
+			_ = c.Close()
+			return
+		}
+		p.conns[c] = struct{}{}
+		p.mu.Unlock()
+		p.wg.Go(func() {
+			defer func() {
+				p.mu.Lock()
+				delete(p.conns, c)
+				p.mu.Unlock()
+				_ = c.Close()
+			}()
+			p.serveDNSConn(c)
+		})
+	}
+}
+
+// serveDNSConn answers length-prefixed DNS messages (RFC 1035 4.2.2)
+// until the client closes the connection.
+func (p *Peer) serveDNSConn(c net.Conn) {
+	for {
+		var l [2]byte
+		if _, err := io.ReadFull(c, l[:]); err != nil {
+			return
+		}
+		req := make([]byte, int(l[0])<<8|int(l[1]))
+		if _, err := io.ReadFull(c, req); err != nil {
+			return
+		}
+		resp, ok := p.answer(req, true)
+		if !ok {
+			return
+		}
+		out := append([]byte{byte(len(resp) >> 8), byte(len(resp))}, resp...)
+		if _, err := c.Write(out); err != nil {
+			return
+		}
+	}
+}
+
+func (p *Peer) answer(req []byte, overTCP bool) ([]byte, bool) {
 	var parser dnsmessage.Parser
 	h, err := parser.Start(req)
 	if err != nil {
@@ -303,15 +457,41 @@ func (p *Peer) answer(req []byte) ([]byte, bool) {
 		return nil, false
 	}
 	name := canonicalName(q.Name.String())
-	p.mu.Lock()
-	p.queries = append(p.queries, name+" "+strings.TrimPrefix(q.Type.String(), "Type"))
-	addrs, found := p.records[name]
-	p.mu.Unlock()
+	query := name + " " + strings.TrimPrefix(q.Type.String(), "Type")
 
 	rh := dnsmessage.Header{ID: h.ID, Response: true, Authoritative: true, RecursionDesired: h.RecursionDesired, RecursionAvailable: true}
-	if !found {
-		rh.RCode = dnsmessage.RCodeNameError
+	var chain []string // the queried name, then the CNAME targets
+	var addrs []netip.Addr
+	p.mu.Lock()
+	p.queries = append(p.queries, query)
+	if overTCP {
+		p.tcpQueries = append(p.tcpQueries, query)
 	}
+	switch {
+	case p.failNext != 0:
+		if p.failNext > 0 {
+			p.failNext--
+		}
+		rh.RCode = p.failRCode
+	case p.truncate && !overTCP:
+		rh.Truncated = true
+	default:
+		chain = append(chain, name)
+		for range 8 {
+			target, ok := p.cnames[chain[len(chain)-1]]
+			if !ok {
+				break
+			}
+			chain = append(chain, target)
+		}
+		var found bool
+		addrs, found = p.records[chain[len(chain)-1]]
+		if !found {
+			rh.RCode = dnsmessage.RCodeNameError
+		}
+	}
+	p.mu.Unlock()
+
 	b := dnsmessage.NewBuilder(nil, rh)
 	b.EnableCompression()
 	if err := b.StartQuestions(); err != nil {
@@ -323,8 +503,20 @@ func (p *Peer) answer(req []byte) ([]byte, bool) {
 	if err := b.StartAnswers(); err != nil {
 		return nil, false
 	}
+	owner := q.Name
+	for _, target := range chain[min(1, len(chain)):] {
+		t, err := dnsmessage.NewName(target + ".")
+		if err != nil {
+			return nil, false
+		}
+		rrh := dnsmessage.ResourceHeader{Name: owner, Class: dnsmessage.ClassINET, TTL: 60}
+		if err := b.CNAMEResource(rrh, dnsmessage.CNAMEResource{CNAME: t}); err != nil {
+			return nil, false
+		}
+		owner = t
+	}
 	for _, a := range addrs {
-		rrh := dnsmessage.ResourceHeader{Name: q.Name, Class: dnsmessage.ClassINET, TTL: 60}
+		rrh := dnsmessage.ResourceHeader{Name: owner, Class: dnsmessage.ClassINET, TTL: 60}
 		switch {
 		case q.Type == dnsmessage.TypeA && a.Is4():
 			err = b.AResource(rrh, dnsmessage.AResource{A: a.As4()})

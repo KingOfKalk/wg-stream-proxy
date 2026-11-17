@@ -46,7 +46,7 @@ wg-stream-proxy
 - One WireGuard device per tunnel file, shared by all channels and viewers using it (one key, one UDP session).
 - Each tunnel has its own `http.Transport` dialing through the netstack: keep-alive, `ForceAttemptHTTP2 = true`, `MaxIdleConnsPerHost = 16`, no environment proxy.
 - IPv4 and IPv6 addresses of a host are tried Happy-Eyeballs style (RFC 8305, simplified): families interleaved starting with the first DNS answer; the next address starts after 300ms or as soon as the previous attempt fails; the first connection wins. A tunnel with `::/0` but no working IPv6 upstream thus falls back to IPv4 after 300ms.
-- DNS for upstream hosts is resolved inside the tunnel, using the `DNS` servers of the tunnel file.
+- DNS for upstream hosts is resolved inside the tunnel, using the `DNS` servers of the tunnel file. A and AAAA (only for address families the tunnel has) are queried in parallel; an unanswered query is repeated after 1s, 2s, then every 4s, each time to the next `DNS` server, until `connect_timeout`; a truncated answer is repeated over TCP, NXDOMAIN ends the lookup at once.
 - Tunnel DNS results list IPv4 first; an IPv6 connect through a tunnel that also carries IPv4 gives up after 2s.
 - The `Endpoint` hostname is resolved by the host resolver when the tunnel starts (IPv4 preferred).
 - Lifecycle:

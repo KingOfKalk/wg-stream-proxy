@@ -74,6 +74,19 @@ func (c *fakeClock) pending() int {
 	return n
 }
 
+// next returns the time until the earliest armed timer is due, or -1.
+func (c *fakeClock) next() time.Duration {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	d := time.Duration(-1)
+	for _, t := range c.timers {
+		if !t.stopped && (d < 0 || t.when.Sub(c.now) < d) {
+			d = t.when.Sub(c.now)
+		}
+	}
+	return d
+}
+
 // waitTimers blocks until at least n timers are armed.
 func (c *fakeClock) waitTimers(n int) {
 	for c.pending() < n {
