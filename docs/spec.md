@@ -316,7 +316,7 @@ wg-stream-proxy version
 
 ## 11. Risks
 
-- WireGuard encryption is CPU-bound on small ARM boards; 3 HD streams are expected to fit on a Raspberry Pi 5 (tested) and a Raspberry Pi 4 (no device available for testing, performance unmeasured).
+- WireGuard encryption is CPU-bound on small ARM boards; 3 HD streams on a Raspberry Pi 5 are expected to fit, measured by the L6 load test; a Raspberry Pi 4 is not tested (no device available).
 - Geo-IP databases may disagree on a tunnel's exit country; a broadcaster can see a different country than expected and block the stream.
 - Some upstreams need cookies or tokens from a website session; only static headers are supported.
 
