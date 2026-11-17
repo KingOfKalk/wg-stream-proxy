@@ -1,0 +1,21 @@
+#EXTM3U
+#EXT-X-VERSION:6
+#EXT-X-INDEPENDENT-SEGMENTS
+## A comment with URI="https://example.com/comment.m3u8" stays as is
+#EXT-X-SESSION-KEY:METHOD=AES-128,URI="https://keys.example.com/session.key"
+#EXT-X-SESSION-DATA:DATA-ID="com.example.title",URI="session/data.json"
+#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aud",LANGUAGE="el",NAME="Ελληνικά",DEFAULT=YES,AUTOSELECT=YES,URI="audio/el/index.m3u8"
+#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aud",LANGUAGE="en",NAME="English, original",URI="../shared/audio/en.m3u8?token=abc&x=1"
+#EXT-X-MEDIA:TYPE=CLOSED-CAPTIONS,GROUP-ID="cc",NAME="CC1",INSTREAM-ID="CC1"
+#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="sub",NAME="Deutsch",URI="https://subs.example.net/de.m3u8"
+
+#EXT-X-STREAM-INF:BANDWIDTH=2500000,RESOLUTION=1280x720,CODECS="avc1.64001f,mp4a.40.2",AUDIO="aud",SUBTITLES="sub",CLOSED-CAPTIONS="cc"
+720p/index.m3u8
+#EXT-X-STREAM-INF:BANDWIDTH=6000000,RESOLUTION=1920x1080,CODECS="avc1.640028,mp4a.40.2",AUDIO="aud"
+https://cdn2.example.com/live/1080p/index.m3u8?sig=0123abcd
+#EXT-X-STREAM-INF:BANDWIDTH=800000
+//cdn3.example.org/live/360p.m3u8
+#EXT-X-I-FRAME-STREAM-INF:BANDWIDTH=150000,CODECS="avc1.64001f",URI="720p/iframes.m3u8"
+#EXT-X-CONTENT-STEERING:SERVER-URI="/steering?video=1",PATHWAY-ID="CDN-A"
+#EXT-X-UNKNOWN-VENDOR-TAG:FOO=1,URI="vendor/thing.json",BAR="baz"
+#X-NOT-A-TAG URI="https://example.com/not-a-tag"
