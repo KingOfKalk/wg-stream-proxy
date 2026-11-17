@@ -51,6 +51,11 @@
     }
   ],
   "packages": {
-    ".": {}
+    ".": {
+      "extra-files": [
+        "deploy/compose/compose.yaml",
+        "docs/deploy.md"
+      ]
+    }
   }
 }
