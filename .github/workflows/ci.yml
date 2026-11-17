@@ -27,6 +27,26 @@ jobs:
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
+          cache: false
+      - name: Go cache paths
+        id: go
+        run: |
+          {
+            echo "mod=$(go env GOMODCACHE)"
+            echo "build=$(go env GOCACHE)"
+            echo "version=$(go env GOVERSION)"
+            echo "lint=$HOME/.cache/golangci-lint"
+          } >> "$GITHUB_OUTPUT"
+          echo "GOLANGCI_LINT_CACHE=$HOME/.cache/golangci-lint" >> "$GITHUB_ENV"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ steps.go.outputs.mod }}
+            ${{ steps.go.outputs.build }}
+            ${{ steps.go.outputs.lint }}
+          key: go-lint-${{ runner.os }}-${{ steps.go.outputs.version }}-${{ hashFiles('go.sum', '.github/workflows/ci.yml') }}
+          restore-keys: |
+            go-lint-${{ runner.os }}-${{ steps.go.outputs.version }}-
       # go install instead of golangci-lint-action: only GitHub-owned actions
       # are allowed, and the module checksum database verifies the source.
       - name: Install golangci-lint
@@ -67,6 +87,23 @@ jobs:
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
+          cache: false
+      - name: Go cache paths
+        id: go
+        run: |
+          {
+            echo "mod=$(go env GOMODCACHE)"
+            echo "build=$(go env GOCACHE)"
+            echo "version=$(go env GOVERSION)"
+          } >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ steps.go.outputs.mod }}
+            ${{ steps.go.outputs.build }}
+          key: go-test-${{ runner.os }}-${{ steps.go.outputs.version }}-${{ hashFiles('go.sum', '.github/workflows/ci.yml') }}
+          restore-keys: |
+            go-test-${{ runner.os }}-${{ steps.go.outputs.version }}-
       - name: go test
         run: |
           set +e
@@ -94,6 +131,23 @@ jobs:
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
+          cache: false
+      - name: Go cache paths
+        id: go
+        run: |
+          {
+            echo "mod=$(go env GOMODCACHE)"
+            echo "build=$(go env GOCACHE)"
+            echo "version=$(go env GOVERSION)"
+          } >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ steps.go.outputs.mod }}
+            ${{ steps.go.outputs.build }}
+          key: go-security-${{ runner.os }}-${{ steps.go.outputs.version }}-${{ hashFiles('go.sum', '.github/workflows/ci.yml') }}
+          restore-keys: |
+            go-security-${{ runner.os }}-${{ steps.go.outputs.version }}-
       - name: Install govulncheck
         run: GOBIN="$RUNNER_TEMP/bin" go install "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}"
       - name: govulncheck
@@ -144,6 +198,23 @@ jobs:
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
+          cache: false
+      - name: Go cache paths
+        id: go
+        run: |
+          {
+            echo "mod=$(go env GOMODCACHE)"
+            echo "build=$(go env GOCACHE)"
+            echo "version=$(go env GOVERSION)"
+          } >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ steps.go.outputs.mod }}
+            ${{ steps.go.outputs.build }}
+          key: go-cross-compile-${{ matrix.goos }}-${{ matrix.goarch }}-${{ runner.os }}-${{ steps.go.outputs.version }}-${{ hashFiles('go.sum', '.github/workflows/ci.yml') }}
+          restore-keys: |
+            go-cross-compile-${{ matrix.goos }}-${{ matrix.goarch }}-${{ runner.os }}-${{ steps.go.outputs.version }}-
       - name: Build
         env:
           CGO_ENABLED: "0"
