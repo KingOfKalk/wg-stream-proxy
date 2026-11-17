@@ -8,7 +8,8 @@ on:
 
 permissions: {}
 
-# Required checks in the main ruleset: lint, vulncheck, test, build.
+# Required checks in the main ruleset: lint, test, security, build.
+# Order: lint -> test and security in parallel -> cross-compile -> build.
 jobs:
   lint:
     runs-on: ubuntu-26.04
@@ -26,21 +27,8 @@ jobs:
       # allowed, and the module checksum database verifies the source.
       - run: go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0 run ./...
 
-  vulncheck:
-    runs-on: ubuntu-26.04
-    timeout-minutes: 15
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
-        with:
-          go-version-file: go.mod
-      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
-
   test:
+    needs: lint
     runs-on: ubuntu-26.04
     timeout-minutes: 15
     permissions:
@@ -54,8 +42,26 @@ jobs:
           go-version-file: go.mod
       - run: go test -race ./...
 
+  # Security checks of code and dependencies; govulncheck for now.
+  security:
+    needs: lint
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+
   cross-compile:
     name: cross-compile (${{ matrix.goos }}/${{ matrix.goarch }})
+    needs: [test, security]
     runs-on: ubuntu-26.04
     timeout-minutes: 15
     permissions:
@@ -101,7 +107,8 @@ jobs:
           path: dist/wg-stream-proxy
           if-no-files-found: error
 
-  # Stable name for the required check, independent of the matrix.
+  # Stable name for the required check, independent of the matrix. Runs
+  # always, so it also fails when an earlier job failed and the rest skipped.
   build:
     if: always()
     needs: cross-compile

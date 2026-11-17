@@ -157,16 +157,23 @@ Do not tag, bump versions, or edit `CHANGELOG.md` by hand.
 ## Checks
 
 CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs on every
-pull request and push to `main`. `lint`, `vulncheck`, `test` and `build`
-are the required checks of the `main` ruleset.
+pull request and push to `main`. `lint`, `test`, `security` and `build`
+are the required checks of the `main` ruleset. Each stage starts only when
+the previous one passed:
+
+```mermaid
+flowchart LR
+    lint --> test & security
+    test & security --> cc["cross-compile ×3"] --> build
+```
 
 | Check | What |
 | --- | --- |
 | `lint` | golangci-lint with [`.golangci.yml`](.golangci.yml): `standard` linters (incl. `errcheck`, `staticcheck`) and `gofumpt` |
-| `vulncheck` | govulncheck |
 | `test` | `go test -race ./...`, with `goleak` in every package's `TestMain` |
+| `security` | security checks of code and dependencies: govulncheck |
 | `cross-compile (<os>/<arch>)` | `linux/amd64`, `linux/arm64`, `darwin/arm64`, `CGO_ENABLED=0`, version from `git describe` via `-ldflags "-X main.version=…"`; binary uploaded as workflow artifact `wg-stream-proxy-<os>-<arch>` |
-| `build` | passes when all `cross-compile` jobs pass |
+| `build` | passes when all `cross-compile` jobs pass; fails if an earlier stage failed |
 
 Run them locally in throwaway containers (no Go toolchain needed, see
 [AGENTS.md](AGENTS.md) rule 12), with the versions from `go.mod` and
