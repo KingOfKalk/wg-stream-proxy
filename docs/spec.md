@@ -4,7 +4,7 @@
 
 - Repository: `github.com/KingOfKalk/wg-stream-proxy`, Go, AGPL-3.0-or-later
 - Status: Draft v3
-- Related: [deploy.md](deploy.md), [testing.md](testing.md)
+- Related: [architecture.md](architecture.md), [deploy.md](deploy.md), [testing.md](testing.md)
 
 ## 1. Scope
 
