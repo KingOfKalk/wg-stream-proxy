@@ -128,6 +128,7 @@ dependencies weekly ([`.github/dependabot.yml`](.github/dependabot.yml)):
 | --- | --- | --- |
 | `github-actions` | `chore(deps)` | Chores, CI only |
 | `gomod` | `fix(deps)` | Bug Fixes, changes the binary |
+| `docker` | `fix(deps)` | Bug Fixes, changes the image ([`Dockerfile`](Dockerfile) base and builder images) |
 
 - Minor and patch updates are auto-merged (squash) once the required
   checks pass
@@ -205,3 +206,23 @@ run -e WSP_PLAYER_TESTS=1 wsp-player go test -race ./internal/server/playertest/
 
 Dependabot doesn't track the golangci-lint and govulncheck versions in
 `ci.yml`; bump them by hand together with this section.
+
+### Container
+
+[`.github/workflows/container.yml`](.github/workflows/container.yml) runs
+in parallel to CI. `Container` is a required check of the `main` ruleset.
+
+| Job | When | What |
+| --- | --- | --- |
+| `Container` | every pull request, push to `main` and release | `docker buildx build` of the [`Dockerfile`](Dockerfile) for `linux/amd64` + `linux/arm64`, architecture of each image's binary, smoke test on `linux/amd64` ([`container-smoke.sh`](.github/scripts/container-smoke.sh): `examples/config`, `--read-only`, `--cap-drop ALL`, signing key file, waits for `HEALTHCHECK`, fetches `/healthz` and `/playlist.m3u8`), `docker compose config` of [`compose.yaml`](deploy/compose/compose.yaml) |
+| `Publish` | push to `main`, published release; never on pull requests | pushes `ghcr.io/kingofkalk/wg-stream-proxy`: `edge` and `sha-<commit>` from `main`, `X.Y.Z` and `X.Y` on release ([deploy.md](docs/deploy.md#docker-and-compose-v01)) |
+
+Locally (the store must hold multi-platform images, e.g. Docker's
+containerd image store):
+
+```sh
+docker buildx build --platform linux/amd64,linux/arm64 \
+  --build-arg VERSION="$(git describe --tags --always)" -t wg-stream-proxy:dev .
+.github/scripts/container-smoke.sh wg-stream-proxy:dev
+docker compose -f deploy/compose/compose.yaml config --quiet
+```

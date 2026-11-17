@@ -73,9 +73,9 @@ Proxy in-process with a test config dir, fixture upstreams as `httptest.Server`s
 
 ## L5 Platform
 
-- v0.1: cross-compile `linux/amd64`, `linux/arm64`, `darwin/arm64` on every push; container smoke test (build image, start with `examples/config`, wait for `healthcheck`, fetch `/playlist.m3u8`).
+- v0.1: cross-compile `linux/amd64`, `linux/arm64`, `darwin/arm64` on every push; container smoke test (build image, start with `examples/config`, wait for `healthcheck`, fetch `/playlist.m3u8`); `docker compose config` for Compose.
 - v0.1, nightly: unit and integration tests on a native arm64 CI runner (QEMU only as fallback, without `-race`).
-- v0.3: `kubeconform` for Kustomize output, `systemd-analyze verify` for the unit, `docker compose config` for Compose.
+- v0.3: `kubeconform` for Kustomize output, `systemd-analyze verify` for the unit.
 
 ## L6 Manual release checklist
 

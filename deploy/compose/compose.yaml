@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# wg-stream-proxy with Docker Compose (docs/deploy.md).
+#
+# ./config is the config dir (spec 5.1): config.toml, channels.d/, tunnels/
+# and signing.key (`openssl rand -base64 32 > config/signing.key`). The
+# container runs as UID 65532: `chown -R 65532 config` and `chmod 640` on
+# the tunnel files and signing.key.
+#
+#   docker compose up -d
+#   docker compose kill -s HUP wg-stream-proxy   # reload config and channels
+services:
+  wg-stream-proxy:
+    image: ghcr.io/kingofkalk/wg-stream-proxy:0.1.0 # x-release-please-version
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    ports: ["2349:2349"]
+    volumes:
+      - ./config:/etc/wg-stream-proxy:ro
+    environment:
+      WG_STREAM_PROXY_SIGNING_KEY_FILE: /etc/wg-stream-proxy/signing.key
+    healthcheck:
+      test: ["CMD", "/wg-stream-proxy", "healthcheck"]
+      interval: 30s
+      timeout: 5s
