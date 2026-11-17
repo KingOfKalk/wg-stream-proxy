@@ -1,0 +1,5 @@
+error:
+testdata/load/errors/config/config.toml: log_level: invalid value "verbose": use debug, info, warn or error
+testdata/load/errors/config/channels.d/news.toml: channel 1 ("News"): no route: set tunnel on the channel or at the top of the file, or add a tunnel file "news.conf"
+testdata/load/errors/config/channels.d/news.toml: channel 2 ("Sport"): playlist.attrs: "group-title" is reserved, use the dedicated field
+testdata/load/errors/config/channels.d/news.toml: channel 3 ("News"): id: duplicate channel id "news", also used by testdata/load/errors/config/channels.d/news.toml channel 1

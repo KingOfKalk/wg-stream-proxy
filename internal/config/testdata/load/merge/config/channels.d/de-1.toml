@@ -1,0 +1,13 @@
+# No file defaults: route and group from the stem, User-Agent from config.toml.
+[[channel]]
+name = "Drei"
+url = "https://de.example.com/drei.m3u8"
+
+[channel.playlist]
+logo = "special://logos/drei.png"
+
+[[channel]]
+name = "Vier"
+url = "https://de.example.com/vier"
+tunnel = "direct"
+group = ""

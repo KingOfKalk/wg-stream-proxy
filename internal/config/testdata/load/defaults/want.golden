@@ -1,0 +1,22 @@
+{
+  "Paths": {
+    "ConfigDir": "testdata/load/defaults/config",
+    "TunnelsDir": "testdata/load/defaults/config/tunnels"
+  },
+  "LogosDir": "testdata/load/defaults/config/assets/logos",
+  "Listen": ":2349",
+  "LogLevel": "INFO",
+  "LogFormat": "text",
+  "PublicBaseURL": "",
+  "UserAgent": "Mozilla/5.0 (X11; Linux x86_64) Firefox/132.0",
+  "Timeouts": {
+    "connect": "10s",
+    "header": "15s",
+    "idle": "1h0m0s",
+    "read": "30s"
+  },
+  "AllowPrivate": {},
+  "EPGURL": "",
+  "Tunnels": null,
+  "Channels": null
+}

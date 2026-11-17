@@ -121,13 +121,13 @@ Resources under `/r/` use the same detection (steps 2.2-2.4): playlists are rewr
 
 - Config dir: `--config-dir`, then `WG_STREAM_PROXY_CONFIG_DIR`, then `/etc/wg-stream-proxy` if it exists, then `$XDG_CONFIG_HOME/wg-stream-proxy` (fallback `~/.config/wg-stream-proxy`).
 - Tunnel dir: `WG_STREAM_PROXY_TUNNELS_DIR`, default `<config-dir>/tunnels`.
-- Read non-recursively: `<config-dir>/config.toml`, `<tunnels-dir>/*.conf`, `<config-dir>/channels.d/*.toml`; other files are ignored. Local logos: `<config-dir>/assets/logos/` (flat).
-- Flag / env (CLI flag beats env beats `config.toml`): `--listen` / `WG_STREAM_PROXY_LISTEN`, `--log-level` / `WG_STREAM_PROXY_LOG_LEVEL`, `--log-format` / `WG_STREAM_PROXY_LOG_FORMAT`, `WG_STREAM_PROXY_PUBLIC_BASE_URL`.
-- Invalid config at startup: exit code 1.
+- Read non-recursively: `<config-dir>/config.toml`, `<tunnels-dir>/*.conf`, `<config-dir>/channels.d/*.toml`; other files are ignored. A missing `config.toml`, tunnels dir or `channels.d` counts as empty (defaults, no tunnels, no channels); a missing config dir is an error. Channel order: by file name, then by position in the file. Local logos: `<config-dir>/assets/logos/` (flat).
+- Flag / env (CLI flag beats env beats `config.toml`): `--listen` / `WG_STREAM_PROXY_LISTEN`, `--log-level` / `WG_STREAM_PROXY_LOG_LEVEL`, `--log-format` / `WG_STREAM_PROXY_LOG_FORMAT`, `WG_STREAM_PROXY_PUBLIC_BASE_URL`. Empty values count as not set.
+- Invalid config at startup: exit code 1. All errors found are reported, each with its file (and line for TOML errors).
 
 ### 5.2 Names and conventions
 
-- Tunnel names (file stem in tunnels dir) and channel ids are two separate namespaces; each must be unique within itself. Format `[a-z0-9-]`, 1-48 chars. `direct` is reserved as tunnel name.
+- Tunnel names (file stem in tunnels dir) and channel ids are two separate namespaces; each must be unique within itself. Format `[a-z0-9-]`, 1-48 chars. `direct` is reserved as tunnel name. A `*.conf` file with an invalid or reserved stem is a config error.
 - Route per channel, first match wins:
   1. `tunnel` on the channel
   2. `tunnel` at the top of the channel file
@@ -161,10 +161,10 @@ direct = []
 idle_timeout = "60m"
 
 [epg]
-url = "https://ext.greektv.app/epg/epg.xml.gz"
+url = "https://ext.greektv.app/epg/epg.xml.gz"  # optional, no default
 ```
 
-Unknown keys are config errors.
+Unknown keys and wrong value types are config errors. Values are validated: `listen` is `[host]:port` with a numeric port; durations are positive; `public_base_url` and `epg.url` are empty or absolute `http(s)` URLs; `user_agent` has no line breaks; `allow_private` keys are `direct` or existing tunnel names, values are CIDR prefixes without host bits.
 
 ### 5.4 Channel files (`channels.d/*.toml`)
 
@@ -205,13 +205,16 @@ url = "https://daserste-live.ard-mcdn.de/daserste/live/hls/de/master.m3u8"
 ```
 
 - Sub-tables apply to the `[[channel]]` directly above.
-- Merge order: `config.toml`, file `[defaults.*]`, channel. Maps (`headers`, `attrs`, `extra.<DIRECTIVE>`) merge key by key; the more specific layer wins. Single values are overridden.
-- `playlist.attrs`: extra `#EXTINF` attributes. `tvg-id`, `tvg-name`, `tvg-logo`, `group-title` are reserved (config error).
+- Merge order: `config.toml`, file `[defaults.*]`, channel. Maps (`headers`, `attrs`, `extra.<DIRECTIVE>`) merge key by key; the more specific layer wins. Single values are overridden. `[defaults.upstream]` and `[defaults.playlist]` take the same keys as the channel. `[upstream] user_agent` is the `config.toml` layer of `headers` (as `User-Agent`).
+- Channel `url`: absolute `http(s)` URL, max 4096 bytes. `name`: required, not blank.
+- `upstream.headers`: names are HTTP tokens, values without CR, LF or NUL; two names in one layer that differ only in case are a config error.
+- No line breaks in `name`, `group`, `playlist.tvg_id`, `playlist.logo` and `attrs` values.
+- `playlist.attrs`: extra `#EXTINF` attributes. `tvg-id`, `tvg-name`, `tvg-logo`, `group-title` are reserved in any case (config error). Names must not be empty or contain whitespace, control characters, `"`, `=` or `,`.
 - `playlist.extra.<DIRECTIVE>`: rendered as `#<DIRECTIVE>:<key>=<value>`.
   - Directive written as configured, must match `[A-Z][A-Z0-9-]*`.
   - Forbidden: `EXTM3U`, `EXTINF`, `EXTGRP` (conflicts with `group-title`), `EXT-X-*`.
-  - No line breaks in keys or values.
-- `playlist.logo`: `http(s)://` URL passed through; a file existing in `assets/logos/` is served as `/logos/{file}`; anything else is written as-is (player-side logo paths).
+  - No line breaks in keys or values; keys must not be empty.
+- `playlist.logo`: `http(s)://` URL (scheme case-insensitive) passed through; a plain file name (no `/` or `\`) existing in `assets/logos/` is served as `/logos/{file}`; anything else is written as-is (player-side logo paths).
 
 ### 5.5 Tunnel files
 

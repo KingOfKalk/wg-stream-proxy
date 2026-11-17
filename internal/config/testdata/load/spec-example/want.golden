@@ -1,0 +1,89 @@
+{
+  "Paths": {
+    "ConfigDir": "testdata/load/spec-example/config",
+    "TunnelsDir": "testdata/load/spec-example/config/tunnels"
+  },
+  "LogosDir": "testdata/load/spec-example/config/assets/logos",
+  "Listen": ":2349",
+  "LogLevel": "INFO",
+  "LogFormat": "text",
+  "PublicBaseURL": "",
+  "UserAgent": "Mozilla/5.0 (X11; Linux x86_64) Firefox/132.0",
+  "Timeouts": {
+    "connect": "10s",
+    "header": "15s",
+    "idle": "1h0m0s",
+    "read": "30s"
+  },
+  "AllowPrivate": {},
+  "EPGURL": "https://ext.greektv.app/epg/epg.xml.gz",
+  "Tunnels": [
+    {
+      "Name": "gr",
+      "Path": "testdata/load/spec-example/config/tunnels/gr.conf"
+    }
+  ],
+  "Channels": [
+    {
+      "File": "testdata/load/spec-example/config/channels.d/greek-tv.toml",
+      "ID": "ert-world",
+      "Name": "ERT World",
+      "URL": "https://ertflix-ertworld.siliconweb.com/mpegts/618618_3479286/master_mpegts.m3u8",
+      "Route": "gr",
+      "Group": "Greek TV",
+      "Enabled": true,
+      "Type": "auto",
+      "Header": {
+        "Referer": [
+          "https://www.ertflix.gr/"
+        ],
+        "User-Agent": [
+          "OKHTTP"
+        ]
+      },
+      "TVGID": "ertworld",
+      "Logo": "raw:EPTWORLD",
+      "Attrs": [
+        {
+          "Key": "parent-code",
+          "Value": "1234"
+        },
+        {
+          "Key": "tvg-chno",
+          "Value": "5"
+        }
+      ],
+      "Extra": [
+        {
+          "Directive": "KODIPROP",
+          "Key": "inputstream.adaptive.manifest_type",
+          "Value": "hls"
+        }
+      ]
+    },
+    {
+      "File": "testdata/load/spec-example/config/channels.d/greek-tv.toml",
+      "ID": "das-erste",
+      "Name": "Das Erste",
+      "URL": "https://daserste-live.ard-mcdn.de/daserste/live/hls/de/master.m3u8",
+      "Route": "direct",
+      "Group": "Greek TV",
+      "Enabled": true,
+      "Type": "auto",
+      "Header": {
+        "User-Agent": [
+          "OKHTTP"
+        ]
+      },
+      "TVGID": "",
+      "Logo": "none:",
+      "Attrs": [
+        {
+          "Key": "parent-code",
+          "Value": "1234"
+        }
+      ],
+      "Extra": null
+    }
+  ]
+}
