@@ -87,8 +87,10 @@ func TestRouteTransportSettings(t *testing.T) {
 			if tr.MaxIdleConnsPerHost != 16 {
 				t.Errorf("%s %s: MaxIdleConnsPerHost = %d, want 16", name, kind, tr.MaxIdleConnsPerHost)
 			}
-			if tr.DisableKeepAlives {
-				t.Errorf("%s %s: keep-alive disabled", name, kind)
+			// The ICY transport has no keep-alive: the wrapper only handles
+			// the first response of a connection.
+			if tr.DisableKeepAlives != (kind == "icy") {
+				t.Errorf("%s %s: DisableKeepAlives = %v", name, kind, tr.DisableKeepAlives)
 			}
 			if tr.DialContext == nil {
 				t.Errorf("%s %s: no DialContext", name, kind)
