@@ -304,6 +304,12 @@ url = "http://upstream.test/radio"
 		t.Errorf("tunnels before the first request = %+v, want gr stopped", got)
 	}
 	seg()
+	// The client has the response before the handler ends the request on
+	// the tunnel: wait until it has.
+	eventually(t, "the request on gr ended", func() bool {
+		g := tunnels()
+		return len(g) == 1 && g[0].ActiveRequests == 0
+	})
 	got := tunnels()
 	if len(got) != 1 || got[0].State != "running" || got[0].StartedAt.IsZero() || got[0].LastHandshake.IsZero() || got[0].ActiveRequests != 0 {
 		t.Errorf("tunnels after a request = %+v, want gr running with start and handshake times", got)
