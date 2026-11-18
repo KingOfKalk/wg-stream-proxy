@@ -64,6 +64,8 @@ func TestCloseWhileTrafficFlows(t *testing.T) {
 		{name: "TCP download, idle close", traffic: tcpTraffic("down"), close: closeIdle},
 		{name: "TCP upload, idle close", traffic: tcpTraffic("up"), close: closeIdle},
 		{name: "TCP download, drain", traffic: tcpTraffic("down"), close: closeDrain},
+		{name: "TCP download, retired by reload", traffic: tcpTraffic("down"), close: closeRetire},
+		{name: "TCP upload, retired by reload", traffic: tcpTraffic("up"), close: closeRetire},
 		{name: "TCP download, peer close", traffic: tcpTraffic("down"), close: closePeer},
 		{name: "TCP upload, peer close", traffic: tcpTraffic("up"), close: closePeer},
 	}
@@ -123,6 +125,18 @@ func closeDrain(t *testing.T, s *closeSetup) {
 	if err := s.m.Drain("gr", 0); err != nil {
 		t.Fatalf("Drain: %v", err)
 	}
+}
+
+// closeRetire removes the tunnel with a reload: it is drained and closed
+// in the background. The connections are not counted with Begin, so
+// the drain does not wait for them.
+func closeRetire(t *testing.T, s *closeSetup) {
+	t.Helper()
+	stops := stopped(s.tun)
+	if _, err := s.m.Apply(nil, testDrain); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	waitClosed(t, stops, "retired tunnel stop")
 }
 
 func closePeer(t *testing.T, s *closeSetup) {
