@@ -163,15 +163,15 @@ Do not tag, bump versions, or edit `CHANGELOG.md` by hand.
 ## Checks
 
 CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs on every
-pull request and push to `main`. `Lint`, `Test`, `Security`, `Player` and
-`Build` are the required checks of the `main` ruleset. Each stage starts
-only when the previous one passed:
+pull request and push to `main`. `Lint`, `Test`, `Security`, `Player`,
+`Fuzz`, `Capacity` and `Build` are the required checks of the `main`
+ruleset. Each stage starts only when the previous one passed:
 
 ```mermaid
 flowchart LR
-    Lint --> Test & Security
-    Test --> Player
-    Player & Security --> cc["Cross-compile ×3"] --> Build
+    Lint --> Test & Security & Fuzz
+    Test --> Player & Capacity
+    Player & Capacity & Security & Fuzz --> cc["Cross-compile ×3"] --> Build
 ```
 
 | Check | What | Summary on the run page |
@@ -180,6 +180,8 @@ flowchart LR
 | `Test` | `go test -race -cover ./...`, with `goleak` in every package's `TestMain` | passed/failed/skipped, coverage and time per package, failed tests ([`test-summary.jq`](.github/scripts/test-summary.jq)) |
 | `Security` | security checks of code and dependencies: govulncheck | "No vulnerabilities found" or the report |
 | `Player` | L4 player tests ([testing.md](docs/testing.md#l4-player)): `WSP_PLAYER_TESTS=1 go test -race -run '^TestPlayer$' ./internal/server/playertest/` with ffmpeg from the runner's apt | passed/failed/skipped and time, failed tests, ffmpeg version |
+| `Fuzz` | L2 fuzzing ([testing.md](docs/testing.md#l2-fuzz)): every fuzz target (found with `go test -list '^Fuzz' ./...`) for 10 s with `-fuzzminimizetime 2s`, one after the other in one job; a failing input is uploaded as workflow artifact `fuzz-failure` | per target: "No failure" and the last `fuzz: elapsed` line, or the failing input and the output |
+| `Capacity` | L3 capacity test ([testing.md](docs/testing.md#l3-integration)): `WSP_CAPACITY=30s go test -race -run '^TestCapacity$' ./internal/server/capacitytest`; its own job after `Test`, next to `Player` (the 5-minute run is in [`nightly.yml`](.github/workflows/nightly.yml)) | passed/failed and the test's measurements |
 | `Cross-compile (<os>/<arch>)` | `linux/amd64`, `linux/arm64`, `darwin/arm64`, `CGO_ENABLED=0`, version from `git describe` via `-ldflags "-X main.version=…"`; binary uploaded as workflow artifact `wg-stream-proxy-<os>-<arch>` | artifact, version, size, SHA-256 |
 | `Build` | passes when all `Cross-compile` jobs pass; fails if an earlier stage failed | overall result |
 
