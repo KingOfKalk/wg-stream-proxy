@@ -89,7 +89,7 @@ Kodi cannot play MP3 radio streams through `inputstream.adaptive`. With the glob
 
 An empty value removes a key set by a lower layer for `headers`, `attrs` and `extra` (spec 5.4).
 
-## systemd (v0.3)
+## systemd (Later)
 
 `deploy/systemd/wg-stream-proxy.service`:
 
@@ -114,11 +114,11 @@ ExecReload=/bin/kill -HUP $MAINPID
 - Credentials are copied at service start, so changed or added tunnel files need `systemctl restart`. Channel files are re-read on `systemctl reload`.
 - Adding a tunnel needs a new `LoadCredential=` line.
 
-## launchd (v0.3)
+## launchd (Later)
 
 `deploy/launchd/` plist running `wg-stream-proxy serve` as the user, config in `~/.config/wg-stream-proxy`.
 
-## Kubernetes (v0.3)
+## Kubernetes (Later)
 
 Kustomize base in `deploy/k8s/`:
 
@@ -127,4 +127,4 @@ Kustomize base in `deploy/k8s/`:
 - `Secret` with one key per tunnel (`gr.conf`, `uk.conf`), mounted at `/etc/wg-stream-proxy/tunnels`, `defaultMode: 0440`.
 - `Secret` with the signing key, injected via `env.valueFrom.secretKeyRef` as `WG_STREAM_PROXY_SIGNING_KEY`.
 - `Service` as `LoadBalancer` or `NodePort` for LAN players. Ingress optional, with response buffering disabled and long read timeouts.
-- Config changes: `kubectl rollout restart deployment/wg-stream-proxy` (no file watching before v0.2).
+- Config changes: `kubectl rollout restart deployment/wg-stream-proxy` (no file watching before v0.3).
