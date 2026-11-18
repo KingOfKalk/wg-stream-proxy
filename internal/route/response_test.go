@@ -15,6 +15,7 @@ import (
 	"os"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -144,20 +145,47 @@ type errReader struct{ err error }
 
 func (r errReader) Read([]byte) (int, error) { return 0, r.err }
 
-func TestRedactURL(t *testing.T) {
-	tests := []struct{ in, want string }{
-		{"https://cdn.example.com/live/index.m3u8", "https://cdn.example.com/live/index.m3u8"},
-		{"https://cdn.example.com/live/index.m3u8?token=abc&x=1", "https://cdn.example.com/live/index.m3u8"},
-		{"https://cdn.example.com/a?", "https://cdn.example.com/a"},
-		{"https://cdn.example.com/a#frag", "https://cdn.example.com/a"},
-		{"https://user:pw@cdn.example.com:8443/a?x", "https://cdn.example.com:8443/a"},
-		{"http://[::1/x?token=secret", "(invalid URL)"},
-		{"", ""},
+func TestLogURL(t *testing.T) {
+	long := strings.Repeat("a", 100)
+	tests := []struct{ name, in, want string }{
+		{"plain", "https://cdn.example.com/live/index.m3u8", "https://cdn.example.com/…/index.m3u8"},
+		{"token in path", "https://cdn.example.com/2016498/de/0123456789abcdef0123456789abcdef/7/7.m3u8", "https://cdn.example.com/…/7.m3u8"},
+		{"single segment", "http://cdn.example.com/seg.ts", "http://cdn.example.com/seg.ts"},
+		{"query", "https://cdn.example.com/live/index.m3u8?token=abc&x=1", "https://cdn.example.com/…/index.m3u8"},
+		{"empty query", "https://cdn.example.com/a/b?", "https://cdn.example.com/…/b"},
+		{"fragment", "https://cdn.example.com/a/b#frag", "https://cdn.example.com/…/b"},
+		{"user info and port", "https://user:pw@cdn.example.com:8443/a/b?x", "https://cdn.example.com:8443/…/b"},
+		{"IPv4 literal", "http://192.0.2.7:8080/a/b.ts", "http://192.0.2.7:8080/…/b.ts"},
+		{"IPv6 literal", "http://[2001:db8::1]:8080/a/b.ts", "http://[2001:db8::1]:8080/…/b.ts"},
+		{"IPv6 literal without port", "http://[::1]/a/b.ts", "http://[::1]/…/b.ts"},
+		{"no path", "https://cdn.example.com", "https://cdn.example.com"},
+		{"root", "https://cdn.example.com/", "https://cdn.example.com"},
+		{"root with query", "https://cdn.example.com/?token=secret", "https://cdn.example.com"},
+		{"trailing slash", "https://cdn.example.com/a/b/", "https://cdn.example.com/…/data"},
+		{"single segment trailing slash", "https://cdn.example.com/token/", "https://cdn.example.com/…/data"},
+		{"dots only", "https://cdn.example.com/a/..", "https://cdn.example.com/…/data"},
+		{"odd characters", "https://cdn.example.com/a/b%20c;x=1,äö.ts", "https://cdn.example.com/…/bcx1.ts"},
+		{"newline injection", "https://cdn.example.com/a/b%0Aurl=evil.ts", "https://cdn.example.com/…/burlevil.ts"},
+		{"long name keeps extension", "https://cdn.example.com/a/" + long + ".m3u8", "https://cdn.example.com/…/" + long[:59] + ".m3u8"},
+		{"long name without extension", "https://cdn.example.com/a/" + long, "https://cdn.example.com/…/" + long[:64]},
+		{"uppercase scheme", "HTTPS://cdn.example.com/a/b.ts", "https://cdn.example.com/…/b.ts"},
+		{"invalid", "http://[::1/x?token=secret", "(invalid URL)"},
+		{"no host", "/just/a/path?token=secret", "(invalid URL)"},
+		{"opaque", "mailto:someone@example.com", "(invalid URL)"},
+		{"empty", "", "(invalid URL)"},
 	}
 	for _, tt := range tests {
-		if got := RedactURL(tt.in); got != tt.want {
-			t.Errorf("RedactURL(%q) = %q, want %q", tt.in, got, tt.want)
-		}
+		t.Run(tt.name, func(t *testing.T) {
+			got := LogURL(tt.in)
+			if got != tt.want {
+				t.Errorf("LogURL(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+			for _, secret := range []string{"secret", "token=", "user:pw", "0123456789abcdef"} {
+				if strings.Contains(got, secret) {
+					t.Errorf("LogURL(%q) = %q leaks %q", tt.in, got, secret)
+				}
+			}
+		})
 	}
 }
 

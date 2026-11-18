@@ -72,7 +72,7 @@ func (l *requestLog) failed(reason route.Reason) {
 
 // logRequest writes the debug line of a request when it ends: what was
 // asked and answered, and where the time went (route.Phases). The URL is
-// the last upstream URL, redacted; tunnel_start appears only if the
+// the last upstream URL, reduced by route.LogURL; tunnel_start appears only if the
 // request waited for a tunnel start.
 func (s *Server) logRequest(r *http.Request, ch config.Channel, rq *metrics.Request, l *requestLog) {
 	p := l.trace.Phases()

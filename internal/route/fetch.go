@@ -94,7 +94,7 @@ func (e *Error) Unwrap() error { return e.Err }
 func (r *Route) Fetch(ctx context.Context, req Request) (*http.Response, error) {
 	u, err := parseUpstreamURL(req.URL)
 	if err != nil {
-		return nil, &Error{URL: RedactURL(req.URL), Err: err}
+		return nil, &Error{URL: LogURL(req.URL), Err: err}
 	}
 
 	end := r.begin()
@@ -120,7 +120,7 @@ func (r *Route) Fetch(ctx context.Context, req Request) (*http.Response, error) 
 		}
 		cancel(nil)
 		end()
-		return nil, &Error{URL: RedactURL(u.String()), Err: err}
+		return nil, &Error{URL: LogURL(u.String()), Err: err}
 	}
 	resp.Body = newTimedBody(ctx, cancel, resp.Body, r.clock, r.upstream.ReadTimeout, end)
 	return resp, nil

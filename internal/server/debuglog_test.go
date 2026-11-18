@@ -239,3 +239,76 @@ url = "` + directSrv.URL + `/seg.ts"
 		t.Errorf("request line above debug level:\n%s", logs.String())
 	}
 }
+
+// TestLogsHideUpstreamURLPaths: an upstream URL with a token in the path
+// and one in the query reaches no log line (request, playlist, stream,
+// upstream status and connect error lines): only scheme, host and file
+// name are logged (spec 8).
+func TestLogsHideUpstreamURLPaths(t *testing.T) {
+	const idToken = "0123456789abcdef0123456789abcdef"
+	up := newUpstream()
+	up.add("/live/"+idToken+"/master.m3u8", file{ctype: "application/vnd.apple.mpegurl", body: "#EXTM3U\n#EXT-X-TARGETDURATION:4\n#EXTINF:4,\nseg.ts\n"})
+	up.add("/gone/"+idToken+"/x.m3u8", file{status: http.StatusServiceUnavailable})
+	up.add("/raw/"+idToken+"/seg.ts", file{ctype: "video/mp2t", body: "segment"})
+	directSrv := httptest.NewServer(up)
+	t.Cleanup(directSrv.Close)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	closed := ln.Addr().String()
+	_ = ln.Close()
+
+	dir := writeConfig(t, map[string]string{
+		"config.toml": allowLoopback,
+		"channels.d/de.toml": `
+tunnel = "direct"
+[[channel]]
+name = "Hls"
+url = "` + directSrv.URL + `/live/` + idToken + `/master.m3u8?token=secret-token"
+[[channel]]
+name = "Raw"
+url = "` + directSrv.URL + `/raw/` + idToken + `/seg.ts?token=secret-token"
+[[channel]]
+name = "Gone"
+url = "` + directSrv.URL + `/gone/` + idToken + `/x.m3u8?token=secret-token"
+[[channel]]
+name = "Broken"
+url = "http://` + closed + `/broken/` + idToken + `/seg.ts?token=secret-token"
+`,
+	})
+	e := startRun(t, dir, 0)
+	for i, tt := range []struct {
+		path   string
+		status int
+	}{{"/c/hls", http.StatusOK}, {"/c/raw", http.StatusOK}, {"/c/gone", http.StatusBadGateway}, {"/c/broken", http.StatusBadGateway}} {
+		if resp, _ := do(t, e.client, http.MethodGet, e.url+tt.path, nil); resp.StatusCode != tt.status {
+			t.Fatalf("GET %s: status %d, want %d", tt.path, resp.StatusCode, tt.status)
+		}
+		e.logs.waitFor(t, " msg=request ", i+1)
+	}
+
+	logs := e.logs.String()
+	for _, s := range []string{idToken, "secret-token", "token=", "/live/", "/raw/", "/gone/", "/broken/"} {
+		if strings.Contains(logs, s) {
+			t.Errorf("log contains %q:\n%s", s, logs)
+		}
+	}
+	// Each line type is present, with the reduced URL.
+	for _, want := range []string{
+		`msg=playlist channel=hls url=` + directSrv.URL + "/…/master.m3u8",
+		`msg="stream done" channel=raw url=` + directSrv.URL + "/…/seg.ts",
+		`msg="upstream error status" channel=gone route=direct url=` + directSrv.URL + "/…/x.m3u8",
+		`msg="upstream request failed"`,
+		"error=\"upstream http://" + closed + "/…/seg.ts: ",
+	} {
+		if !strings.Contains(logs, want) {
+			t.Errorf("log lacks %q:\n%s", want, logs)
+		}
+	}
+	for _, l := range requestLines(logs) {
+		if !strings.Contains(l["url"], "/…/") {
+			t.Errorf("request line url = %q, want the reduced form", l["url"])
+		}
+	}
+}

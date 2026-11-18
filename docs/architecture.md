@@ -702,6 +702,9 @@ flowchart LR
 - Keys stay inside: the UAPI text is never logged; wireguard-go's own log
   output reaches the debug log only with the peer shown by tunnel name and
   anything key-like redacted (spec 8).
+- Upstream URLs stay out of the logs: every logged URL, and `route.Error.URL`
+  (which ends up in error messages), goes through `route.LogURL` and shows
+  only scheme, host and file name (spec 8).
 
 ### 7.4 A segment request through the layers
 

@@ -67,17 +67,55 @@ func ReadPlaylist(r io.Reader) ([]byte, error) {
 	return b, nil
 }
 
-// RedactURL returns s without query string, fragment and user info, for
-// logs and errors (spec 8). Unparsable URLs give "(invalid URL)".
-func RedactURL(s string) string {
+const (
+	logNameMax      = 64
+	logNameFallback = "data"
+)
+
+// LogURL returns the form of an upstream URL that may appear in logs and
+// error values (spec 8): scheme, host (with port; IP literals unchanged)
+// and file name, with the rest of the path replaced by an ellipsis:
+// "https://cdn.example.com/…/7.m3u8". Query string, fragment, user info
+// and every path segment but the last are dropped, because they can carry
+// tokens. The file name is the last path segment reduced like the
+// resource {name} (spec 4): [A-Za-z0-9._-], at most 64 bytes with the
+// extension kept, "data" if nothing is left. A URL without path (or "/")
+// has no file name; a file in the root shows without the ellipsis. URLs
+// without scheme or host give "(invalid URL)".
+func LogURL(s string) string {
 	u, err := url.Parse(s)
-	if err != nil {
+	if err != nil || u.Scheme == "" || u.Host == "" {
 		return "(invalid URL)"
 	}
-	u.User = nil
-	u.RawQuery = ""
-	u.ForceQuery = false
-	u.Fragment = ""
-	u.RawFragment = ""
-	return u.String()
+	out := u.Scheme + "://" + u.Host
+	if u.Path == "" || u.Path == "/" {
+		return out
+	}
+	i := strings.LastIndexByte(u.Path, '/')
+	name := logFileName(u.Path[i+1:])
+	if i == 0 {
+		return out + "/" + name
+	}
+	return out + "/…/" + name
+}
+
+// logFileName reduces a path segment like hls.resourceName does.
+func logFileName(seg string) string {
+	name := strings.Map(func(r rune) rune {
+		if r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '.' || r == '_' || r == '-' {
+			return r
+		}
+		return -1
+	}, seg)
+	if len(name) > logNameMax {
+		ext := ""
+		if i := strings.LastIndexByte(name, '.'); i >= 0 && len(name)-i < logNameMax {
+			ext = name[i:]
+		}
+		name = name[:logNameMax-len(ext)] + ext
+	}
+	if strings.Trim(name, ".") == "" {
+		return logNameFallback
+	}
+	return name
 }
