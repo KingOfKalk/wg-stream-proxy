@@ -41,7 +41,7 @@ func (s *Server) handleLogo(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	root, err := os.OpenRoot(s.cfg.LogosDir())
+	root, err := os.OpenRoot(s.active().cfg.LogosDir())
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
 			s.log.Warn("logos dir", "error", err)

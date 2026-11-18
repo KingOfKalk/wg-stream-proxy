@@ -60,7 +60,7 @@ Proxy in-process with a test config dir, fixture upstreams as `httptest.Server`s
 - Guard with the production settings: redirect and DNS rebinding to a private IP are blocked.
 - Tunnel lifecycle: concurrent first requests share one start, idle close, no handshake gives `502`, recovery, drain on shutdown.
 - Sharing: 5 channels on one tunnel use one WireGuard device; repeated segments to one host reuse pooled connections.
-- Reload: valid change applied, invalid change rejected while the old config keeps serving, removed tunnel drained.
+- Reload: valid change applied, invalid change rejected while the old config keeps serving, removed tunnel drained, changed tunnel recreated, unchanged tunnel keeps running, reload during a tunnel start.
 - Security: unsigned or tampered `/r/` and disabled channel give `404`, logo path traversal rejected.
 - Capacity: 3 simulated viewers on different channels; 30s on push, 5 minutes nightly; no stalls, no goroutine or memory growth.
 

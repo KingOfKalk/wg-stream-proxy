@@ -48,6 +48,10 @@ type cli struct {
 	listening func(net.Addr)
 	// healthTimeout bounds the healthcheck request; 0 means the default.
 	healthTimeout time.Duration
+	// hangup, if set, replaces SIGHUP for serve: each value reloads.
+	hangup chan os.Signal
+	// reloaded, if set, is called with the result of each reload.
+	reloaded func(error)
 	// epgAllowPrivate adds private-range guard exceptions per route name
 	// for the EPG download (tests allow the loopback range).
 	epgAllowPrivate map[string][]netip.Prefix
