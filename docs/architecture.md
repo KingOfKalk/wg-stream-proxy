@@ -14,10 +14,11 @@ Related: [spec.md](spec.md), [deploy.md](deploy.md), [testing.md](testing.md)
 4. [Request flows](#4-request-flows)
 5. [Routing and the guard](#5-routing-and-the-guard)
 6. [Tunnel lifecycle](#6-tunnel-lifecycle)
-7. [Package map](#7-package-map)
-8. [Versions](#8-versions)
-9. [Deployment](#9-deployment)
-10. [Glossary](#10-glossary)
+7. [Internals](#7-internals)
+8. [Package map](#8-package-map)
+9. [Versions](#9-versions)
+10. [Deployment](#10-deployment)
+11. [Glossary](#11-glossary)
 
 Colours used in all diagrams:
 
@@ -433,7 +434,346 @@ stateDiagram-v2
 - `wsp_tunnel_up{tunnel}` is `1` while the device runs and the last
   handshake is younger than 180s (spec 7.3).
 
-## 7. Package map
+## 7. Internals
+
+How one running `wg-stream-proxy serve` process is built inside. The
+sections above show what happens; this one shows which part of the code
+does it. Type and function names are those on `main`; the code is
+authoritative for them, the spec for the behaviour.
+
+### 7.1 Layers and planes
+
+Colours in this diagram mark the **planes**, as in section 3: blue is the
+data plane (thick arrows), amber the control plane, purple the
+observability plane (dotted lines). Red is the guard, grey the host
+network. Section 3 counts health and metrics to the control plane; here
+they are a plane of their own.
+
+```mermaid
+flowchart TB
+    op(["Operator: SIGHUP"]):::ctl
+    players(["Players: Kodi, VLC"]):::data
+    prom(["Prometheus"]):::obs
+
+    subgraph l1["1 · HTTP"]
+        pl["/playlist.m3u8<br/>playlist.Render"]:::data
+        cr["/c/{id}, /r/…<br/>handleChannel,<br/>handleResource"]:::data
+        logos["/logos/{file}"]:::data
+        ep["/healthz, /metrics"]:::obs
+    end
+    subgraph l2["2 · Generation"]
+        rel["Reloader<br/>config.Load, tunnel.Parse"]:::ctl
+        gen[("generation<br/>Config + route.Set")]:::data
+    end
+    subgraph l3["3 · Content"]
+        proxy["Server.proxy<br/>fetch, then respond"]:::data
+        det["hls.Detect<br/>HLS or raw"]:::data
+        rw["hls.Rewrite + Signer<br/>URIs to signed /r/"]:::data
+        pipe["stream<br/>io.Copy + flush"]:::data
+        reg["metrics.Metrics<br/>wsp_* registry"]:::obs
+    end
+    subgraph l4["4 · Routes"]
+        fetch["Route.Fetch<br/>http.Transport, 2 pools"]:::data
+        guard{{"dial: lookup,<br/>Guard.Check, connect"}}:::guard
+    end
+    subgraph l5["5 · Tunnels"]
+        mgr["tunnel.Manager<br/>Apply, idle close, drain"]:::ctl
+        tun["Tunnel per file<br/>DNS, netstack,<br/>wireguard-go"]:::data
+        direct["direct<br/>route.Host()"]:::data
+    end
+    subgraph l6["6 · Host network"]
+        udp["UDP to the<br/>WireGuard peers"]:::inet
+        tcp["TCP to the<br/>upstreams"]:::inet
+    end
+
+    players ==> pl & cr & logos
+    op --> rel
+    prom -.- ep
+    rel -- "swap" --> gen
+    pl & cr & logos ==> gen
+    gen ==> proxy
+    ep -.- reg
+    proxy ==> fetch ==> guard
+    guard ==> tun & direct
+    rel -- "Apply" --> mgr
+    mgr -- "start, stop" --> tun
+    tun ==> udp
+    direct ==> tcp
+    reg -. "gauges" .- tun
+
+    classDef data fill:#3b7fb0,stroke:#24577d,color:#ffffff
+    classDef ctl fill:#a86a1a,stroke:#6e4511,color:#ffffff
+    classDef obs fill:#6f5cc2,stroke:#46398a,color:#ffffff
+    classDef inet fill:#66727e,stroke:#3f4851,color:#ffffff
+    classDef guard fill:#b94845,stroke:#7a2c2a,color:#ffffff
+    linkStyle 3,5,15,16 stroke:#a86a1a,stroke-width:2px
+    linkStyle 4,10,19 stroke:#6f5cc2,stroke-width:2px
+    style l1 fill:none,stroke:#66727e,stroke-width:2px
+    style l2 fill:none,stroke:#66727e,stroke-width:2px
+    style l3 fill:none,stroke:#66727e,stroke-width:2px
+    style l4 fill:none,stroke:#66727e,stroke-width:2px
+    style l5 fill:none,stroke:#66727e,stroke-width:2px
+    style l6 fill:none,stroke:#66727e,stroke-width:2px
+```
+
+Requests go down the layers, responses travel back up.
+
+| Layer | Owns | Package | Spec |
+|---|---|---|---|
+| 1 HTTP | Routing of the paths, absolute base URL, `/logos/` from disk, `/healthz`; graceful shutdown waits for running handlers | `internal/server`, `internal/playlist` | 6, 7.1 |
+| 2 Generation | The immutable `generation`: one `config.Config` plus the `route.Set` built for it, in an `atomic.Pointer`. Every request takes it once and keeps it to its end | `internal/server`, `internal/config` | 5.6 |
+| 3 Content | `Server.proxy`: fetch through the channel's route, then `hls.Detect`; playlists go through `hls.Rewrite` with `Signer.Path`, everything else through `stream` (`io.Copy` + flush). Status mapping, the `206` refetch | `internal/hls`, `internal/server` | 3.1-3.4, 4 |
+| 4 Routes | One `Route` per tunnel plus `direct`. `Fetch` applies the upstream header rules, redirects and timeouts; the route's `dial` resolves, runs `Guard.Check` and connects Happy-Eyeballs style. Two `http.Transport`s per route: the normal pool and the ICY pool | `internal/route` | 2.1, 3.3-3.5 |
+| 5 Tunnels | `tunnel.Manager` with one `Tunnel` per tunnel file: lazy start, idle close, drain, reload (`Apply`). `direct` is `route.Host()`: host resolver and dialer | `internal/tunnel`, `internal/tunnel/netstack`, `internal/config/wgquick` | 2.1, 5.5 |
+| 6 Host network | One UDP socket per running tunnel to its peer; plain TCP for `direct`. No TUN device, no routing table change | wireguard-go `conn` | 1.1, 2.1 |
+
+- **Data plane**: a player request goes down the layers and back. The
+  route layer only knows the `route.Network` interface (resolve a host,
+  dial an `ip:port`); `*tunnel.Tunnel` and `route.Host()` implement it.
+- **Control plane**: `cmd/wg-stream-proxy` turns `SIGHUP` into
+  `Reloader.Reload`. It loads all files (`config.Load`, `tunnel.Parse`);
+  if they are valid, `Manager.Apply` swaps the tunnel set,
+  `route.Set.Next` builds the next routes (unchanged routes keep their
+  pools), and the new generation is swapped in for new requests. Running
+  requests finish on the old one. An invalid config changes nothing.
+- **Observability plane**: `metrics.Metrics` is a private Prometheus
+  registry. `Server.proxy` writes the request counters; the tunnel gauges
+  are read from the tunnels at scrape time, so nothing polls the devices.
+  `/healthz` only says that the process serves.
+
+### 7.2 Channels, routes and tunnels
+
+Example: two channels in `channels.d/gr.toml` take tunnel `gr` from the
+file name, a radio channel names `uk`, and one channel is `direct`.
+
+```mermaid
+flowchart LR
+    subgraph chans["Channels: config.Channel, route fixed at load"]
+        direction TB
+        subgraph fgr["channels.d/gr.toml: stem gr"]
+            c1["ert-world"]:::proxy
+            c2["ert-news"]:::proxy
+        end
+        subgraph fradio["channels.d/radio.toml"]
+            c3["uk-radio<br/>tunnel = &quot;uk&quot;"]:::proxy
+        end
+        subgraph fde["channels.d/de.toml"]
+            c4["das-erste<br/>tunnel = &quot;direct&quot;"]:::proxy
+        end
+    end
+    subgraph set["route.Set of the generation"]
+        direction TB
+        rgr{{"Route gr<br/>+ guard"}}:::guard
+        ruk{{"Route uk<br/>+ guard"}}:::guard
+        rdir{{"Route direct<br/>+ guard"}}:::guard
+    end
+    subgraph nets["Networks"]
+        direction TB
+        tgr["Tunnel gr<br/>netstack + device"]:::tunnel
+        tuk["Tunnel uk<br/>netstack + device"]:::tunnel
+        host["route.Host()<br/>host resolver + dialer"]:::direct
+    end
+    subgraph inet["Internet"]
+        direction TB
+        pgr["VPN peer gr"]:::inet
+        puk["VPN peer uk"]:::inet
+        cdn["Upstreams<br/>CDNs, radio servers"]:::inet
+    end
+    fail["No handshake:<br/>502, no fallback"]:::guard
+
+    c1 & c2 --> rgr
+    c3 --> ruk
+    c4 --> rdir
+    rgr --> tgr
+    ruk --> tuk
+    rdir --> host
+    tgr == "UDP, one session" ==> pgr
+    tuk == "UDP, one session" ==> puk
+    pgr & puk --> cdn
+    host --> cdn
+    tgr -. "start failed" .-> fail
+
+    classDef proxy fill:#6f5cc2,stroke:#46398a,color:#ffffff
+    classDef tunnel fill:#2a8a68,stroke:#1a5e46,color:#ffffff
+    classDef direct fill:#a86a1a,stroke:#6e4511,color:#ffffff
+    classDef inet fill:#66727e,stroke:#3f4851,color:#ffffff
+    classDef guard fill:#b94845,stroke:#7a2c2a,color:#ffffff
+    style chans fill:none,stroke:#6f5cc2,stroke-width:2px
+    style fgr fill:none,stroke:#6f5cc2,stroke-width:1px
+    style fradio fill:none,stroke:#6f5cc2,stroke-width:1px
+    style fde fill:none,stroke:#6f5cc2,stroke-width:1px
+    style set fill:none,stroke:#b94845,stroke-width:2px
+    style nets fill:none,stroke:#2a8a68,stroke-width:2px
+    style inet fill:none,stroke:#66727e,stroke-width:2px
+```
+
+- The route of a channel is fixed when the config loads (section 5.1,
+  spec 5.2); the handler looks it up by name in the generation's
+  `route.Set`.
+- **Routes are shared** by all channels that name them: one guard with
+  the route's `allow_private` list, one connection pool per transport.
+- **Tunnels are shared** by all routes and viewers: one `Tunnel` per
+  tunnel file, one key, one UDP session to the peer (spec 2.1). Only the
+  route of the same name uses it.
+- **`direct` bypasses tunnels** but not the guard: same transport
+  settings, host resolver and dialer. It has no idle close and no drain.
+- **Nothing falls back**: a route only knows its own network. If a tunnel
+  cannot start or the guard blocks every address, the request fails with
+  `502`; it never takes another route.
+
+### 7.3 Inside one tunnel
+
+```mermaid
+flowchart LR
+    route["Route gr<br/>dial, Fetch"]:::proxy
+
+    subgraph tun["tunnel.Tunnel gr"]
+        look["LookupNetIP<br/>host name"]:::proxy
+        dialc["DialContext<br/>ip:port"]:::proxy
+        dns["dnsClient<br/>A + AAAA, retries,<br/>TCP if truncated"]:::proxy
+        chk{{"check<br/>AllowedIPs,<br/>address family"}}:::guard
+        act["Begin, end<br/>requests in flight"]:::ctl
+        ens["ensure<br/>lazy start,<br/>one startCall"]:::ctl
+        idle["idle timer"]:::ctl
+        subgraph run["running: only while started"]
+            ns["netstack.Net<br/>gVisor TCP/IP"]:::tunnel
+            dev["wireguard-go<br/>device"]:::tunnel
+            bind["conn.Bind<br/>UDP socket"]:::tunnel
+        end
+    end
+    mgr["tunnel.Manager<br/>Apply, Shutdown"]:::ctl
+    peer["VPN peer<br/>Endpoint"]:::inet
+    up["DNS servers,<br/>upstreams"]:::inet
+
+    route -- "resolve" --> look --> dns
+    route -- "connect" --> dialc --> chk
+    dns -- "UDP, TCP :53" --> ns
+    chk -- "TCP" --> ns
+    ns --> dev --> bind
+    bind == "UDP" ==> peer --> up
+    route -- "per request" --> act
+    act -- "0 in flight" --> idle
+    look & dialc -.-> ens
+    ens -- "start" --> run
+    idle -- "stop" --> run
+    mgr -- "retire, drain" --> run
+
+    classDef proxy fill:#6f5cc2,stroke:#46398a,color:#ffffff
+    classDef tunnel fill:#2a8a68,stroke:#1a5e46,color:#ffffff
+    classDef ctl fill:#a86a1a,stroke:#6e4511,color:#ffffff
+    classDef inet fill:#66727e,stroke:#3f4851,color:#ffffff
+    classDef guard fill:#b94845,stroke:#7a2c2a,color:#ffffff
+    style tun fill:none,stroke:#2a8a68,stroke-width:2px
+    style run fill:none,stroke:#2a8a68,stroke-width:1px
+```
+
+- **Interface to the route layer**: `*tunnel.Tunnel` implements
+  `route.Network` (`LookupNetIP`, `DialContext`) and `route.Activity`
+  (`Begin`, returning `end`). The route counts each request from before
+  its first lookup until its body is closed.
+- **`check`**: an address must be inside the peer's `AllowedIPs` and of a
+  family the tunnel has an `Address` for, else `ErrNotAllowed` before
+  anything is sent (spec 5.5). Lookup answers and the file's `DNS`
+  servers are filtered the same way.
+- **`dnsClient`**: tunnel DNS over UDP and TCP inside the netstack, A and
+  AAAA in parallel (only for families the tunnel has), retries after 1s,
+  2s, then every 4s on the next server, TCP after a truncated answer,
+  IPv4 answers first (spec 2.1). It replaces the netstack resolver, which
+  retries only after 5s.
+- **`ensure`**: the lazy start. Concurrent callers wait for one
+  `startCall`; `startDevice` resolves the `Endpoint` with the host
+  resolver, builds the UAPI text (`wgquick.UAPIConfig`), creates the
+  netstack and the device, and waits for the first handshake, all within
+  `connect_timeout`. A failure is `ErrUnavailable`, answered with `502`.
+- **`running`** (device + netstack) exists only while the tunnel is up.
+  Every stop ends in `running.close`: the idle timer (armed when the last
+  request ends, `idle_timeout` after the last activity), a reload that
+  retires the tunnel (`Apply`: a start in progress is cancelled, requests
+  in flight get up to 30s), and `Shutdown`. Before the device closes, the
+  `OnStop` hook makes the route close its idle pooled connections.
+- **`internal/tunnel/netstack`** is a trimmed copy of wireguard-go's
+  `tun/netstack` with one change: a packet gVisor sends after `Close` is
+  dropped instead of sent on a closed channel, which crashed the process
+  ([#47](https://github.com/KingOfKalk/wg-stream-proxy/issues/47), spec
+  9). It is updated together with wireguard-go.
+- Keys stay inside: the UAPI text and wireguard-go's own log output are
+  never logged (spec 8).
+
+### 7.4 A segment request through the layers
+
+A `/r/` segment of `ert-world` while tunnel `gr` is already up.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    box rgba(59,127,176,0.18) Home LAN
+        participant P as Player
+    end
+    box rgba(111,92,194,0.18) wg-stream-proxy
+        participant S as server
+        participant G as generation
+        participant M as metrics
+        participant R as route gr
+    end
+    box rgba(42,138,104,0.18) Tunnel
+        participant T as tunnel gr
+    end
+    box rgba(102,114,126,0.18) Internet
+        participant U as CDN
+    end
+
+    P->>S: GET /r/ert-world/{sig}/{b64url}/seg.ts
+    S->>S: Signer.Parse: channel id, upstream URL
+    S->>G: active(), channel(id)
+    G-->>S: enabled channel, its route gr
+    Note over S,G: bad signature, unknown or<br/>disabled channel: 404
+    S->>M: Begin(channel, segment)
+    Note right of M: active_requests +1
+    S->>R: Fetch(URL, channel headers, Range), header_timeout runs
+    R->>T: Begin: in flight +1, idle timer off
+    alt idle connection in the pool
+        R->>R: reuse it, guard checked at its dial
+    else new connection
+        R->>T: LookupNetIP(host): tunnel DNS
+        R->>R: Guard.Check every address
+        R->>T: DialContext(ip:port), Happy Eyeballs
+        T->>T: AllowedIPs check, device already up
+    end
+    R->>U: GET through netstack, device, UDP
+    U-->>R: 200, headers
+    R-->>S: response, body with read_timeout
+    S->>S: hls.Detect: not a playlist
+    S->>M: Response(200)
+    Note right of M: upstream_requests_total
+    loop until the body ends
+        U-->>S: bytes
+        S-->>P: io.Copy + flush
+    end
+    S->>R: close body
+    R->>T: end: in flight -1, idle timer armed at 0
+    S->>M: End()
+    Note right of M: active_requests -1
+```
+
+- Steps 2-4 (layers 1-2): the signature binds the URL to the channel; the
+  generation taken here serves the request to its end, even if a reload
+  swaps in a new one meanwhile.
+- Step 5: `wsp_active_requests{channel,kind}` counts from here. The kind
+  is `segment` because the path does not end in `.m3u8` or `.m3u`; a
+  detected playlist would switch it to `playlist`.
+- Step 7: from here until step 21 the request is tunnel activity, so an
+  open stream keeps the tunnel up and an idle pooled connection does not.
+- Steps 8-12 (layer 4): the guard runs on every new connection, also for
+  each redirect hop, never on a reused one (it was checked when it was
+  dialed).
+- Step 17: `wsp_upstream_requests_total{channel,kind,code}`. On an error
+  before the response, `FetchError` counts `code="error"` and
+  `wsp_upstream_errors_total{channel,reason}`, and the player gets `502`
+  or `504`. A request the player gave up counts no error.
+- A playlist (step 16 detects HLS) is read whole, rewritten and sent
+  instead of streamed, as in section 4.2.
+
+## 8. Package map
 
 Layout per spec 9. Arrows show the expected main dependencies; package
 boundaries inside this layout are an implementation choice, so the code is
@@ -442,34 +782,32 @@ authoritative.
 ```mermaid
 flowchart TD
     main["cmd/wg-stream-proxy<br/>subcommands"]:::done
-    server["internal/server<br/>HTTP handlers"]:::wip
+    server["internal/server<br/>HTTP handlers, Run, reload"]:::done
     playlist["internal/playlist<br/>channel list"]:::done
     hls["internal/hls<br/>Detect, Rewrite, Signer"]:::done
-    route["internal/route<br/>routes, guard, upstream rules"]:::wip
-    tunnel["internal/tunnel<br/>wireguard-go + netstack"]:::wip
+    route["internal/route<br/>routes, guard, upstream rules"]:::done
+    tunnel["internal/tunnel<br/>Manager, Tunnel, DNS"]:::done
+    netstack["internal/tunnel/netstack<br/>copy of wireguard-go's"]:::done
     config["internal/config<br/>Resolve, Load"]:::done
     wgquick["internal/config/wgquick<br/>Parse, UAPIConfig"]:::done
     metrics["internal/metrics<br/>Prometheus"]:::done
     importer["internal/importer<br/>M3U import"]:::done
     epg["internal/epg<br/>epg ids, epg match"]:::done
 
-    main --> server & config & importer & epg & route
+    main --> server & config & importer & epg & route & tunnel & hls
     server --> playlist & hls & route & tunnel & metrics
     playlist --> config
     route --> config
     tunnel -. "implements route Network" .-> route
-    tunnel --> wgquick
-    config --> wgquick
+    tunnel --> config & wgquick & netstack
     importer --> config & epg
     epg --> config & route
 
     classDef done fill:#2a8a68,stroke:#1a5e46,color:#ffffff
-    classDef wip fill:#a86a1a,stroke:#6e4511,color:#ffffff
-    classDef todo fill:#c3cad2,stroke:#5b6670,color:#1b1f24,stroke-dasharray:5 3
 ```
 
-Green: exists on `main`. Amber: being built. Grey, dashed: still to come
-in v0.1. All of them are part of v0.1.
+All packages of v0.1 exist on `main`. Section 7 shows how they work
+together at run time.
 
 | Package | Role | Status |
 |---|---|---|
@@ -477,17 +815,18 @@ in v0.1. All of them are part of v0.1.
 | `internal/config` | Config dir resolution (`Resolve`), loading and validation of `config.toml` and channel files (`Load`), slugs (`Slug`), route resolution | exists |
 | `internal/config/wgquick` | Tunnel file parser (`Parse`), UAPI conversion (`UAPIConfig`), `AllowedIPs` check (`Allows`) | exists |
 | `internal/hls` | Type detection (`Detect`), playlist rewriter (`Rewrite`), signed `/r/` URLs (`Signer`), signing key (`LoadSigningKey`); pure functions, no I/O | exists |
-| `internal/tunnel` | One `wireguard-go` device + gVisor netstack per tunnel, DNS inside the tunnel, lazy start ([#11](https://github.com/KingOfKalk/wg-stream-proxy/issues/11)); idle close and drain ([#16](https://github.com/KingOfKalk/wg-stream-proxy/issues/16)) | being built |
-| `internal/route` | One route per tunnel plus `direct`, `http.Transport` settings, guard, upstream header rules, timeouts, status mapping ([#12](https://github.com/KingOfKalk/wg-stream-proxy/issues/12)); raw and ICY ([#15](https://github.com/KingOfKalk/wg-stream-proxy/issues/15)). Defines the `Network` interface (resolve + dial a resolved `IP:port`) that tunnels and `direct` implement | being built |
-| `internal/server` | `/playlist.m3u8`, `/c/`, `/r/`, `/healthz`, absolute URL base, graceful shutdown (`Run`) ([#14](https://github.com/KingOfKalk/wg-stream-proxy/issues/14)); `/logos/`, `healthcheck` ([#19](https://github.com/KingOfKalk/wg-stream-proxy/issues/19)); `/metrics` ([#18](https://github.com/KingOfKalk/wg-stream-proxy/issues/18)) | being built |
+| `internal/tunnel` | One `wireguard-go` device + gVisor netstack per tunnel, DNS inside the tunnel, lazy start ([#11](https://github.com/KingOfKalk/wg-stream-proxy/issues/11)); idle close and drain ([#16](https://github.com/KingOfKalk/wg-stream-proxy/issues/16)); reload (`Manager.Apply`) | exists |
+| `internal/tunnel/netstack` | Trimmed copy of wireguard-go's `tun/netstack` (MIT) that drops packets sent after `Close` ([#47](https://github.com/KingOfKalk/wg-stream-proxy/issues/47), spec 9) | exists |
+| `internal/route` | One route per tunnel plus `direct`, `http.Transport` settings, guard, upstream header rules, timeouts, status mapping ([#12](https://github.com/KingOfKalk/wg-stream-proxy/issues/12)); raw and ICY ([#15](https://github.com/KingOfKalk/wg-stream-proxy/issues/15)). Defines the `Network` interface (resolve + dial a resolved `IP:port`) that tunnels and `direct` implement | exists |
+| `internal/server` | `/playlist.m3u8`, `/c/`, `/r/`, `/healthz`, absolute URL base, graceful shutdown (`Run`) ([#14](https://github.com/KingOfKalk/wg-stream-proxy/issues/14)); `/logos/`, `healthcheck` ([#19](https://github.com/KingOfKalk/wg-stream-proxy/issues/19)); `/metrics` ([#18](https://github.com/KingOfKalk/wg-stream-proxy/issues/18)); `SIGHUP` reload (`Reloader`) | exists |
 | `internal/playlist` | Renders the channel list (spec 6) | exists |
 | `internal/metrics` | Private Prometheus registry with the `wsp_` metrics (spec 7.3) and the Go and process metrics; tunnel gauges read at scrape time ([#18](https://github.com/KingOfKalk/wg-stream-proxy/issues/18)) | exists |
 | `internal/importer` | `import` of an existing M3U file (spec 7.2), `--match-epg` with an `epg.Index`; pure function, no I/O | exists |
 | `internal/epg` | Downloads `epg.url` over the direct route, streams the XMLTV channel list (plain or gzip), ranks EPG names for `epg match` and `import --match-epg` (spec 7.2, [#21](https://github.com/KingOfKalk/wg-stream-proxy/issues/21)) | exists |
 
-## 8. Versions
+## 9. Versions
 
-### 8.1 What each version adds
+### 9.1 What each version adds
 
 | Version | Adds | Where it shows up |
 |---|---|---|
@@ -508,7 +847,7 @@ flowchart LR
     classDef later fill:#c3cad2,stroke:#5b6670,color:#1b1f24,stroke-dasharray:5 3
 ```
 
-### 8.2 Final version
+### 9.2 Final version
 
 The same structure as in section 2; future parts are grey and dashed. The
 details of v0.2 and later are not specified yet (the clips get their own
@@ -570,12 +909,12 @@ flowchart LR
   guard in front of every dial, tunnels in userspace, fail closed.
 - v0.2 adds behaviour *in front of* the routes (clips, prefetch) and a
   second reload trigger next to `SIGHUP`.
-- v0.3 changes only how the binary is shipped and run (section 9).
+- v0.3 changes only how the binary is shipped and run (section 10).
 - Later items extend the data plane (EPG and logos fetched through the
   proxy, an ad-hoc endpoint, DASH) or the limits (more viewers, 32-bit
   ARM).
 
-## 9. Deployment
+## 10. Deployment
 
 ```mermaid
 flowchart TB
@@ -621,7 +960,7 @@ flowchart TB
   reverse proxy (spec 8).
 - Details per variant: [deploy.md](deploy.md).
 
-## 10. Glossary
+## 11. Glossary
 
 | Term | Meaning |
 |---|---|
@@ -636,3 +975,5 @@ flowchart TB
 | Signing key | The secret for the HMAC signature of resource URLs, so `/r/` only fetches URLs that came from a rewritten playlist of that channel. |
 | Control plane | Config, reload, tunnel lifecycle, signing key, health and metrics. |
 | Data plane | The request path: channel list, `/c/`, `/r/`, raw pipe. |
+| Observability plane | `/healthz`, `/metrics` and what feeds them. Section 3 counts it to the control plane; section 7 draws it on its own. |
+| Generation | One loaded config with the routes built for it. A request uses the generation it started with; a reload swaps in the next one for new requests. |
