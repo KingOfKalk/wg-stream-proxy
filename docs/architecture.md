@@ -447,7 +447,7 @@ flowchart TD
     config["internal/config<br/>Resolve, Load"]:::done
     wgquick["internal/config/wgquick<br/>Parse, UAPIConfig"]:::done
     metrics["internal/metrics<br/>Prometheus"]:::todo
-    importer["internal/importer<br/>M3U import"]:::todo
+    importer["internal/importer<br/>M3U import"]:::done
     epg["internal/epg<br/>epg ids, epg match"]:::todo
 
     main --> server & config & importer & epg
@@ -457,7 +457,7 @@ flowchart TD
     tunnel -. "implements route Network" .-> route
     tunnel --> wgquick
     config --> wgquick
-    importer --> epg
+    importer --> config & epg
 
     classDef done fill:#2a8a68,stroke:#1a5e46,color:#ffffff
     classDef wip fill:#a86a1a,stroke:#6e4511,color:#ffffff
@@ -469,7 +469,7 @@ in v0.1. All of them are part of v0.1.
 
 | Package | Role | Status |
 |---|---|---|
-| `cmd/wg-stream-proxy` | Subcommand dispatch; `serve`, `check`, `healthcheck` and `version` work, the others follow with their packages | exists |
+| `cmd/wg-stream-proxy` | Subcommand dispatch; `serve`, `check`, `import`, `healthcheck` and `version` work, `epg` follows with its package | exists |
 | `internal/config` | Config dir resolution (`Resolve`), loading and validation of `config.toml` and channel files (`Load`), slugs (`Slug`), route resolution | exists |
 | `internal/config/wgquick` | Tunnel file parser (`Parse`), UAPI conversion (`UAPIConfig`), `AllowedIPs` check (`Allows`) | exists |
 | `internal/hls` | Type detection (`Detect`), playlist rewriter (`Rewrite`), signed `/r/` URLs (`Signer`), signing key (`LoadSigningKey`); pure functions, no I/O | exists |
@@ -478,7 +478,7 @@ in v0.1. All of them are part of v0.1.
 | `internal/server` | `/playlist.m3u8`, `/c/`, `/r/`, `/healthz`, absolute URL base, graceful shutdown (`Run`) ([#14](https://github.com/KingOfKalk/wg-stream-proxy/issues/14)); `/logos/`, `healthcheck` ([#19](https://github.com/KingOfKalk/wg-stream-proxy/issues/19)) | being built |
 | `internal/playlist` | Renders the channel list (spec 6) | exists |
 | `internal/metrics` | `/metrics` with the `wsp_` metrics (spec 7.3) | v0.1 |
-| `internal/importer` | `import` of an existing M3U file (spec 7.2) | v0.1 |
+| `internal/importer` | `import` of an existing M3U file (spec 7.2), without `--match-epg` ([#21](https://github.com/KingOfKalk/wg-stream-proxy/issues/21)); pure function, no I/O | exists |
 | `internal/epg` | `epg ids`, `epg match`, `import --match-epg` (spec 7.2) | v0.1 |
 
 ## 8. Versions

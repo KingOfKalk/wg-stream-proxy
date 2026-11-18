@@ -1,0 +1,31 @@
+== toml ==
+tunnel = "gr"
+
+[[channel]]
+name = "Pipe Headers"
+url = "https://pipe.example.com/live/index.m3u8"
+
+[channel.upstream]
+headers = { Referer = "https://www.example.org/", User-Agent = "Test Agent/1.0", X-Plus = "a+b" }
+
+[[channel]]
+name = "Pipe Empty"
+url = "https://pipe.example.com/radio.mp3"
+
+[[channel]]
+name = "Pipe Invalid Parts"
+url = "https://pipe.example.com/c.ts"
+
+[channel.upstream]
+headers = { User-Agent = "lower" }
+
+[[channel]]
+name = "Pipe Overrides"
+url = "https://pipe.example.com/d.m3u8"
+
+[channel.upstream]
+headers = { Origin = "https://www.example.org", User-Agent = "FromPipe" }
+== warnings ==
+line 7: header without Name=Value dropped
+line 7: invalid header name "Bad Name" dropped
+line 7: header without Name=Value dropped

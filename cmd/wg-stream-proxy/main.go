@@ -77,7 +77,9 @@ func (c *cli) run(args []string) int {
 		return c.check(args)
 	case "healthcheck":
 		return c.healthcheck(args)
-	case "import", "epg":
+	case "import":
+		return c.importM3U(args)
+	case "epg":
 		_, _ = fmt.Fprintf(c.stderr, "wg-stream-proxy: %s: not implemented yet\n", cmd)
 		return 1
 	default:

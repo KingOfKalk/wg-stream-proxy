@@ -1,0 +1,12 @@
+== toml ==
+tunnel = "gr"
+group = "Line Ends"
+
+[[channel]]
+name = "CRLF Channel"
+url = "https://crlf.example.com/a.m3u8"
+
+[[channel]]
+name = "CR Channel"
+url = "http://cr.example.com/b"
+== warnings ==

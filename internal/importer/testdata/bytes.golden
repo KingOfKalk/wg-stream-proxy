@@ -1,0 +1,14 @@
+== toml ==
+tunnel = "gr"
+
+[[channel]]
+name = "Bad � UTF-8"
+url = "https://bytes.example.com/a.m3u8"
+
+[[channel]]
+name = "Tab\tName"
+url = "https://bytes.example.com/c.m3u8"
+== warnings ==
+line 2: invalid UTF-8 replaced with U+FFFD
+line 4: line with control characters dropped
+line 5: URL without #EXTINF dropped

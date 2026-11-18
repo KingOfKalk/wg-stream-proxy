@@ -306,11 +306,17 @@ wg-stream-proxy version               # print version and source URL (AGPL secti
 `healthcheck` resolves the config like `serve` (same flags and environment), sends `GET /healthz` to the listen address (an unspecified host such as `:2349` or `0.0.0.0` becomes `127.0.0.1`, `[::]` becomes `[::1]`) with a 3s timeout, follows no redirect and prints nothing on `200` (exit 0). Any other result, a connection error or an invalid config prints one line to stderr and exits 1. It needs no shell or curl, so it serves as the `HEALTHCHECK` of the container image.
 
 `import`:
-- `tvg-id`, `tvg-logo`, `group-title` to their fields, `tvg-name` dropped (generated from `name`), other `#EXTINF` attributes to `playlist.attrs`.
-- `#KODIPROP:inputstream.adaptive.stream_headers=`, `#EXTVLCOPT:http-user-agent=`, `#EXTVLCOPT:http-referrer=`, `url|Header=Value` to `upstream.headers`.
-- Other `#<DIRECTIVE>:key=value` lines to `playlist.extra.<DIRECTIVE>` (keys quoted); non-matching lines dropped with a warning.
-- Values shared by all channels of the output are written once as `[defaults.*]`.
-- Commented-out URLs (`#http...`) become `enabled = false`.
+- Input: UTF-8 (invalid bytes become U+FFFD with a warning), optional BOM, lines end at LF, CRLF or CR; lines with control characters other than tab are dropped with a warning.
+- `tvg-id`, `tvg-logo`, `group-title` to their fields, `tvg-name` dropped (generated from `name`), other `#EXTINF` attributes to `playlist.attrs`. Attribute names are case-insensitive for this mapping; values may be quoted or unquoted. The name is the text after the first comma outside quotes and may contain commas.
+- `#KODIPROP:inputstream.adaptive.stream_headers=`, `#EXTVLCOPT:http-user-agent=`, `#EXTVLCOPT:http-referrer=`, `url|Header=Value` to `upstream.headers`. Header lists are `Name=Value` pairs separated by `&`, values percent-decoded; a later value replaces an earlier one, the `|` part comes last.
+- Other `#<DIRECTIVE>:key=value` lines to `playlist.extra.<DIRECTIVE>` (keys quoted); non-matching lines dropped with a warning. Directive lines after the previous channel's URL belong to the next channel.
+- Values shared by all channels of the output (at least two) are written once as `[defaults.*]`, a shared `group` once at the top of the file.
+- Commented-out URLs (`#http...`) become `enabled = false`. Other comment lines are dropped with a warning, also between `#EXTINF` and its URL.
+- A channel is dropped with a warning if its `#EXTINF` has no name, no URL line follows, or the URL is not an absolute `http(s)` URL; a URL without `#EXTINF` is dropped too. If no channel is left, `import` exits 1.
+- `id` is written only where the slug of `name` (5.2) is empty or already used by an earlier channel: the slug (or `channel`) with the first free suffix `-2`, `-3`, ...
+- `--tunnel` is written as the file-level `tunnel`; without it, the route follows 5.2.
+- `url-tvg` and `x-tvg-url` of `#EXTM3U` are written as a TOML comment for `[epg] url` in `config.toml`; other header attributes are dropped with a warning.
+- Output on stdout, or in `--out FILE`, which must not exist yet (never overwritten, exit 1). Warnings go to stderr with file and line.
 - `--match-epg`: keep `tvg_id` if it exists in the EPG, else add the best suggestion as a TOML comment.
 
 `epg match`: names normalised (5.2 slug steps 1-2, alphanumerics only), EPG display names ranked by similarity.

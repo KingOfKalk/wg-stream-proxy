@@ -89,7 +89,6 @@ func TestNotImplementedCommands(t *testing.T) {
 		args []string
 		cmd  string
 	}{
-		{"import", []string{"import", "channels.m3u"}, "import"},
 		{"epg ids", []string{"epg", "ids"}, "epg"},
 		{"epg match", []string{"epg", "match"}, "epg"},
 	}

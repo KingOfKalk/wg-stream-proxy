@@ -1,0 +1,38 @@
+#EXTM3U url-tvg="https://epg.example.org/guide.xml.gz"
+
+#KODIPROP:inputstream.adaptive.stream_headers=User-Agent=OKHTTP
+#EXTINF:-1 tvg-id="Alpha.example" tvg-name="AlphaOne" tvg-logo="https://logos.example.org/tv/alpha.png" group-title="Example TV" parent-code="0000",Alpha One
+https://alpha-live.cdn.example.com/alpha/live/hls/master.m3u8
+
+#KODIPROP:inputstream.adaptive.stream_headers=User-Agent=OKHTTP
+#EXTINF:-1 tvg-id="Beta" tvg-name="Beta" tvg-logo="https://logos.example.org/tv/beta.png" group-title="Example TV" parent-code="0000",Beta
+https://beta-hls.edge.example.net/hls/live/1000001/xx/high/master.m3u8
+
+#KODIPROP:inputstream.adaptive.stream_headers=User-Agent=OKHTTP
+#EXTINF:-1 tvg-id="gammanews" tvg-name="gammanews" tvg-logo="GAMMANEWS" group-title="Ελληνική TV" parent-code="0000",Γάμμα Ειδήσεις
+https://gamma.cdn.example.com/bpk-tv/GammaNews/default/index.m3u8
+
+#KODIPROP:inputstream.adaptive.stream_headers=User-Agent=OKHTTP
+#EXTINF:-1 tvg-id="delta" tvg-name="delta" tvg-logo="DELTA" group-title="Ελληνική TV" parent-code="0000",Δέλτα, Κανάλι
+#https://delta.cdn.example.com/live/media0/Delta/HLS/Delta.m3u8
+
+#KODIPROP:inputstream.adaptive.stream_headers=User-Agent=OKHTTP
+#EXTINF:-1 tvg-id="epsilon" tvg-name="epsilon" tvg-logo="EPSILON" group-title="Ελληνική TV" parent-code="0000",EPSILON
+# EPSILON is geo-blocked elsewhere; alternative stream: https://epsilon-alt.example.net/abr/playlist.m3u8
+#https://epsilon.example.net/live/epsilon/playlist.m3u8
+
+#KODIPROP:inputstream.adaptive.stream_headers=User-Agent=OKHTTP
+#EXTINF:-1 tvg-id="zetatv" tvg-name="zetatv" tvg-logo="ZETATV" group-title="Ελληνική TV" parent-code="0000",Zeta TV
+http://192.0.2.42:554/liveD/ZStream.sdp/playlist.m3u8
+
+#KODIPROP:inputstream.adaptive.stream_headers=User-Agent=OKHTTP
+#EXTINF:-1 tvg-id="etatv" tvg-name="etatv" tvg-logo="ETA" group-title="Ελληνική TV" parent-code="0000",ETA
+https://live.eta.example.org:8888/hls/eta.m3u8
+
+#KODIPROP:inputstream.adaptive.stream_headers=User-Agent=OKHTTP
+#EXTINF:-1 tvg-id="Theta.example" tvg-name="Theta" tvg-logo="THETA" group-title="Ελληνικό Ραδιόφωνο" parent-code="0000",Theta
+http://theta.radio.example.com/theta128
+
+#KODIPROP:inputstream.adaptive.stream_headers=User-Agent=OKHTTP
+#EXTINF:-1 tvg-id="Iota 99.9 - Island" tvg-name="Iota999.example" tvg-logo="IOTA" group-title="Ελληνικό Ραδιόφωνο" parent-code="0000",Iota Island
+http://stream.example.net:8217/;
