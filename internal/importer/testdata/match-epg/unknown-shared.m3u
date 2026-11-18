@@ -1,0 +1,5 @@
+#EXTM3U
+#EXTINF:-1 tvg-id="old.example",ERT World
+https://epg.example.com/one.m3u8
+#EXTINF:-1 tvg-id="old.example",Das Erste
+https://epg.example.com/two.m3u8

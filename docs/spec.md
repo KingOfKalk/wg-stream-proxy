@@ -292,8 +292,8 @@ Of `X-Forwarded-Proto` / `X-Forwarded-Host` only the first comma-separated value
 ```
 wg-stream-proxy serve                 # default
 wg-stream-proxy check                 # validate config, exit 0/1
-wg-stream-proxy import <file.m3u> [--tunnel T] [--match-epg] [--out FILE]
-wg-stream-proxy epg ids               # list id and display-name from epg.url
+wg-stream-proxy import <file.m3u> [--tunnel T] [--match-epg [--config-dir DIR]] [--out FILE]
+wg-stream-proxy epg ids               # list id and display-name from epg.url (config flags as for check)
 wg-stream-proxy epg match             # suggest tvg_id per channel, print TOML, write nothing
 wg-stream-proxy healthcheck           # GET /healthz on the listen address, exit 0/1
 wg-stream-proxy version               # print version and source URL (AGPL section 13)
@@ -317,9 +317,15 @@ wg-stream-proxy version               # print version and source URL (AGPL secti
 - `--tunnel` is written as the file-level `tunnel`; without it, the route follows 5.2.
 - `url-tvg` and `x-tvg-url` of `#EXTM3U` are written as a TOML comment for `[epg] url` in `config.toml`; other header attributes are dropped with a warning.
 - Output on stdout, or in `--out FILE`, which must not exist yet (never overwritten, exit 1). Warnings go to stderr with file and line.
-- `--match-epg`: keep `tvg_id` if it exists in the EPG, else add the best suggestion as a TOML comment.
+- `--match-epg`: keep `tvg_id` if it exists in the EPG; else drop it with a warning (if there was one) and add the best suggestion as a TOML comment in the channel's `[channel.playlist]` table (`# tvg_id = "<id>"  # EPG: <name>`; none if nothing matches). Needs `epg.url` in `config.toml` (read like `check`: `--config-dir`, `WG_STREAM_PROXY_CONFIG_DIR`); without `--match-epg`, `import` reads no config and makes no request.
 
-`epg match`: names normalised (5.2 slug steps 1-2, alphanumerics only), EPG display names ranked by similarity.
+The EPG commands (`epg ids`, `epg match`, `import --match-epg`) download `epg.url` over the `direct` route: the private-range guard (with `[upstream.allow_private] direct`) and the `[upstream]` timeouts apply, and there is no separate config key. The file is plain XMLTV or gzip (recognised by its magic bytes), read as a stream, at most 200 MiB after decompression (else error); only the `<channel>` elements before the first `<programme>` are read (XMLTV DTD order).
+
+`epg ids`: one line per EPG channel, sorted by id: the id, then its display names, separated by tabs.
+
+`epg match`: names normalised (5.2 slug steps 1-2, then only letters and digits kept), EPG display names ranked by similarity.
+- Similarity: `1 - d / n`, with `d` the Levenshtein distance of the two normalised names and `n` the length of the longer one. An EPG channel scores by its best display name (its id if it has none); below 0.6 it is no suggestion; an exact normalised match scores 1 and ranks first; ties order by EPG id.
+- Output per channel (all channels, in config order): the best suggestion as a `[channel.playlist]` snippet with `tvg_id`, up to two alternatives as comments, no suggestion as a comment line. A channel whose `tvg_id` is in the EPG is only reported. Nothing is written.
 
 ### 7.3 Metrics (prefix `wsp_`)
 
