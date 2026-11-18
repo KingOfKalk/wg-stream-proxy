@@ -47,6 +47,10 @@ var (
 	ServerAddr6 = netip.MustParseAddr("2001:db8::1")
 )
 
+// DefaultTTL is the TTL, in seconds, of the peer's DNS records until
+// SetTTL changes it.
+const DefaultTTL = 60
+
 // Options configure a Peer. The zero value gives an IPv4-only peer at
 // ServerAddr4 and a client at ClientAddr4 with AllowedIPs 0.0.0.0/0, ::/0.
 type Options struct {
@@ -98,6 +102,11 @@ type Peer struct {
 	failNext   int // queries to answer with failRCode; < 0 fails all
 	failRCode  dnsmessage.RCode
 	truncate   bool
+	ttl        uint32 // of answer records and of the SOA of negative answers
+	received   int    // UDP queries received, dropped ones included
+	// receivedCh is closed when the next UDP query arrives; nil until
+	// WaitDNS needs it.
+	receivedCh chan struct{}
 
 	closeOnce sync.Once
 }
@@ -132,7 +141,7 @@ func start(opts Options) (*Peer, error) {
 	if opts.Handler == nil {
 		opts.Handler = EchoRemoteAddr
 	}
-	p := &Peer{opts: opts, records: map[string][]netip.Addr{}, cnames: map[string]string{}, conns: map[net.Conn]struct{}{}}
+	p := &Peer{opts: opts, records: map[string][]netip.Addr{}, cnames: map[string]string{}, conns: map[net.Conn]struct{}{}, ttl: DefaultTTL}
 	serverPriv, serverPub := newKeyPair()
 	clientPriv, clientPub := newKeyPair()
 	p.clientPriv, p.serverPub = clientPriv, serverPub
@@ -330,6 +339,42 @@ func (p *Peer) SetCNAME(name, target string) {
 	p.cnames[canonicalName(name)] = canonicalName(target)
 }
 
+// SetTTL sets the TTL, in seconds, of the records in later answers, and
+// of the SOA record that negative answers (NXDOMAIN, or no record of the
+// queried type) carry in their authority section, whose MINIMUM is ttl
+// too (RFC 2308). The default is DefaultTTL.
+func (p *Peer) SetTTL(ttl uint32) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.ttl = ttl
+}
+
+// WaitDNS blocks until the DNS server has received at least n UDP
+// queries, dropped ones included, on all server addresses together. It
+// fails tb after 10s.
+func (p *Peer) WaitDNS(tb testing.TB, n int) {
+	tb.Helper()
+	giveUp := time.After(10 * time.Second)
+	for {
+		p.mu.Lock()
+		got := p.received
+		if got >= n {
+			p.mu.Unlock()
+			return
+		}
+		if p.receivedCh == nil {
+			p.receivedCh = make(chan struct{})
+		}
+		ch := p.receivedCh
+		p.mu.Unlock()
+		select {
+		case <-ch:
+		case <-giveUp:
+			tb.Fatalf("tunneltest: DNS server received %d UDP queries after 10s, want %d", got, n)
+		}
+	}
+}
+
 // DropDNS makes the DNS server drop the next n UDP queries without an
 // answer, like a lossy path. n < 0 drops every UDP query until the next
 // DropDNS call; 0 stops dropping. TCP queries are never dropped.
@@ -401,11 +446,16 @@ func (p *Peer) serveDNS(c net.PacketConn) {
 	}
 }
 
-// dropUDP reports whether to drop the UDP query just received, and
-// counts it if so.
+// dropUDP counts the UDP query just received and reports whether to drop
+// it, counting that too.
 func (p *Peer) dropUDP() bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.received++
+	if p.receivedCh != nil {
+		close(p.receivedCh)
+		p.receivedCh = nil
+	}
 	if p.dropNext == 0 {
 		return false
 	}
@@ -482,6 +532,7 @@ func (p *Peer) answer(req []byte, overTCP bool) ([]byte, bool) {
 	var chain []string // the queried name, then the CNAME targets
 	var addrs []netip.Addr
 	p.mu.Lock()
+	ttl := p.ttl
 	p.queries = append(p.queries, query)
 	if overTCP {
 		p.tcpQueries = append(p.tcpQueries, query)
@@ -528,21 +579,38 @@ func (p *Peer) answer(req []byte, overTCP bool) ([]byte, bool) {
 		if err != nil {
 			return nil, false
 		}
-		rrh := dnsmessage.ResourceHeader{Name: owner, Class: dnsmessage.ClassINET, TTL: 60}
+		rrh := dnsmessage.ResourceHeader{Name: owner, Class: dnsmessage.ClassINET, TTL: ttl}
 		if err := b.CNAMEResource(rrh, dnsmessage.CNAMEResource{CNAME: t}); err != nil {
 			return nil, false
 		}
 		owner = t
 	}
+	answered := 0
 	for _, a := range addrs {
-		rrh := dnsmessage.ResourceHeader{Name: owner, Class: dnsmessage.ClassINET, TTL: 60}
+		rrh := dnsmessage.ResourceHeader{Name: owner, Class: dnsmessage.ClassINET, TTL: ttl}
 		switch {
 		case q.Type == dnsmessage.TypeA && a.Is4():
 			err = b.AResource(rrh, dnsmessage.AResource{A: a.As4()})
+			answered++
 		case q.Type == dnsmessage.TypeAAAA && a.Is6():
 			err = b.AAAAResource(rrh, dnsmessage.AAAAResource{AAAA: a.As16()})
+			answered++
 		}
 		if err != nil {
+			return nil, false
+		}
+	}
+	// Negative answers carry the zone's SOA (RFC 2308).
+	if len(chain) > 0 && answered == 0 {
+		if err := b.StartAuthorities(); err != nil {
+			return nil, false
+		}
+		rrh := dnsmessage.ResourceHeader{Name: dnsmessage.MustNewName("test."), Class: dnsmessage.ClassINET, TTL: ttl}
+		soa := dnsmessage.SOAResource{
+			NS: dnsmessage.MustNewName("ns.test."), MBox: dnsmessage.MustNewName("hostmaster.test."),
+			Serial: 1, Refresh: 3600, Retry: 600, Expire: 86400, MinTTL: ttl,
+		}
+		if err := b.SOAResource(rrh, soa); err != nil {
 			return nil, false
 		}
 	}
