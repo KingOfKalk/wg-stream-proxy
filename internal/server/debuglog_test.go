@@ -207,7 +207,7 @@ url = "http://` + closed + `/seg.ts?token=secret-token"
 }
 
 // TestRequestDebugLogDisabled: above debug level a request writes no
-// request line and carries no httptrace.
+// request line, but is traced all the same: the timing metrics need it.
 func TestRequestDebugLogDisabled(t *testing.T) {
 	up := newUpstream()
 	up.add("/seg.ts", file{ctype: "video/mp2t", body: "segment"})
@@ -232,8 +232,8 @@ url = "` + directSrv.URL + `/seg.ts"
 	if resp, body := do(t, e.client, http.MethodGet, e.url+"/c/direct", nil); resp.StatusCode != http.StatusOK || body != "segment" {
 		t.Fatalf("GET /c/direct: status %d, body %q", resp.StatusCode, body)
 	}
-	if direct.traced.Load() {
-		t.Error("request above debug level carried an httptrace")
+	if !direct.traced.Load() {
+		t.Error("request above debug level carried no httptrace")
 	}
 	if strings.Contains(logs.String(), "msg=request") {
 		t.Errorf("request line above debug level:\n%s", logs.String())

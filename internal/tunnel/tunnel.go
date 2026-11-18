@@ -119,6 +119,12 @@ type Options struct {
 	// HostResolver resolves Endpoint host names. nil means
 	// net.DefaultResolver.
 	HostResolver HostResolver
+	// OnStart, if set, is called once for every successful tunnel start
+	// with the tunnel name and how long the start took (device up
+	// including the first handshake, measured with Clock). It is called
+	// where the start happens, not per request that waited for it, and not
+	// for a failed start. It must not block.
+	OnStart func(tunnel string, took time.Duration)
 }
 
 // Manager owns the tunnels of one configuration, keyed by name. Apply
@@ -621,6 +627,11 @@ func (t *Tunnel) doStart(c *startCall) {
 	}
 	c.run, c.err = r, err
 	m.mu.Unlock()
+	// Before the waiters go on, so a request that saw the start finished
+	// also sees it observed.
+	if err == nil && m.opts.OnStart != nil {
+		m.opts.OnStart(t.cfg.Name, took)
+	}
 	close(c.done)
 	if err != nil {
 		m.opts.Logger.Warn("tunnel start failed", "tunnel", t.cfg.Name, "err", err, "duration", took)

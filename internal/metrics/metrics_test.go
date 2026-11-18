@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -174,5 +175,68 @@ func TestHandler(t *testing.T) {
 		if !strings.Contains(string(body), w) {
 			t.Errorf("metrics lack %q:\n%s", w, body)
 		}
+	}
+}
+
+// TestTimingHistograms checks names, labels, help text, buckets and the
+// observed values of the two timing histograms (spec 7.3).
+func TestTimingHistograms(t *testing.T) {
+	m := New(Options{})
+	m.ObserveTunnelStart("gr", 300*time.Millisecond)
+	m.ObserveTunnelStart("gr", 20*time.Second)
+	m.ObserveUpstreamPhase("gr", PhaseDNS, 5*time.Millisecond)
+	m.ObserveUpstreamPhase("gr", PhaseFirstByte, 2*time.Second)
+	m.ObserveUpstreamPhase("direct", PhaseConnect, 10*time.Millisecond)
+	m.ObserveUpstreamPhase("direct", PhaseTLS, 15*time.Second)
+
+	// Bounds in seconds; an observation counts in the buckets with a bound
+	// greater than or equal to it (10ms is in le="0.01", 15s in le="15").
+	const bounds = `0.01 0.025 0.05 0.1 0.25 0.5 1 2.5 5 10 15 +Inf`
+	histogram := func(name, labels string, counts []int, sum float64) string {
+		var b strings.Builder
+		for i, le := range strings.Fields(bounds) {
+			sep := ""
+			if labels != "" {
+				sep = ","
+			}
+			b.WriteString(name + `_bucket{` + labels + sep + `le="` + le + `"} ` + strconv.Itoa(counts[i]) + "\n")
+		}
+		b.WriteString(name + "_sum" + wrap(labels) + " " + strconv.FormatFloat(sum, 'g', -1, 64) + "\n")
+		b.WriteString(name + "_count" + wrap(labels) + " " + strconv.Itoa(counts[len(counts)-1]) + "\n")
+		return b.String()
+	}
+	const startHead = "# HELP wsp_tunnel_start_seconds Time of a successful tunnel start: device up including the first handshake.\n" +
+		"# TYPE wsp_tunnel_start_seconds histogram\n"
+	const phaseHead = "# HELP wsp_upstream_phase_seconds Time of the phases of upstream requests by route: DNS lookup, connect, TLS handshake, first response byte.\n" +
+		"# TYPE wsp_upstream_phase_seconds histogram\n"
+
+	wantStart := startHead + histogram("wsp_tunnel_start_seconds", `tunnel="gr"`, []int{0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 2}, 20.3)
+	if err := testutil.GatherAndCompare(m.Gatherer(), strings.NewReader(wantStart), "wsp_tunnel_start_seconds"); err != nil {
+		t.Error(err)
+	}
+	wantPhase := phaseHead +
+		histogram("wsp_upstream_phase_seconds", `phase="connect",route="direct"`, []int{1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1}, 0.01) +
+		histogram("wsp_upstream_phase_seconds", `phase="tls",route="direct"`, []int{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1}, 15) +
+		histogram("wsp_upstream_phase_seconds", `phase="dns",route="gr"`, []int{1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1}, 0.005) +
+		histogram("wsp_upstream_phase_seconds", `phase="first_byte",route="gr"`, []int{0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1}, 2)
+	if err := testutil.GatherAndCompare(m.Gatherer(), strings.NewReader(wantPhase), "wsp_upstream_phase_seconds"); err != nil {
+		t.Error(err)
+	}
+}
+
+func wrap(labels string) string {
+	if labels == "" {
+		return ""
+	}
+	return "{" + labels + "}"
+}
+
+// TestTimingHistogramsEmpty: before any observation the histograms have
+// no series.
+func TestTimingHistogramsEmpty(t *testing.T) {
+	m := New(Options{})
+	if err := testutil.GatherAndCompare(m.Gatherer(), strings.NewReader(""),
+		"wsp_tunnel_start_seconds", "wsp_upstream_phase_seconds"); err != nil {
+		t.Error(err)
 	}
 }

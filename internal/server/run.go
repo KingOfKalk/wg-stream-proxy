@@ -100,11 +100,24 @@ func Run(ctx context.Context, opts RunOptions) (err error) {
 		timeout = DefaultShutdownTimeout
 	}
 
-	mgr, err := tunnel.Load(cfg.Tunnels(), tunnel.Options{
+	// One registry for the process: reloads keep it. The tunnel gauges
+	// read the current tunnels at scrape time (mgr is set before the first
+	// scrape); the manager reports every tunnel start to it.
+	var mgr *tunnel.Manager
+	met := metrics.New(metrics.Options{Tunnels: func() []metrics.Tunnel {
+		ts := mgr.Tunnels()
+		out := make([]metrics.Tunnel, len(ts))
+		for i, t := range ts {
+			out[i] = t
+		}
+		return out
+	}})
+	mgr, err = tunnel.Load(cfg.Tunnels(), tunnel.Options{
 		ConnectTimeout: cfg.Upstream().ConnectTimeout,
 		IdleTimeout:    cfg.IdleTimeout(),
 		Logger:         log,
 		Clock:          opts.TunnelClock,
+		OnStart:        met.ObserveTunnelStart,
 	})
 	if err != nil {
 		return err
@@ -119,16 +132,6 @@ func Run(ctx context.Context, opts RunOptions) (err error) {
 	if err != nil {
 		return err
 	}
-	// One registry for the process: reloads keep it. The tunnel gauges
-	// read the current tunnels at scrape time.
-	met := metrics.New(metrics.Options{Tunnels: func() []metrics.Tunnel {
-		ts := mgr.Tunnels()
-		out := make([]metrics.Tunnel, len(ts))
-		for i, t := range ts {
-			out[i] = t
-		}
-		return out
-	}})
 	srv, err := New(Options{Config: cfg, Routes: routes, Signer: opts.Signer, Logger: log, Version: opts.Version, Metrics: met})
 	if err != nil {
 		return err

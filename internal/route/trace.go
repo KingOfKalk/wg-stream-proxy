@@ -11,11 +11,11 @@ import (
 	"time"
 )
 
-// Trace collects where the time of a request went, for the debug log
-// (spec 8). Pass a new Trace in Request.Trace; without one Fetch records
-// nothing and costs nothing extra. A Trace may be used for more than one
-// Fetch of the same client request (a refetch): durations add up, the
-// first-byte time counts from the first Fetch.
+// Trace collects where the time of a request went, for the debug log (spec
+// 8) and the timing metrics (spec 7.3). Pass a new Trace in Request.Trace;
+// without one Fetch records nothing and costs nothing extra. A Trace may be
+// used for more than one Fetch of the same client request (a refetch):
+// durations add up, the first-byte time counts from the first Fetch.
 //
 // Durations are measured with the wall clock, not the route's Clock:
 // they are reported, never acted on. They are best effort: a connection
@@ -38,14 +38,21 @@ type Phases struct {
 	// DNS is the time of host lookups, Connect the time of connection
 	// setup including the Happy-Eyeballs fallback, both without
 	// NetworkStart. ConnectAttempts counts the addresses tried.
-	DNS             time.Duration
+	DNS time.Duration
+	// Lookups counts the host lookups, so a DNS time of 0 tells a lookup
+	// that did not happen (IP literal, pooled connection) from a fast one.
+	Lookups         int
 	Connect         time.Duration
 	ConnectAttempts int
 	// TLS is the time of TLS handshakes.
 	TLS time.Duration
+	// TLSHandshakes counts the TLS handshakes, failed ones included.
+	TLSHandshakes int
 	// FirstByte is the time from the start of Fetch to the first byte of
 	// the last upstream response; 0 without response.
 	FirstByte time.Duration
+	// GotFirstByte: a response byte arrived; FirstByte is set.
+	GotFirstByte bool
 	// Reused: the last upstream request used a pooled connection.
 	Reused bool
 	// Redirects counts the redirects followed.
@@ -105,6 +112,7 @@ func (t *Trace) begin(ctx context.Context) context.Context {
 			defer t.mu.Unlock()
 			if !t.tlsStart.IsZero() {
 				t.p.TLS += time.Since(t.tlsStart)
+				t.p.TLSHandshakes++
 				t.tlsStart = time.Time{}
 			}
 		},
@@ -112,6 +120,7 @@ func (t *Trace) begin(ctx context.Context) context.Context {
 			t.mu.Lock()
 			defer t.mu.Unlock()
 			t.p.FirstByte = time.Since(t.start)
+			t.p.GotFirstByte = true
 		},
 	})
 }
@@ -153,6 +162,7 @@ func (t *Trace) lookupDone(m traceMark) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.p.DNS += t.since(m)
+	t.p.Lookups++
 }
 
 // connectDone adds the connection setup that started at m with attempts

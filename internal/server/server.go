@@ -54,7 +54,7 @@ type Server struct {
 	version string
 	mux     *http.ServeMux
 	metrics *metrics.Metrics
-	// requestIDs numbers the requests with a debug line.
+	// requestIDs numbers the /c/ and /r/ requests.
 	requestIDs atomic.Uint64
 
 	// mu guards closed and the Add calls of handlers, so drain does not

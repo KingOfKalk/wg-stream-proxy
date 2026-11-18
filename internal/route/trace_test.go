@@ -94,3 +94,52 @@ func TestTraceNil(t *testing.T) {
 		t.Errorf("nil Trace: Phases() = %+v, want zero", p)
 	}
 }
+
+// TestPhasesHappened checks the flags that tell a phase that did not
+// happen from a fast one: a lookup, a dial, a TLS handshake, a response.
+func TestPhasesHappened(t *testing.T) {
+	r, _, _ := newFixture(t, func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "ok") })
+
+	// New connection by host name: lookup and dial, no TLS.
+	cold := new(Trace)
+	readClose(t, mustFetch(t, r, Request{URL: "http://cdn.example.com/a", Trace: cold}))
+	p := cold.Phases()
+	if p.Lookups != 1 || p.ConnectAttempts != 1 || p.TLSHandshakes != 0 || !p.GotFirstByte {
+		t.Errorf("cold: Lookups = %d, ConnectAttempts = %d, TLSHandshakes = %d, GotFirstByte = %t; want 1, 1, 0, true",
+			p.Lookups, p.ConnectAttempts, p.TLSHandshakes, p.GotFirstByte)
+	}
+
+	// Pooled connection: only the response.
+	warm := new(Trace)
+	readClose(t, mustFetch(t, r, Request{URL: "http://cdn.example.com/a", Trace: warm}))
+	p = warm.Phases()
+	if !p.Reused || p.Lookups != 0 || p.ConnectAttempts != 0 || p.TLSHandshakes != 0 || !p.GotFirstByte {
+		t.Errorf("pooled: %+v, want only a response", p)
+	}
+
+	// IP literal on a new connection: no lookup.
+	r.CloseIdleConnections()
+	lit := new(Trace)
+	readClose(t, mustFetch(t, r, Request{URL: "http://192.0.2.7/a", Trace: lit}))
+	p = lit.Phases()
+	if p.Lookups != 0 || p.ConnectAttempts != 1 || !p.GotFirstByte {
+		t.Errorf("IP literal: Lookups = %d, ConnectAttempts = %d, GotFirstByte = %t; want 0, 1, true", p.Lookups, p.ConnectAttempts, p.GotFirstByte)
+	}
+}
+
+// TestPhasesTLSCounted: a TLS handshake is counted, also a failed one,
+// which has no response.
+func TestPhasesTLSCounted(t *testing.T) {
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	srv.Config.ErrorLog = log.New(io.Discard, "", 0)
+	srv.StartTLS()
+	defer srv.Close()
+	r := testRoute(fixtureNet(srv.Listener.Addr().String(), fixtureHosts), newFakeClock())
+	defer r.CloseIdleConnections()
+
+	tr := new(Trace)
+	_, _ = r.Fetch(context.Background(), Request{URL: "https://cdn.example.com/x", Trace: tr})
+	if p := tr.Phases(); p.TLSHandshakes != 1 || p.GotFirstByte {
+		t.Errorf("TLSHandshakes = %d, GotFirstByte = %t; want 1, false", p.TLSHandshakes, p.GotFirstByte)
+	}
+}
