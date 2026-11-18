@@ -70,6 +70,7 @@ Proxy in-process with a test config dir, fixture upstreams as `httptest.Server`s
 - IPTV Simple Client plays HLS via Kodi's built-in ffmpeg by default, so ffmpeg stands in for Kodi: `ffmpeg -i http://127.0.0.1:PORT/c/{id}.m3u8 -t 10 -f null -` must exit 0 and decode frames, for every fixture, through a tunnel.
 - Raw: `ffmpeg -i http://127.0.0.1:PORT/c/{radio-id} -t 5 -f null -` against an Icecast-like and an `ICY` fixture.
 - VLC is covered manually in L6 (`cvlc` exits 0 even when playback fails).
+- Code: `internal/server/playertest` (fixture server and `TestPlayer`); fixtures and their generator: `testdata/media/generate.sh`. The player tests run only with `WSP_PLAYER_TESTS=1` and ffmpeg in `PATH`, so `go test ./...` passes without ffmpeg; CI runs them in the `Player` job ([CONTRIBUTING.md](../CONTRIBUTING.md#checks)).
 
 ## L5 Platform
 

@@ -8,8 +8,10 @@ on:
 
 permissions: {}
 
-# Required checks in the main ruleset (job names): Lint, Test, Security, Build.
-# Order: Lint -> Test and Security in parallel -> Cross-compile -> Build.
+# Required checks in the main ruleset (job names): Lint, Test, Security,
+# Player, Build.
+# Order: Lint -> Test and Security in parallel -> Player (after Test) ->
+# Cross-compile -> Build.
 # Every job writes a short summary to the run page ($GITHUB_STEP_SUMMARY).
 jobs:
   lint:
@@ -172,9 +174,64 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           exit "$rc"
 
+  # L4 player tests (docs/testing.md): ffmpeg plays every media fixture
+  # through the proxy and an in-process WireGuard tunnel.
+  player:
+    name: Player
+    needs: test
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Go cache paths
+        id: go
+        run: |
+          {
+            echo "mod=$(go env GOMODCACHE)"
+            echo "build=$(go env GOCACHE)"
+            echo "version=$(go env GOVERSION)"
+          } >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ steps.go.outputs.mod }}
+            ${{ steps.go.outputs.build }}
+          key: go-player-${{ runner.os }}-${{ steps.go.outputs.version }}-${{ hashFiles('go.sum', '.github/workflows/ci.yml') }}
+          restore-keys: |
+            go-player-${{ runner.os }}-${{ steps.go.outputs.version }}-
+      # The runner image does not ship ffmpeg; use the distribution's.
+      - name: Install ffmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
+          ffmpeg -hide_banner -version | head -n 1
+      - name: go test
+        env:
+          WSP_PLAYER_TESTS: "1"
+        run: |
+          set +e
+          go test -race -count=1 -json -run '^TestPlayer$' ./internal/server/playertest/ > "$RUNNER_TEMP/player.json"
+          rc=$?
+          set -e
+          jq -j 'select(.Action == "output") | .Output' "$RUNNER_TEMP/player.json"
+          {
+            jq -rs --arg title Player -f .github/scripts/test-summary.jq "$RUNNER_TEMP/player.json"
+            echo
+            echo "Player: \`$(ffmpeg -hide_banner -version | head -n 1)\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$rc"
+
   cross-compile:
     name: Cross-compile (${{ matrix.goos }}/${{ matrix.goarch }})
-    needs: [test, security]
+    needs: [test, security, player]
     runs-on: ubuntu-26.04
     timeout-minutes: 15
     permissions:
