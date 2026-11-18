@@ -15,6 +15,7 @@ import (
 	"go.uber.org/goleak"
 
 	"github.com/KingOfKalk/wg-stream-proxy/internal/config"
+	"github.com/KingOfKalk/wg-stream-proxy/internal/epg"
 )
 
 var update = flag.Bool("update", false, "rewrite golden files")
@@ -123,6 +124,9 @@ func checkLoads(t *testing.T, data []byte, opts Options, out []byte) {
 
 	doc, _ := parse(data)
 	assignIDs(doc.channels)
+	if opts.EPG != nil {
+		matchEPG(doc.channels, opts.EPG)
+	}
 	got := cfg.Channels()
 	if len(got) != len(doc.channels) {
 		t.Fatalf("loaded %d channels, want %d\noutput:\n%s", len(got), len(doc.channels), out)
@@ -273,5 +277,74 @@ func TestKey(t *testing.T) {
 		if got := key(tt.in); got != tt.want {
 			t.Errorf("key(%q) = %s, want %s", tt.in, got, tt.want)
 		}
+	}
+}
+
+// testEPG is the EPG of the --match-epg golden cases (made-up channels).
+func testEPG() *epg.Index {
+	return epg.NewIndex([]epg.Channel{
+		{ID: "ertworld.example", Names: []string{"ERT World"}},
+		{ID: "ertworld-hd.example", Names: []string{"ERT World HD"}},
+		{ID: "skai.example", Names: []string{"ΣΚΑΪ"}},
+		{ID: "daserste.example", Names: []string{"Das Erste", "ARD Das Erste"}},
+		{ID: "radio-one.example", Names: []string{"Radio One"}},
+	})
+}
+
+// TestImportMatchEPGGolden imports every testdata/match-epg/*.m3u with
+// Options.EPG set; the output must load with internal/config.
+func TestImportMatchEPGGolden(t *testing.T) {
+	inputs, err := filepath.Glob(filepath.Join("testdata", "match-epg", "*.m3u"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inputs) == 0 {
+		t.Fatal("no golden inputs")
+	}
+	for _, in := range inputs {
+		name := strings.TrimSuffix(filepath.Base(in), ".m3u")
+		t.Run(name, func(t *testing.T) {
+			data, err := os.ReadFile(in)
+			if err != nil {
+				t.Fatal(err)
+			}
+			opts := Options{Tunnel: testTunnel, EPG: testEPG()}
+			res, err := Import(data, opts)
+			got := golden(res, err)
+
+			path := strings.TrimSuffix(in, ".m3u") + ".golden"
+			if *update {
+				if err := os.WriteFile(path, []byte(got), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			want, rerr := os.ReadFile(path)
+			if rerr != nil {
+				t.Fatal(rerr)
+			}
+			if got != string(want) {
+				t.Errorf("import %s:\ngot:\n%s\nwant:\n%s", in, got, want)
+			}
+			if err == nil {
+				checkLoads(t, data, opts, res.TOML)
+			}
+		})
+	}
+}
+
+// TestImportWithoutEPGUnchanged: Options.EPG nil leaves tvg_id as it is
+// and writes no suggestion.
+func TestImportWithoutEPGUnchanged(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("testdata", "match-epg", "mixed.m3u"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := Import(data, Options{Tunnel: testTunnel})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := string(res.TOML)
+	if !strings.Contains(out, `tvg_id = "skai-old"`) || strings.Contains(out, "# tvg_id") {
+		t.Errorf("output changed without EPG:\n%s", out)
 	}
 }

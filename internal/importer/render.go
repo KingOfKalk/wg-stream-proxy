@@ -37,6 +37,7 @@ func assignIDs(chs []channel) {
 // layer holds the values written to [defaults.*] or a channel's tables.
 type layer struct {
 	tvgID, logo string
+	tvgHint     string // comment line, only in channel layers
 	headers     map[string]string
 	attrs       map[string]string
 	extra       map[string]map[string]string
@@ -44,7 +45,7 @@ type layer struct {
 
 func layerOf(ch channel) layer {
 	return layer{
-		tvgID: ch.tvgID, logo: ch.logo,
+		tvgID: ch.tvgID, logo: ch.logo, tvgHint: ch.tvgHint,
 		headers: maps.Clone(ch.headers), attrs: maps.Clone(ch.attrs), extra: cloneExtra(ch.extra),
 	}
 }
@@ -185,10 +186,13 @@ func writeLayer(b *strings.Builder, prefix string, l layer, sep bool) {
 		table("upstream")
 		b.WriteString("headers = " + inline(l.headers) + "\n")
 	}
-	if l.tvgID != "" || l.logo != "" || len(l.attrs) > 0 {
+	if l.tvgID != "" || l.tvgHint != "" || l.logo != "" || len(l.attrs) > 0 {
 		table("playlist")
 		if l.tvgID != "" {
 			b.WriteString("tvg_id = " + quote(l.tvgID) + "\n")
+		}
+		if l.tvgHint != "" {
+			b.WriteString("# " + l.tvgHint + "\n")
 		}
 		if l.logo != "" {
 			b.WriteString("logo = " + quote(l.logo) + "\n")
@@ -248,3 +252,7 @@ func quote(s string) string {
 	b.WriteByte('"')
 	return b.String()
 }
+
+// Quote returns s as a TOML basic string, for callers that print TOML
+// snippets. s must be valid UTF-8.
+func Quote(s string) string { return quote(s) }

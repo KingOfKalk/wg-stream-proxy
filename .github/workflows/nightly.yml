@@ -1,0 +1,277 @@
+name: Nightly
+
+on:
+  schedule:
+    # Once a night (UTC), off the full hour.
+    - cron: "23 2 * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+# Long-running checks of docs/testing.md that are too slow for every push:
+# L2 fuzzing for 10 minutes per target, the 5-minute capacity test (L3)
+# and the tests on a native arm64 runner (L5). Not required checks.
+# Every job writes a short summary to the run page ($GITHUB_STEP_SUMMARY).
+jobs:
+  # Lists every fuzz target of the module, so new targets are fuzzed
+  # without a change here.
+  fuzz-targets:
+    name: Fuzz targets
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      targets: ${{ steps.list.outputs.targets }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Go cache paths
+        id: go
+        run: |
+          {
+            echo "mod=$(go env GOMODCACHE)"
+            echo "build=$(go env GOCACHE)"
+            echo "version=$(go env GOVERSION)"
+          } >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ steps.go.outputs.mod }}
+            ${{ steps.go.outputs.build }}
+          key: go-fuzz-targets-${{ runner.os }}-${{ steps.go.outputs.version }}-${{ hashFiles('go.sum', '.github/workflows/nightly.yml') }}
+          restore-keys: |
+            go-fuzz-targets-${{ runner.os }}-${{ steps.go.outputs.version }}-
+      - name: List fuzz targets
+        id: list
+        run: |
+          go test -json -run '^$' -list '^Fuzz' ./... > "$RUNNER_TEMP/list.json"
+          # One entry per target: package, target, a display name and an
+          # id for artifact and cache names.
+          targets="$(jq -sc --arg mod "$(go list -m)/" '
+            [.[] | select(.Action == "output" and (.Output | test("^Fuzz[^ \t]*\n$")))
+                 | (.Package | ltrimstr($mod)) as $dir
+                 | (.Output | rtrimstr("\n")) as $target
+                 | {pkg: .Package, target: $target, name: "\($dir).\($target)",
+                    id: "\($dir | gsub("/"; "-"))-\($target)"}]' "$RUNNER_TEMP/list.json")"
+          echo "targets=${targets}" >> "$GITHUB_OUTPUT"
+          {
+            echo "## Fuzz targets"
+            echo
+            jq -r 'if length == 0 then "No fuzz targets found." else .[] | "- `\(.name)`" end' <<< "$targets"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  fuzz:
+    name: Fuzz (long) (${{ matrix.name }})
+    needs: fuzz-targets
+    if: needs.fuzz-targets.outputs.targets != '[]'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.fuzz-targets.outputs.targets) }}
+    env:
+      FUZZTIME: 10m
+      # The default (60s) stalls FuzzRewrite at 0 execs/s while every
+      # worker minimises new corpus entries (#24).
+      FUZZMINIMIZETIME: 2s
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Go cache paths
+        id: go
+        run: |
+          {
+            echo "mod=$(go env GOMODCACHE)"
+            echo "build=$(go env GOCACHE)"
+            echo "version=$(go env GOVERSION)"
+          } >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ steps.go.outputs.mod }}
+            ${{ steps.go.outputs.build }}
+          key: go-fuzz-${{ matrix.id }}-${{ runner.os }}-${{ steps.go.outputs.version }}-${{ hashFiles('go.sum', '.github/workflows/nightly.yml') }}
+          restore-keys: |
+            go-fuzz-${{ matrix.id }}-${{ runner.os }}-${{ steps.go.outputs.version }}-
+      # The generated corpus ($GOCACHE/fuzz) is saved after every run, so
+      # each night continues where the last one stopped.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.go.outputs.build }}/fuzz
+          key: fuzz-corpus-${{ matrix.id }}-${{ github.run_id }}
+          restore-keys: |
+            fuzz-corpus-${{ matrix.id }}-
+      - name: Fuzz
+        env:
+          PKG: ${{ matrix.pkg }}
+          TARGET: ${{ matrix.target }}
+          NAME: ${{ matrix.name }}
+          ID: ${{ matrix.id }}
+        run: |
+          set +e
+          go test -run '^$' -fuzz "^${TARGET}\$" -fuzztime "$FUZZTIME" -fuzzminimizetime "$FUZZMINIMIZETIME" \
+            "$PKG" > "$RUNNER_TEMP/fuzz.txt" 2>&1
+          rc=$?
+          set -e
+          cat "$RUNNER_TEMP/fuzz.txt"
+          # A failing input is written to the package's testdata/fuzz.
+          git ls-files --others --exclude-standard -- '*testdata/fuzz/*' > "$RUNNER_TEMP/new.txt"
+          if [ -s "$RUNNER_TEMP/new.txt" ]; then
+            mkdir -p "$RUNNER_TEMP/fuzz-failure"
+            while IFS= read -r f; do
+              cp --parents "$f" "$RUNNER_TEMP/fuzz-failure/"
+            done < "$RUNNER_TEMP/new.txt"
+          fi
+          {
+            echo "## Fuzz \`${NAME}\`"
+            echo
+            if [ "$rc" -eq 0 ]; then
+              echo "No failure in ${FUZZTIME} (\`-fuzzminimizetime ${FUZZMINIMIZETIME}\`)."
+              echo
+              echo '~~~'
+              grep '^fuzz: elapsed' "$RUNNER_TEMP/fuzz.txt" | tail -n 1
+              echo '~~~'
+            else
+              echo "Failed (exit ${rc})."
+              if [ -s "$RUNNER_TEMP/new.txt" ]; then
+                echo "Failing input, attached as artifact \`fuzz-failure-${ID}\`; commit it to make it a regression test:"
+                echo
+                while IFS= read -r f; do
+                  echo "- \`${f}\`"
+                done < "$RUNNER_TEMP/new.txt"
+              fi
+              echo
+              echo '~~~'
+              tail -n 40 "$RUNNER_TEMP/fuzz.txt"
+              echo '~~~'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$rc"
+      - name: Upload failing input
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fuzz-failure-${{ matrix.id }}
+          path: ${{ runner.temp }}/fuzz-failure/
+          if-no-files-found: ignore
+
+  # Capacity test of testing.md (L3): 3 viewers through the proxy and
+  # in-process tunnels for 5 minutes.
+  capacity:
+    name: Capacity
+    runs-on: ubuntu-26.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    env:
+      WSP_CAPACITY: 5m
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Go cache paths
+        id: go
+        run: |
+          {
+            echo "mod=$(go env GOMODCACHE)"
+            echo "build=$(go env GOCACHE)"
+            echo "version=$(go env GOVERSION)"
+          } >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ steps.go.outputs.mod }}
+            ${{ steps.go.outputs.build }}
+          key: go-capacity-${{ runner.os }}-${{ steps.go.outputs.version }}-${{ hashFiles('go.sum', '.github/workflows/nightly.yml') }}
+          restore-keys: |
+            go-capacity-${{ runner.os }}-${{ steps.go.outputs.version }}-
+      - name: Capacity test
+        run: |
+          set +e
+          go test -race -run '^TestCapacity$' -v -timeout 20m -json ./internal/server/capacitytest > "$RUNNER_TEMP/test.json"
+          rc=$?
+          set -e
+          jq -j 'select(.Action == "output") | .Output' "$RUNNER_TEMP/test.json"
+          {
+            echo "## Capacity"
+            echo
+            if [ "$rc" -eq 0 ]; then
+              echo "Passed (\`WSP_CAPACITY=${WSP_CAPACITY}\`, \`-race\`)."
+            else
+              echo "Failed (exit ${rc}, \`WSP_CAPACITY=${WSP_CAPACITY}\`, \`-race\`)."
+            fi
+            echo
+            echo '~~~'
+            jq -j 'select(.Action == "output" and .Test == "TestCapacity" and (.Output | startswith("    "))) | .Output' "$RUNNER_TEMP/test.json"
+            echo '~~~'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$rc"
+
+  # Unit and integration tests on a native arm64 runner (testing.md L5).
+  # No QEMU fallback: if the runner is not arm64, the job fails.
+  arm64:
+    name: arm64
+    runs-on: ubuntu-26.04-arm
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Check architecture
+        run: |
+          arch="$(uname -m)"
+          if [ "$arch" != aarch64 ]; then
+            echo "::error::runner ubuntu-26.04-arm is ${arch}, not a native arm64 (aarch64) machine"
+            echo "## arm64: runner is ${arch}, not aarch64" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Go cache paths
+        id: go
+        run: |
+          {
+            echo "mod=$(go env GOMODCACHE)"
+            echo "build=$(go env GOCACHE)"
+            echo "version=$(go env GOVERSION)"
+          } >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ steps.go.outputs.mod }}
+            ${{ steps.go.outputs.build }}
+          key: go-arm64-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.version }}-${{ hashFiles('go.sum', '.github/workflows/nightly.yml') }}
+          restore-keys: |
+            go-arm64-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.version }}-
+      - name: go test
+        run: |
+          set +e
+          go test -race -cover -json ./... > "$RUNNER_TEMP/test.json"
+          rc=$?
+          set -e
+          jq -j 'select(.Action == "output") | .Output' "$RUNNER_TEMP/test.json"
+          jq -rs -f .github/scripts/test-summary.jq "$RUNNER_TEMP/test.json" \
+            | sed "1s/^## Test\$/## arm64 ($(go env GOOS)\/$(go env GOARCH))/" >> "$GITHUB_STEP_SUMMARY"
+          exit "$rc"

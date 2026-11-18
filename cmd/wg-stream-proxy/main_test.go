@@ -83,33 +83,6 @@ func TestVersionRejectsArguments(t *testing.T) {
 	}
 }
 
-func TestNotImplementedCommands(t *testing.T) {
-	tests := []struct {
-		name string
-		args []string
-		cmd  string
-	}{
-		{"epg ids", []string{"epg", "ids"}, "epg"},
-		{"epg match", []string{"epg", "match"}, "epg"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			code, stdout, stderr := runCmd(t, tt.args...)
-
-			if code != 1 {
-				t.Errorf("exit code = %d, want 1", code)
-			}
-			if stdout != "" {
-				t.Errorf("stdout = %q, want empty", stdout)
-			}
-			want := "wg-stream-proxy: " + tt.cmd + ": not implemented yet\n"
-			if stderr != want {
-				t.Errorf("stderr = %q, want %q", stderr, want)
-			}
-		})
-	}
-}
-
 func TestUnknownCommandPrintsUsage(t *testing.T) {
 	code, stdout, stderr := runCmd(t, "bogus")
 
