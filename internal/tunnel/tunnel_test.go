@@ -321,7 +321,11 @@ func TestNoHandshakeFailsThenRecovers(t *testing.T) {
 		}
 		done <- err
 	}()
+	// The start arms the connect timer before it sends the handshake
+	// initiation: wait until the initiation has reached the peer, so the
+	// timeout cannot cancel the start before it tried.
 	env.clock.waitTimers(1)
+	peer.WaitPackets(t, 1)
 	select {
 	case err := <-done:
 		t.Fatalf("dial returned before connect_timeout: %v", err)

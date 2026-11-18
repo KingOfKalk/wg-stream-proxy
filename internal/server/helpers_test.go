@@ -397,16 +397,55 @@ type recorder struct {
 	n       route.Network
 	lookups atomic.Int64
 	dials   atomic.Int64
+
+	mu sync.Mutex
+	// changed is closed by the next lookup or dial; nil until waitUsed
+	// needs it.
+	changed chan struct{}
 }
 
 func (r *recorder) LookupNetIP(ctx context.Context, host string) ([]netip.Addr, error) {
 	r.lookups.Add(1)
+	r.notify()
 	return r.n.LookupNetIP(ctx, host)
 }
 
 func (r *recorder) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
 	r.dials.Add(1)
+	r.notify()
 	return r.n.DialContext(ctx, network, address)
+}
+
+func (r *recorder) notify() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.changed != nil {
+		close(r.changed)
+		r.changed = nil
+	}
+}
+
+// waitUsed blocks until at least n lookups and dials have called into
+// the wrapped network. It fails tb after 10s.
+func (r *recorder) waitUsed(tb testing.TB, n int64) {
+	tb.Helper()
+	giveUp := time.After(10 * time.Second)
+	for {
+		r.mu.Lock()
+		if r.changed == nil {
+			r.changed = make(chan struct{})
+		}
+		ch := r.changed
+		r.mu.Unlock()
+		if r.used() >= n {
+			return
+		}
+		select {
+		case <-ch:
+		case <-giveUp:
+			tb.Fatalf("network used %d times after 10s, want %d", r.used(), n)
+		}
+	}
 }
 
 func (r *recorder) used() int64 { return r.lookups.Load() + r.dials.Load() }

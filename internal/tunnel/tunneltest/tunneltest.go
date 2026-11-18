@@ -294,6 +294,25 @@ func (p *Peer) Packets() int64 {
 	return p.bind.packets.Load()
 }
 
+// WaitPackets blocks until the peer has received at least n UDP packets,
+// dropped ones included: for example the client's first handshake
+// initiation. It fails tb after 10s.
+func (p *Peer) WaitPackets(tb testing.TB, n int64) {
+	tb.Helper()
+	giveUp := time.After(10 * time.Second)
+	for {
+		ch := p.bind.waitCh()
+		if p.Packets() >= n {
+			return
+		}
+		select {
+		case <-ch:
+		case <-giveUp:
+			tb.Fatalf("tunneltest: peer received %d packets after 10s, want %d", p.Packets(), n)
+		}
+	}
+}
+
 // SetHost sets the DNS records of name (A and AAAA, by address family).
 // Names without records are answered with NXDOMAIN.
 func (p *Peer) SetHost(name string, addrs ...netip.Addr) {
@@ -553,6 +572,32 @@ type filterBind struct {
 	drop    atomic.Bool
 	packets atomic.Int64
 	port    atomic.Uint32
+
+	mu sync.Mutex
+	// changed is closed when the next packets arrive; nil until waitCh
+	// needs it.
+	changed chan struct{}
+}
+
+// waitCh returns a channel that is closed when the next packets arrive.
+func (b *filterBind) waitCh() <-chan struct{} {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.changed == nil {
+		b.changed = make(chan struct{})
+	}
+	return b.changed
+}
+
+// received counts n received packets and wakes the waiters.
+func (b *filterBind) received(n int) {
+	b.packets.Add(int64(n))
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.changed != nil {
+		close(b.changed)
+		b.changed = nil
+	}
 }
 
 func (b *filterBind) Open(port uint16) ([]conn.ReceiveFunc, uint16, error) {
@@ -569,7 +614,7 @@ func (b *filterBind) Open(port uint16) ([]conn.ReceiveFunc, uint16, error) {
 				if err != nil || n == 0 {
 					return n, err
 				}
-				b.packets.Add(int64(n))
+				b.received(n)
 				if !b.drop.Load() {
 					return n, nil
 				}

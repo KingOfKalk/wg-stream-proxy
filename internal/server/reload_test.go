@@ -366,6 +366,11 @@ func TestReloadDuringTunnelStart(t *testing.T) {
 	// The start waits for a handshake (connect_timeout 10s on the tunnel
 	// clock, which never advances here).
 	e.clock.waitArmed(t, 10*time.Second)
+	// The armed timer only shows that one waiter started the tunnel. Each
+	// waiter's first lookup blocks in the start, so once both have called
+	// into the old tunnel's network, both wait for the start that the
+	// reload cancels; a later one would be served by the new tunnel.
+	e.tunnel("gr").waitUsed(t, waiters)
 
 	writeFiles(t, e.dir, map[string]string{"tunnels/gr.conf": up.ClientConfig()})
 	if err := e.reload(t); err != nil {
