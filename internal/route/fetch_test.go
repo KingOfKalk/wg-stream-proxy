@@ -577,23 +577,23 @@ func TestFetchHTTP2(t *testing.T) {
 	}
 }
 
-func TestFetchErrorRedactsURL(t *testing.T) {
+func TestFetchErrorReducesURL(t *testing.T) {
 	r, _, _ := newFixture(t, func(http.ResponseWriter, *http.Request) {})
-	_, err := r.Fetch(context.Background(), Request{URL: "http://user:pw@missing.example.com/live.m3u8?token=secret#frag"})
+	_, err := r.Fetch(context.Background(), Request{URL: "http://user:pw@missing.example.com/s3cr3t-id/live.m3u8?token=secret#frag"})
 	if err == nil {
 		t.Fatal("Fetch of an unknown host succeeded")
 	}
 	msg := err.Error()
-	if !strings.Contains(msg, "http://missing.example.com/live.m3u8") {
+	if !strings.Contains(msg, "http://missing.example.com/…/live.m3u8") {
 		t.Errorf("error %q does not name the URL", msg)
 	}
-	for _, s := range []string{"secret", "token", "pw", "frag"} {
+	for _, s := range []string{"secret", "s3cr3t", "token", "pw", "frag"} {
 		if strings.Contains(msg, s) {
 			t.Errorf("error %q leaks %q", msg, s)
 		}
 	}
 	var e *Error
-	if !errors.As(err, &e) || e.URL != "http://missing.example.com/live.m3u8" {
+	if !errors.As(err, &e) || e.URL != "http://missing.example.com/…/live.m3u8" {
 		t.Errorf("Error.URL = %v", e)
 	}
 	if got := Classify(err); got != ReasonConnect {
