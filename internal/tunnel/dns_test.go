@@ -3,11 +3,13 @@
 package tunnel
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"net"
 	"net/netip"
+	"runtime"
 	"slices"
 	"sync"
 	"testing"
@@ -62,7 +64,30 @@ func assertPending(t *testing.T, ch <-chan lookupResult) {
 	}
 }
 
-func TestLookupRetriesLostQueryAfterOneSecond(t *testing.T) {
+// waitWaiters blocks until n lookups of host wait for one shared query
+// of the running tun. It fails t after 10s.
+func waitWaiters(t *testing.T, tun *Tunnel, host string, n int) {
+	t.Helper()
+	c := tun.run.Load().dns
+	giveUp := time.Now().Add(10 * time.Second)
+	for {
+		c.mu.Lock()
+		got := 0
+		if f := c.pending[host]; f != nil {
+			got = f.waiters
+		}
+		c.mu.Unlock()
+		if got >= n {
+			return
+		}
+		if time.Now().After(giveUp) {
+			t.Fatalf("%d lookups of %s wait after 10s, want %d", got, host, n)
+		}
+		runtime.Gosched()
+	}
+}
+
+func TestLookupRetriesLostQueryAfterHalfASecond(t *testing.T) {
 	peer := tunneltest.Start(t, tunneltest.Options{})
 	peer.SetHost("upstream.test", upstream4)
 	tun, env := startedTunnel(t, peer)
@@ -70,10 +95,10 @@ func TestLookupRetriesLostQueryAfterOneSecond(t *testing.T) {
 
 	done := lookupAsync(t.Context(), tun, "upstream.test")
 	env.clock.waitTimers(1)
-	if got := env.clock.next(); got != time.Second {
-		t.Fatalf("first retry in %v, want 1s", got)
+	if got := env.clock.next(); got != 500*time.Millisecond {
+		t.Fatalf("first retry in %v, want 0.5s", got)
 	}
-	env.clock.advance(time.Second - time.Millisecond)
+	env.clock.advance(500*time.Millisecond - time.Millisecond)
 	assertPending(t, done)
 	env.clock.advance(time.Millisecond)
 
@@ -101,8 +126,8 @@ func TestLookupAllQueriesLost(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	done := lookupAsync(ctx, tun, "upstream.test")
-	// Retries after 1s, 2s, then every 4s, until the caller gives up.
-	for _, want := range []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 4 * time.Second} {
+	// Retries after 0.5s, 1s, 2s, then every 4s, until the caller gives up.
+	for _, want := range []time.Duration{500 * time.Millisecond, time.Second, 2 * time.Second, 4 * time.Second, 4 * time.Second} {
 		env.clock.waitTimers(1)
 		if got := env.clock.next(); got != want {
 			t.Fatalf("next retry in %v, want %v", got, want)
@@ -160,14 +185,64 @@ func TestLookupTruncatedAnswerFallsBackToTCP(t *testing.T) {
 	}
 }
 
-func TestLookupFirstServerDeadSecondAnswersAfterRetry(t *testing.T) {
+// twoServers is a peer with two DNS servers that both answer.
+var twoServers = tunneltest.Options{
+	ServerAddresses: []netip.Addr{tunneltest.ServerAddr4, secondDNS},
+	DNS:             []netip.Addr{tunneltest.ServerAddr4, secondDNS},
+}
+
+func TestLookupFirstAttemptAsksEveryServer(t *testing.T) {
+	tests := []struct {
+		name string
+		opts tunneltest.Options
+		drop int
+		// received is the number of UDP queries the peer gets: one per
+		// live server.
+		received int
+	}{
+		{name: "first server dead", opts: tunneltest.Options{DNS: []netip.Addr{deadDNS, tunneltest.ServerAddr4}}, received: 1},
+		{name: "query to one server lost", opts: twoServers, drop: 1, received: 2},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			peer := tunneltest.Start(t, tt.opts)
+			peer.SetHost("upstream.test", upstream4)
+			tun, env := startedTunnel(t, peer)
+			peer.DropDNS(tt.drop)
+
+			// No clock advance: the answer comes within the first attempt.
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			got, err := tun.LookupNetIP(ctx, "upstream.test")
+			if err != nil {
+				t.Fatalf("LookupNetIP: %v", err)
+			}
+			if !slices.Equal(got, []netip.Addr{upstream4}) {
+				t.Errorf("LookupNetIP = %v, want [%v]", got, upstream4)
+			}
+			peer.WaitDNS(t, tt.received)
+			if got := env.clock.pending(); got != 0 {
+				t.Errorf("%d timers left armed", got)
+			}
+		})
+	}
+}
+
+func TestLookupRetriesRotateThroughServers(t *testing.T) {
 	peer := tunneltest.Start(t, tunneltest.Options{DNS: []netip.Addr{deadDNS, tunneltest.ServerAddr4}})
 	peer.SetHost("upstream.test", upstream4)
 	tun, env := startedTunnel(t, peer)
+	peer.DropDNS(1)
 
 	done := lookupAsync(t.Context(), tun, "upstream.test")
-	env.clock.waitTimers(1)
+	// First attempt: both servers; the live one's query is lost.
+	peer.WaitDNS(t, 1)
+	env.clock.waitArmed(t, 500*time.Millisecond)
+	// First retry: the first server, dead.
+	env.clock.advance(500 * time.Millisecond)
+	env.clock.waitArmed(t, time.Second)
 	assertPending(t, done)
+	// Second retry: the second server, which answers.
 	env.clock.advance(time.Second)
 	r := <-done
 	if r.err != nil {
@@ -176,13 +251,13 @@ func TestLookupFirstServerDeadSecondAnswersAfterRetry(t *testing.T) {
 	if !slices.Equal(r.addrs, []netip.Addr{upstream4}) {
 		t.Errorf("LookupNetIP = %v, want [%v]", r.addrs, upstream4)
 	}
+	if got := peer.DroppedDNS(); got != 1 {
+		t.Errorf("dropped queries = %d, want 1", got)
+	}
 }
 
 func TestLookupServerFailureTriesNextServerAtOnce(t *testing.T) {
-	opts := tunneltest.Options{
-		ServerAddresses: []netip.Addr{tunneltest.ServerAddr4, secondDNS},
-		DNS:             []netip.Addr{tunneltest.ServerAddr4, secondDNS},
-	}
+	opts := twoServers
 	t.Run("second server answers", func(t *testing.T) {
 		peer := tunneltest.Start(t, opts)
 		peer.SetHost("upstream.test", upstream4)
@@ -211,6 +286,259 @@ func TestLookupServerFailureTriesNextServerAtOnce(t *testing.T) {
 			t.Errorf("queries = %d, want one per server", got)
 		}
 	})
+	t.Run("error answer to a retry", func(t *testing.T) {
+		peer := tunneltest.Start(t, opts)
+		peer.SetHost("upstream.test", upstream4)
+		tun, env := startedTunnel(t, peer)
+		peer.DropDNS(2)
+
+		done := lookupAsync(t.Context(), tun, "upstream.test")
+		peer.WaitDNS(t, 2)
+		peer.FailDNS(1, dnsmessage.RCodeServerFailure)
+		env.clock.waitArmed(t, 500*time.Millisecond)
+		// The retry fails on the first server; the second is asked
+		// without waiting for the next retry.
+		env.clock.advance(500 * time.Millisecond)
+		r := <-done
+		if r.err != nil {
+			t.Fatalf("LookupNetIP: %v", r.err)
+		}
+		if !slices.Equal(r.addrs, []netip.Addr{upstream4}) {
+			t.Errorf("LookupNetIP = %v, want [%v]", r.addrs, upstream4)
+		}
+		if got := len(peer.Queries()); got != 2 {
+			t.Errorf("answered queries = %d, want 2", got)
+		}
+	})
+}
+
+// dualStack is a peer whose client has an IPv4 and an IPv6 address, so
+// lookups ask A and AAAA.
+var dualStack = tunneltest.Options{ClientAddresses: []netip.Prefix{
+	netip.PrefixFrom(tunneltest.ClientAddr4, 32), netip.PrefixFrom(tunneltest.ClientAddr6, 128),
+}}
+
+func TestLookupCache(t *testing.T) {
+	tests := []struct {
+		name string
+		opts tunneltest.Options
+		host string
+		ttl  uint32
+		// fresh is the last time after the first lookup at which the
+		// answer is still cached; expired the first time it is not.
+		fresh, expired time.Duration
+		want           []netip.Addr // nil: not found
+		// alias, if set, is the host of the lookups after the first.
+		alias string
+	}{
+		{name: "record TTL", host: "upstream.test", ttl: 60, fresh: 59 * time.Second, expired: 60 * time.Second, want: []netip.Addr{upstream4}},
+		{name: "TTL 0 raised to 10s", host: "upstream.test", ttl: 0, fresh: 9 * time.Second, expired: 10 * time.Second, want: []netip.Addr{upstream4}},
+		{name: "TTL capped at 5min", host: "upstream.test", ttl: 86400, fresh: 5*time.Minute - time.Second, expired: 5 * time.Minute, want: []netip.Addr{upstream4}},
+		{name: "both families", opts: dualStack, host: "dual.test", ttl: 60, fresh: 59 * time.Second, expired: 60 * time.Second, want: []netip.Addr{upstream4, upstream6}},
+		{name: "no AAAA record: SOA minimum", opts: dualStack, host: "upstream.test", ttl: 120, fresh: 119 * time.Second, expired: 120 * time.Second, want: []netip.Addr{upstream4}},
+		{name: "NXDOMAIN 10s", host: "missing.test", ttl: 3600, fresh: 9 * time.Second, expired: 10 * time.Second},
+		{name: "name case and trailing dot", host: "upstream.test", alias: "UpStream.Test.", ttl: 60, fresh: 59 * time.Second, expired: 60 * time.Second, want: []netip.Addr{upstream4}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			peer := tunneltest.Start(t, tt.opts)
+			peer.SetHost("upstream.test", upstream4)
+			peer.SetHost("dual.test", upstream6, upstream4)
+			peer.SetTTL(tt.ttl)
+			tun, env := startedTunnel(t, peer)
+
+			lookup := func(step, host string) {
+				t.Helper()
+				got, err := tun.LookupNetIP(t.Context(), host)
+				if tt.want == nil {
+					var de *net.DNSError
+					if !errors.As(err, &de) || !de.IsNotFound {
+						t.Fatalf("%s: err = %v, want not-found *net.DNSError", step, err)
+					}
+					return
+				}
+				if err != nil {
+					t.Fatalf("%s: LookupNetIP: %v", step, err)
+				}
+				if !slices.Equal(got, tt.want) {
+					t.Errorf("%s: LookupNetIP = %v, want %v", step, got, tt.want)
+				}
+			}
+			again := cmp.Or(tt.alias, tt.host)
+			lookup("first", tt.host)
+			sent := len(peer.Queries())
+			if sent == 0 {
+				t.Fatal("first lookup sent no query")
+			}
+			lookup("cached", again)
+			env.clock.advance(tt.fresh)
+			lookup("still cached", again)
+			if got := len(peer.Queries()); got != sent {
+				t.Errorf("queries after cached lookups = %d, want %d", got, sent)
+			}
+			env.clock.advance(tt.expired - tt.fresh)
+			lookup("expired", again)
+			if got := len(peer.Queries()); got != 2*sent {
+				t.Errorf("queries after expiry = %d, want %d", got, 2*sent)
+			}
+		})
+	}
+}
+
+func TestLookupCacheClearedOnStop(t *testing.T) {
+	tests := map[string]func(t *testing.T, m *Manager, env *testEnv){
+		"drain": func(t *testing.T, m *Manager, _ *testEnv) {
+			if err := m.Drain("gr", 0); err != nil {
+				t.Fatalf("Drain: %v", err)
+			}
+		},
+		"idle close": func(t *testing.T, _ *Manager, env *testEnv) {
+			env.clock.waitArmed(t, testIdle)
+			env.clock.advance(testIdle)
+		},
+	}
+	for name, stop := range tests {
+		t.Run(name, func(t *testing.T) {
+			peer := tunneltest.Start(t, tunneltest.Options{})
+			peer.SetHost("upstream.test", upstream4)
+			m, env := newManagerIdle(t, testIdle, peer.ClientTunnel(t, "gr"))
+			tun := mustTunnel(t, m, "gr")
+			for range 2 {
+				if _, err := tun.LookupNetIP(t.Context(), "upstream.test"); err != nil {
+					t.Fatalf("LookupNetIP: %v", err)
+				}
+			}
+			if got := len(peer.Queries()); got != 1 {
+				t.Fatalf("queries before stop = %d, want 1", got)
+			}
+			stop(t, m, env)
+			if tun.Running() {
+				t.Fatal("tunnel still running")
+			}
+			if _, err := tun.LookupNetIP(t.Context(), "upstream.test"); err != nil {
+				t.Fatalf("LookupNetIP after stop: %v", err)
+			}
+			if got := len(peer.Queries()); got != 2 {
+				t.Errorf("queries = %d, want a new query after the restart", got)
+			}
+			if got := tun.starts.Load(); got != 2 {
+				t.Errorf("starts = %d, want 2", got)
+			}
+		})
+	}
+}
+
+func TestLookupSharesOneQuery(t *testing.T) {
+	peer := tunneltest.Start(t, tunneltest.Options{})
+	peer.SetHost("upstream.test", upstream4)
+	tun, env := startedTunnel(t, peer)
+	peer.DropDNS(1)
+
+	const callers = 8
+	var done []<-chan lookupResult
+	for range callers {
+		done = append(done, lookupAsync(t.Context(), tun, "upstream.test"))
+	}
+	waitWaiters(t, tun, "upstream.test", callers)
+	env.clock.waitArmed(t, 500*time.Millisecond)
+	env.clock.advance(500 * time.Millisecond)
+	for _, ch := range done {
+		r := <-ch
+		if r.err != nil || !slices.Equal(r.addrs, []netip.Addr{upstream4}) {
+			t.Errorf("LookupNetIP = %v, %v; want [%v]", r.addrs, r.err, upstream4)
+		}
+	}
+	if got, dropped := len(peer.Queries()), peer.DroppedDNS(); got != 1 || dropped != 1 {
+		t.Errorf("answered %d and dropped %d queries, want 1 and 1", got, dropped)
+	}
+}
+
+func TestLookupCancelledCallerLeavesSharedQuery(t *testing.T) {
+	peer := tunneltest.Start(t, tunneltest.Options{})
+	peer.SetHost("upstream.test", upstream4)
+	tun, env := startedTunnel(t, peer)
+	peer.DropDNS(-1)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	first := lookupAsync(ctx, tun, "upstream.test")
+	second := lookupAsync(t.Context(), tun, "upstream.test")
+	waitWaiters(t, tun, "upstream.test", 2)
+	cancel()
+	if r := <-first; !errors.Is(r.err, context.Canceled) {
+		t.Fatalf("cancelled caller: err = %v, want context.Canceled", r.err)
+	}
+	assertPending(t, second)
+
+	peer.DropDNS(0)
+	env.clock.waitArmed(t, 500*time.Millisecond)
+	env.clock.advance(500 * time.Millisecond)
+	r := <-second
+	if r.err != nil || !slices.Equal(r.addrs, []netip.Addr{upstream4}) {
+		t.Errorf("LookupNetIP = %v, %v; want [%v]", r.addrs, r.err, upstream4)
+	}
+	if got := env.clock.pending(); got != 0 {
+		t.Errorf("%d timers left armed", got)
+	}
+}
+
+func TestLookupEndsWhenTunnelStops(t *testing.T) {
+	peer := tunneltest.Start(t, tunneltest.Options{})
+	peer.SetHost("upstream.test", upstream4)
+	m, env := newManager(t, peer.ClientTunnel(t, "gr"))
+	tun := mustTunnel(t, m, "gr")
+	if _, err := tun.LookupNetIP(t.Context(), tunneltest.ServerAddr4.String()); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	peer.DropDNS(-1)
+
+	done := lookupAsync(t.Context(), tun, "upstream.test")
+	waitWaiters(t, tun, "upstream.test", 1)
+	if err := m.Drain("gr", 0); err != nil {
+		t.Fatalf("Drain: %v", err)
+	}
+	if r := <-done; !errors.Is(r.err, ErrUnavailable) {
+		t.Errorf("err = %v, want ErrUnavailable", r.err)
+	}
+	if got := env.clock.pending(); got != 0 {
+		t.Errorf("%d timers left armed", got)
+	}
+}
+
+func TestDNSCacheBound(t *testing.T) {
+	now := time.Now()
+	key := func(name string) dnsKey { return dnsKey{name, dnsmessage.TypeA} }
+	entry := func(expiresIn time.Duration) dnsEntry {
+		return dnsEntry{addrs: []netip.Addr{upstream4}, expires: now.Add(expiresIn)}
+	}
+	tests := []struct {
+		name  string
+		have  map[string]time.Duration // name: expires in
+		put   string
+		after []string // names left, sorted
+	}{
+		{name: "room left", have: map[string]time.Duration{"a": time.Minute, "b": time.Minute}, put: "c", after: []string{"a", "b", "c"}},
+		{name: "full: soonest expiry goes", have: map[string]time.Duration{"a": 2 * time.Minute, "b": time.Minute, "c": 3 * time.Minute}, put: "d", after: []string{"a", "c", "d"}},
+		{name: "full: expired entries go first", have: map[string]time.Duration{"a": -time.Second, "b": 0, "c": time.Minute}, put: "d", after: []string{"c", "d"}},
+		{name: "full: replacing an entry evicts nothing", have: map[string]time.Duration{"a": time.Minute, "b": time.Minute, "c": time.Minute}, put: "b", after: []string{"a", "b", "c"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := dnsCache{entries: map[dnsKey]dnsEntry{}, size: 3}
+			for name, in := range tt.have {
+				c.entries[key(name)] = entry(in)
+			}
+			c.put(key(tt.put), entry(time.Hour), now)
+			var got []string
+			for k := range c.entries {
+				got = append(got, k.name)
+			}
+			slices.Sort(got)
+			if !slices.Equal(got, tt.after) {
+				t.Errorf("entries = %v, want %v", got, tt.after)
+			}
+		})
+	}
 }
 
 func TestLookupFollowsCNAMEChain(t *testing.T) {
@@ -373,7 +701,7 @@ func TestParseResponse(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, got, err := parseResponse(tt.msg, 7, q)
+			ans, err := parseResponse(tt.msg, 7, q)
 			switch {
 			case tt.stray:
 				if !errors.Is(err, errStray) {
@@ -388,8 +716,68 @@ func TestParseResponse(t *testing.T) {
 			case err != nil:
 				t.Fatalf("parseResponse: %v", err)
 			}
-			if !slices.Equal(got, tt.want) {
+			if got := ans.addrs; !slices.Equal(got, tt.want) {
 				t.Errorf("addrs = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseResponseTTL(t *testing.T) {
+	type rec func(b *dnsmessage.Builder) error
+	hdr := func(n string, typ dnsmessage.Type, ttl uint32) dnsmessage.ResourceHeader {
+		return dnsmessage.ResourceHeader{Name: dnsmessage.MustNewName(n), Type: typ, Class: dnsmessage.ClassINET, TTL: ttl}
+	}
+	a := func(n string, ttl uint32) rec {
+		return func(b *dnsmessage.Builder) error {
+			return b.AResource(hdr(n, dnsmessage.TypeA, ttl), dnsmessage.AResource{A: upstream4.As4()})
+		}
+	}
+	cname := func(n, target string, ttl uint32) rec {
+		return func(b *dnsmessage.Builder) error {
+			return b.CNAMEResource(hdr(n, dnsmessage.TypeCNAME, ttl), dnsmessage.CNAMEResource{CNAME: dnsmessage.MustNewName(target)})
+		}
+	}
+	soa := func(ttl, minimum uint32) rec {
+		return func(b *dnsmessage.Builder) error {
+			if err := b.StartAuthorities(); err != nil {
+				return err
+			}
+			return b.SOAResource(hdr("test.", dnsmessage.TypeSOA, ttl), dnsmessage.SOAResource{
+				NS: dnsmessage.MustNewName("ns.test."), MBox: dnsmessage.MustNewName("hostmaster.test."), MinTTL: minimum,
+			})
+		}
+	}
+	q := dnsmessage.Question{Name: dnsmessage.MustNewName("upstream.test."), Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET}
+	tests := []struct {
+		name    string
+		records []rec
+		want    time.Duration
+	}{
+		{name: "smallest address TTL", records: []rec{a("upstream.test.", 300), a("upstream.test.", 120)}, want: 120 * time.Second},
+		{name: "CNAME chain counts", records: []rec{cname("upstream.test.", "cdn.test.", 30), a("cdn.test.", 300)}, want: 30 * time.Second},
+		{name: "records of other names ignored", records: []rec{a("other.test.", 5), a("upstream.test.", 300)}, want: 300 * time.Second},
+		{name: "no record: SOA MINIMUM", records: []rec{soa(900, 60)}, want: 60 * time.Second},
+		{name: "no record: SOA TTL if smaller", records: []rec{soa(20, 60)}, want: 20 * time.Second},
+		{name: "no record, no SOA", want: 0},
+		{name: "SOA ignored when there are records", records: []rec{a("upstream.test.", 300), soa(5, 5)}, want: 300 * time.Second},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msg := response(t, dnsmessage.Header{ID: 7}, q, func(b *dnsmessage.Builder) error {
+				for _, r := range tt.records {
+					if err := r(b); err != nil {
+						return err
+					}
+				}
+				return nil
+			})
+			ans, err := parseResponse(msg, 7, q)
+			if err != nil {
+				t.Fatalf("parseResponse: %v", err)
+			}
+			if ans.ttl != tt.want {
+				t.Errorf("ttl = %v, want %v", ans.ttl, tt.want)
 			}
 		})
 	}

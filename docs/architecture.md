@@ -630,7 +630,7 @@ flowchart LR
     subgraph tun["tunnel.Tunnel gr"]
         look["LookupNetIP<br/>host name"]:::proxy
         dialc["DialContext<br/>ip:port"]:::proxy
-        dns["dnsClient<br/>A + AAAA, retries,<br/>TCP if truncated"]:::proxy
+        dns["dnsClient<br/>A + AAAA, retries,<br/>TCP if truncated, cache"]:::proxy
         chk{{"check<br/>AllowedIPs,<br/>address family"}}:::guard
         act["Begin, end<br/>requests in flight"]:::ctl
         ens["ensure<br/>lazy start,<br/>one startCall"]:::ctl
@@ -676,10 +676,13 @@ flowchart LR
   anything is sent (spec 5.5). Lookup answers and the file's `DNS`
   servers are filtered the same way.
 - **`dnsClient`**: tunnel DNS over UDP and TCP inside the netstack, A and
-  AAAA in parallel (only for families the tunnel has), retries after 1s,
-  2s, then every 4s on the next server, TCP after a truncated answer,
-  IPv4 answers first (spec 2.1). It replaces the netstack resolver, which
-  retries only after 5s.
+  AAAA in parallel (only for families the tunnel has), first attempt to
+  every `DNS` server at once, retries after 0.5s, 1s, 2s, then every 4s
+  on the next server, TCP after a truncated answer, IPv4 answers first
+  (spec 2.1). It replaces the netstack resolver, which retries only after
+  5s. It lives in `running`: answers are cached by TTL (10s to 5min, 256
+  entries) only while the device runs, concurrent lookups of a name share
+  one query, and every stop drops the cache.
 - **`ensure`**: the lazy start. Concurrent callers wait for one
   `startCall`; `startDevice` resolves the `Endpoint` with the host
   resolver, builds the UAPI text (`wgquick.UAPIConfig`), creates the

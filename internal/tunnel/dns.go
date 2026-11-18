@@ -9,8 +9,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/netip"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -21,10 +23,11 @@ import (
 )
 
 // dnsRetryDelays is the time from one attempt of a DNS query to the next
-// (spec 2.1); the last delay repeats until the caller's ctx ends. Lookups
-// through a tunnel take tens of milliseconds, so after 1s a query counts
-// as lost.
-var dnsRetryDelays = []time.Duration{time.Second, 2 * time.Second, 4 * time.Second}
+// (spec 2.1); the last delay repeats until the caller's ctx ends. The
+// first attempt asks every server at once, and a lookup through a tunnel
+// takes tens of milliseconds, so after 0.5s the first attempt counts as
+// lost.
+var dnsRetryDelays = []time.Duration{500 * time.Millisecond, time.Second, 2 * time.Second, 4 * time.Second}
 
 const (
 	// dnsUDPSize is the EDNS(0) UDP payload size offered to servers, as in
@@ -35,6 +38,14 @@ const (
 	dnsReadSize = 4096
 	// maxCNAMEHops bounds the CNAME chain followed in an answer.
 	maxCNAMEHops = 8
+
+	// dnsMinTTL and dnsMaxTTL bound how long an answer stays in the cache
+	// (spec 2.1), whatever its TTL. NXDOMAIN is cached for dnsMinTTL.
+	dnsMinTTL = 10 * time.Second
+	dnsMaxTTL = 5 * time.Minute
+	// dnsCacheSize bounds the cache entries of one tunnel: one per name
+	// and query type.
+	dnsCacheSize = 256
 )
 
 // errStray: a DNS message is not the answer to the query it was read
@@ -42,42 +53,310 @@ const (
 var errStray = errors.New("dns: stray message")
 
 // dnsClient resolves names with the tunnel's DNS servers, over UDP and
-// TCP inside the netstack. It replaces the netstack resolver, which
-// retries a lost query only after 5s.
+// TCP inside the netstack, and caches the answers. It replaces the
+// netstack resolver, which retries a lost query only after 5s. A client
+// belongs to one running device: a start creates it empty, close at
+// every stop drops it, so a cold tunnel starts with a cold cache.
 type dnsClient struct {
 	net     *netstack.Net
 	servers []netip.Addr
-	clock   Clock
+	// types are the query types of every lookup: the address families
+	// the tunnel has.
+	types []dnsmessage.Type
+	clock Clock
+
+	// ctx ends when the client closes; it bounds every flight.
+	ctx     context.Context
+	cancel  context.CancelFunc
+	flights sync.WaitGroup
+
+	mu     sync.Mutex
+	closed bool
+	cache  dnsCache
+	// pending are the flights in progress, by canonical name.
+	pending map[string]*dnsFlight
 }
 
-// dnsQuery is one question of a lookup and its state. Only the lookup's
-// own goroutine touches it.
+func newDNSClient(n *netstack.Net, servers []netip.Addr, types []dnsmessage.Type, clock Clock) *dnsClient {
+	ctx, cancel := context.WithCancel(context.Background())
+	return &dnsClient{
+		net:     n,
+		servers: servers,
+		types:   types,
+		clock:   clock,
+		ctx:     ctx,
+		cancel:  cancel,
+		cache:   dnsCache{entries: map[dnsKey]dnsEntry{}, size: dnsCacheSize},
+		pending: map[string]*dnsFlight{},
+	}
+}
+
+// close ends the flights in progress, waits for them and drops the
+// cache. Lookups after close fail at once.
+func (c *dnsClient) close() {
+	c.mu.Lock()
+	c.closed = true
+	clear(c.cache.entries)
+	c.mu.Unlock()
+	c.cancel()
+	c.flights.Wait()
+}
+
+// dnsFlight is the query of one name shared by all lookups that want it
+// at the same time (singleflight). It runs while at least one of them
+// still waits; the last one to give up cancels it.
+type dnsFlight struct {
+	cancel  context.CancelFunc
+	waiters int // guarded by dnsClient.mu
+	// done is closed when addrs and err are set.
+	done  chan struct{}
+	addrs []netip.Addr
+	err   error
+}
+
+// lookup resolves host from the cache or with one query per type of the
+// client, shared with concurrent lookups of the same name. It returns
+// when ctx ends, even if the shared query goes on for others.
+func (c *dnsClient) lookup(ctx context.Context, host string) ([]netip.Addr, error) {
+	name, ok := queryName(host)
+	if !ok {
+		return nil, notFoundError(host)
+	}
+	key := canonicalName(host)
+
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return nil, stoppedError(host)
+	}
+	f := c.pending[key]
+	if f == nil {
+		cached, missing, notFound := c.cache.get(key, c.types, c.clock.Now())
+		switch {
+		case notFound:
+			c.mu.Unlock()
+			return nil, notFoundError(host)
+		case len(missing) == 0:
+			c.mu.Unlock()
+			return flatten(c.types, cached), nil
+		}
+		fctx, cancel := context.WithCancel(c.ctx)
+		f = &dnsFlight{cancel: cancel, done: make(chan struct{})}
+		c.pending[key] = f
+		c.flights.Add(1)
+		go c.fly(fctx, f, key, host, name, cached, missing)
+	}
+	f.waiters++
+	c.mu.Unlock()
+
+	select {
+	case <-f.done:
+		return slices.Clone(f.addrs), f.err
+	case <-ctx.Done():
+		c.leave(key, f)
+		return nil, fmt.Errorf("lookup %s: %w", host, ctx.Err())
+	}
+}
+
+// leave removes a lookup whose ctx ended from flight f. The last one
+// cancels f and waits until it has stopped its timers and sockets.
+func (c *dnsClient) leave(key string, f *dnsFlight) {
+	c.mu.Lock()
+	f.waiters--
+	last := f.waiters == 0
+	if last && c.pending[key] == f {
+		delete(c.pending, key)
+	}
+	c.mu.Unlock()
+	if last {
+		f.cancel()
+		<-f.done
+	}
+}
+
+// fly runs flight f: it asks the missing types, caches what was answered
+// and sets the result for all waiters.
+func (c *dnsClient) fly(ctx context.Context, f *dnsFlight, key, host string, name dnsmessage.Name, cached map[dnsmessage.Type][]netip.Addr, missing []dnsmessage.Type) {
+	defer c.flights.Done()
+	defer f.cancel()
+	queries, err := c.exchange(ctx, host, name, missing)
+
+	c.mu.Lock()
+	if c.pending[key] == f {
+		delete(c.pending, key)
+	}
+	now := c.clock.Now()
+	switch {
+	case c.closed:
+	case errors.Is(err, errNXDOMAIN):
+		for _, typ := range c.types {
+			c.cache.put(dnsKey{key, typ}, dnsEntry{notFound: true, expires: now.Add(dnsMinTTL)}, now)
+		}
+	default:
+		// Also the answered queries of a flight that ended early.
+		for _, q := range queries {
+			if q.done && q.err == nil {
+				c.cache.put(dnsKey{key, q.q.Type}, dnsEntry{addrs: q.addrs, expires: now.Add(clampTTL(q.ttl))}, now)
+			}
+		}
+	}
+	c.mu.Unlock()
+
+	switch {
+	case errors.Is(err, errNXDOMAIN):
+		f.err = notFoundError(host)
+	case err != nil && c.ctx.Err() != nil:
+		f.err = stoppedError(host)
+	case err != nil:
+		f.err = fmt.Errorf("lookup %s: %w", host, err)
+	default:
+		found := make(map[dnsmessage.Type][]netip.Addr, len(c.types))
+		maps.Copy(found, cached)
+		var qerr error
+		for _, q := range queries {
+			found[q.q.Type] = q.addrs
+			if q.err != nil {
+				qerr = q.err
+			}
+		}
+		f.addrs = flatten(c.types, found)
+		if len(f.addrs) == 0 && qerr != nil {
+			f.addrs, f.err = nil, qerr
+		}
+	}
+	close(f.done)
+}
+
+// flatten returns the addresses of byType in the order of types.
+func flatten(types []dnsmessage.Type, byType map[dnsmessage.Type][]netip.Addr) []netip.Addr {
+	var addrs []netip.Addr
+	for _, typ := range types {
+		addrs = append(addrs, byType[typ]...)
+	}
+	return addrs
+}
+
+func notFoundError(host string) error {
+	return &net.DNSError{Err: "no such host", Name: host, IsNotFound: true}
+}
+
+// stoppedError: the tunnel stopped while a lookup waited for its answer.
+func stoppedError(host string) error {
+	return fmt.Errorf("lookup %s: %w: tunnel stopped", host, ErrUnavailable)
+}
+
+// clampTTL bounds the time an answer stays in the cache.
+func clampTTL(ttl time.Duration) time.Duration {
+	return min(max(ttl, dnsMinTTL), dnsMaxTTL)
+}
+
+// dnsKey is a cache key: a canonical name and a query type.
+type dnsKey struct {
+	name string
+	typ  dnsmessage.Type
+}
+
+// dnsEntry is a cached answer: the addresses (none for an answer without
+// records of the type), or notFound for NXDOMAIN.
+type dnsEntry struct {
+	addrs    []netip.Addr
+	notFound bool
+	expires  time.Time
+}
+
+// dnsCache holds the answers of one tunnel, at most size entries. It is
+// guarded by dnsClient.mu.
+type dnsCache struct {
+	entries map[dnsKey]dnsEntry
+	size    int
+}
+
+// get returns the cached addresses of name by type and the types without
+// a valid entry, or notFound if name is cached as NXDOMAIN. Expired
+// entries are removed.
+func (c *dnsCache) get(name string, types []dnsmessage.Type, now time.Time) (found map[dnsmessage.Type][]netip.Addr, missing []dnsmessage.Type, notFound bool) {
+	for _, typ := range types {
+		k := dnsKey{name, typ}
+		e, ok := c.entries[k]
+		if ok && !now.Before(e.expires) {
+			delete(c.entries, k)
+			ok = false
+		}
+		switch {
+		case !ok:
+			missing = append(missing, typ)
+		case e.notFound:
+			return nil, nil, true
+		default:
+			if found == nil {
+				found = map[dnsmessage.Type][]netip.Addr{}
+			}
+			found[typ] = e.addrs
+		}
+	}
+	return found, missing, false
+}
+
+// put stores e under k. If the cache is full, expired entries are removed
+// first, then the entry that expires soonest.
+func (c *dnsCache) put(k dnsKey, e dnsEntry, now time.Time) {
+	if _, ok := c.entries[k]; !ok && len(c.entries) >= c.size {
+		for k2, e2 := range c.entries {
+			if !now.Before(e2.expires) {
+				delete(c.entries, k2)
+			}
+		}
+		if len(c.entries) >= c.size {
+			var oldest dnsKey
+			var first time.Time
+			for k2, e2 := range c.entries {
+				if first.IsZero() || e2.expires.Before(first) {
+					oldest, first = k2, e2.expires
+				}
+			}
+			delete(c.entries, oldest)
+		}
+	}
+	c.entries[k] = e
+}
+
+// errNXDOMAIN: a server answered that the name does not exist.
+var errNXDOMAIN = errors.New("dns: name does not exist")
+
+// dnsQuery is one question of an exchange and its state. Only the
+// exchange's own goroutine touches it.
 type dnsQuery struct {
-	q        dnsmessage.Question
-	attempts int // attempts sent
-	failures int // error answers
+	q dnsmessage.Question
+	// rounds counts the rounds sent: the first asks every server, each
+	// retry the next server in turn.
+	rounds int
+	// next is the index of the server for the next retry; failed marks
+	// the servers that answered with an error.
+	next     int
+	failed   []bool
+	failures int
 	timer    Timer
 	done     bool
 	addrs    []netip.Addr
+	ttl      time.Duration
 	err      error
 }
 
 // dnsResult is the outcome of one attempt of a query.
 type dnsResult struct {
-	query int
-	h     dnsmessage.Header
-	addrs []netip.Addr
-	err   error // transport or format error
+	query, server, round int
+	answer               dnsAnswer
+	err                  error // transport or format error
 }
 
-// dnsRetry asks the lookup to send the next attempt of a query, unless a
-// later attempt than the one numbered attempt was sent meanwhile.
+// dnsRetry asks the exchange to send the next round of a query, unless a
+// later round than the one numbered round was sent meanwhile.
 type dnsRetry struct {
-	query, attempt int
+	query, round int
 }
 
-// dnsLookup is one lookup in progress.
-type dnsLookup struct {
+// dnsExchange is one exchange in progress.
+type dnsExchange struct {
 	c       *dnsClient
 	ctx     context.Context
 	queries []*dnsQuery
@@ -87,20 +366,17 @@ type dnsLookup struct {
 	readers sync.WaitGroup
 }
 
-// lookup resolves host with one query per type, in parallel. Each query
-// is retried on the next server after dnsRetryDelays, at once after an
-// error answer, and over TCP after a truncated answer, until ctx ends.
-// NXDOMAIN ends the lookup at once. A query fails once it got as many
-// error answers as there are servers; the lookup then returns the
-// addresses of the other queries, if any.
-func (c *dnsClient) lookup(ctx context.Context, host string, types []dnsmessage.Type) ([]netip.Addr, error) {
-	notFound := &net.DNSError{Err: "no such host", Name: host, IsNotFound: true}
-	name, ok := queryName(host)
-	if !ok {
-		return nil, notFound
-	}
+// exchange asks the questions name/types, in parallel. The first round
+// of a query goes to every server at once; the first valid answer wins.
+// A query is repeated on the next server after dnsRetryDelays, at once
+// after an error answer to a retry, and over TCP after a truncated
+// answer, until ctx ends. A server that answered with an error is not
+// asked again; a query fails once every server did. It returns the
+// queries with their answers, and errNXDOMAIN if a server said name does
+// not exist, or ctx's error; then some queries may be done, others not.
+func (c *dnsClient) exchange(ctx context.Context, host string, name dnsmessage.Name, types []dnsmessage.Type) ([]*dnsQuery, error) {
 	ctx, cancel := context.WithCancel(ctx)
-	l := &dnsLookup{
+	l := &dnsExchange{
 		c:       c,
 		ctx:     ctx,
 		results: make(chan dnsResult),
@@ -108,7 +384,10 @@ func (c *dnsClient) lookup(ctx context.Context, host string, types []dnsmessage.
 	}
 	defer l.close(cancel)
 	for _, typ := range types {
-		l.queries = append(l.queries, &dnsQuery{q: dnsmessage.Question{Name: name, Type: typ, Class: dnsmessage.ClassINET}})
+		l.queries = append(l.queries, &dnsQuery{
+			q:      dnsmessage.Question{Name: name, Type: typ, Class: dnsmessage.ClassINET},
+			failed: make([]bool, len(c.servers)),
+		})
 	}
 	for i := range l.queries {
 		l.send(i)
@@ -117,9 +396,9 @@ func (c *dnsClient) lookup(ctx context.Context, host string, types []dnsmessage.
 	for pending := len(l.queries); pending > 0; {
 		select {
 		case <-ctx.Done():
-			return nil, fmt.Errorf("lookup %s: %w", host, ctx.Err())
+			return l.queries, ctx.Err()
 		case r := <-l.retries:
-			if q := l.queries[r.query]; !q.done && q.attempts == r.attempt+1 {
+			if q := l.queries[r.query]; !q.done && q.rounds == r.round+1 {
 				l.send(r.query)
 			}
 		case r := <-l.results:
@@ -129,14 +408,21 @@ func (c *dnsClient) lookup(ctx context.Context, host string, types []dnsmessage.
 				continue
 			}
 			switch {
-			case r.err == nil && r.h.RCode == dnsmessage.RCodeSuccess:
-				q.addrs = r.addrs
-			case r.err == nil && r.h.RCode == dnsmessage.RCodeNameError:
-				return nil, notFound
+			case r.err == nil && r.answer.h.RCode == dnsmessage.RCodeSuccess:
+				q.addrs, q.ttl = r.answer.addrs, r.answer.ttl
+			case r.err == nil && r.answer.h.RCode == dnsmessage.RCodeNameError:
+				return l.queries, errNXDOMAIN
 			default:
-				q.failures++
+				if !q.failed[r.server] {
+					q.failed[r.server] = true
+					q.failures++
+				}
 				if q.failures < len(c.servers) {
-					l.send(r.query)
+					// The first round asked every server: wait for the
+					// others, or the retry.
+					if r.round > 0 {
+						l.send(r.query)
+					}
 					continue
 				}
 				q.err = &net.DNSError{Err: "server misbehaving", Name: host, IsTemporary: true}
@@ -146,19 +432,7 @@ func (c *dnsClient) lookup(ctx context.Context, host string, types []dnsmessage.
 			pending--
 		}
 	}
-
-	var addrs []netip.Addr
-	var err error
-	for _, q := range l.queries {
-		addrs = append(addrs, q.addrs...)
-		if q.err != nil {
-			err = q.err
-		}
-	}
-	if len(addrs) == 0 && err != nil {
-		return nil, err
-	}
-	return addrs, nil
+	return l.queries, nil
 }
 
 // queryName returns host as an absolute DNS name, if it is a valid one.
@@ -176,27 +450,51 @@ func queryName(host string) (dnsmessage.Name, bool) {
 	return name, err == nil
 }
 
-// send sends the next attempt of query i to the next server and arms its
-// retry timer. Earlier attempts keep listening: a late answer still
-// counts. An attempt that cannot be sent counts as lost.
-func (l *dnsLookup) send(i int) {
+// canonicalName returns the cache and flight key of a valid host name.
+func canonicalName(host string) string {
+	return strings.ToLower(strings.TrimSuffix(host, "."))
+}
+
+// send sends the next round of query i and arms its retry timer: the
+// first round to every server, later ones to the next server that has
+// not answered with an error. Earlier attempts keep listening: a late
+// answer still counts. An attempt that cannot be sent counts as lost.
+func (l *dnsExchange) send(i int) {
 	q := l.queries[i]
-	attempt := q.attempts
-	q.attempts++
-	server := netip.AddrPortFrom(l.c.servers[attempt%len(l.c.servers)], 53)
+	round := q.rounds
+	q.rounds++
 	if q.timer != nil {
 		q.timer.Stop()
 	}
-	delay := dnsRetryDelays[min(attempt, len(dnsRetryDelays)-1)]
+	delay := dnsRetryDelays[min(round, len(dnsRetryDelays)-1)]
 	q.timer = l.c.clock.AfterFunc(delay, func() {
 		select {
-		case l.retries <- dnsRetry{query: i, attempt: attempt}:
+		case l.retries <- dnsRetry{query: i, round: round}:
 		case <-l.ctx.Done():
 		}
 	})
+	if round == 0 {
+		for s := range l.c.servers {
+			l.sendTo(i, s, round)
+		}
+		return
+	}
+	for range l.c.servers {
+		s := q.next % len(l.c.servers)
+		q.next++
+		if !q.failed[s] {
+			l.sendTo(i, s, round)
+			return
+		}
+	}
+}
 
+// sendTo sends one attempt of query i to server s over UDP and starts its
+// reader.
+func (l *dnsExchange) sendTo(i, s, round int) {
+	server := netip.AddrPortFrom(l.c.servers[s], 53)
 	id := newQueryID()
-	msg, err := buildQuery(id, q.q)
+	msg, err := buildQuery(id, l.queries[i].q)
 	if err != nil {
 		return
 	}
@@ -208,34 +506,36 @@ func (l *dnsLookup) send(i int) {
 	if _, err := conn.Write(msg[2:]); err != nil {
 		return
 	}
-	l.readers.Go(func() { l.read(conn, i, id, server) })
+	l.readers.Go(func() { l.read(conn, dnsResult{query: i, server: s, round: round}, id, server) })
 }
 
 // read waits for the answer to one UDP attempt, ignoring stray messages,
 // and repeats the query over TCP after a truncated answer.
-func (l *dnsLookup) read(conn net.Conn, i int, id uint16, server netip.AddrPort) {
-	q := l.queries[i].q
+func (l *dnsExchange) read(conn net.Conn, r dnsResult, id uint16, server netip.AddrPort) {
+	q := l.queries[r.query].q
 	buf := make([]byte, dnsReadSize)
 	for {
 		n, err := conn.Read(buf)
 		if err != nil {
-			l.post(dnsResult{query: i, err: err})
+			r.err = err
+			l.post(r)
 			return
 		}
-		h, addrs, err := parseResponse(buf[:n], id, q)
+		a, err := parseResponse(buf[:n], id, q)
 		if errors.Is(err, errStray) {
 			continue
 		}
-		if err == nil && h.Truncated {
-			h, addrs, err = l.exchangeTCP(server, q)
+		if err == nil && a.h.Truncated {
+			a, err = l.exchangeTCP(server, q)
 		}
-		l.post(dnsResult{query: i, h: h, addrs: addrs, err: err})
+		r.answer, r.err = a, err
+		l.post(r)
 		return
 	}
 }
 
-// post hands a result to the lookup, unless the lookup is over.
-func (l *dnsLookup) post(r dnsResult) {
+// post hands a result to the exchange, unless the exchange is over.
+func (l *dnsExchange) post(r dnsResult) {
 	select {
 	case l.results <- r:
 	case <-l.ctx.Done():
@@ -243,10 +543,10 @@ func (l *dnsLookup) post(r dnsResult) {
 }
 
 // exchangeTCP asks q over TCP (RFC 7766), for answers too large for UDP.
-func (l *dnsLookup) exchangeTCP(server netip.AddrPort, q dnsmessage.Question) (dnsmessage.Header, []netip.Addr, error) {
+func (l *dnsExchange) exchangeTCP(server netip.AddrPort, q dnsmessage.Question) (dnsAnswer, error) {
 	conn, err := l.c.net.DialContextTCPAddrPort(l.ctx, server)
 	if err != nil {
-		return dnsmessage.Header{}, nil, err
+		return dnsAnswer{}, err
 	}
 	defer func() { _ = conn.Close() }()
 	stop := context.AfterFunc(l.ctx, func() { _ = conn.Close() })
@@ -255,25 +555,25 @@ func (l *dnsLookup) exchangeTCP(server netip.AddrPort, q dnsmessage.Question) (d
 	id := newQueryID()
 	msg, err := buildQuery(id, q)
 	if err != nil {
-		return dnsmessage.Header{}, nil, err
+		return dnsAnswer{}, err
 	}
 	if _, err := conn.Write(msg); err != nil {
-		return dnsmessage.Header{}, nil, err
+		return dnsAnswer{}, err
 	}
 	var size [2]byte
 	if _, err := io.ReadFull(conn, size[:]); err != nil {
-		return dnsmessage.Header{}, nil, err
+		return dnsAnswer{}, err
 	}
 	resp := make([]byte, binary.BigEndian.Uint16(size[:]))
 	if _, err := io.ReadFull(conn, resp); err != nil {
-		return dnsmessage.Header{}, nil, err
+		return dnsAnswer{}, err
 	}
 	return parseResponse(resp, id, q)
 }
 
-// close ends the lookup: it stops the retry timers, closes the sockets
+// close ends the exchange: it stops the retry timers, closes the sockets
 // and waits for their readers.
-func (l *dnsLookup) close(cancel context.CancelFunc) {
+func (l *dnsExchange) close(cancel context.CancelFunc) {
 	cancel()
 	for _, q := range l.queries {
 		if q.timer != nil {
@@ -322,40 +622,58 @@ func buildQuery(id uint16, q dnsmessage.Question) ([]byte, error) {
 	return msg, nil
 }
 
+// dnsAnswer is a parsed answer to one question.
+type dnsAnswer struct {
+	h dnsmessage.Header
+	// addrs are the addresses of the question's type that belong to its
+	// name or its CNAME chain.
+	addrs []netip.Addr
+	// ttl is the smallest TTL of the records used: the address records
+	// and the CNAME chain. An answer without addresses takes the
+	// negative TTL of the SOA record in the authority section instead
+	// (RFC 2308), if any. 0 if unknown.
+	ttl time.Duration
+}
+
 // parseResponse checks that msg answers question q of the query with id
-// and returns its header and the addresses of q's type that belong to
-// q's name or its CNAME chain. It returns errStray for a message that is
-// not that answer, and another error for a malformed answer.
-func parseResponse(msg []byte, id uint16, q dnsmessage.Question) (dnsmessage.Header, []netip.Addr, error) {
+// and returns the answer. It returns errStray for a message that is not
+// that answer, and another error for a malformed answer.
+func parseResponse(msg []byte, id uint16, q dnsmessage.Question) (dnsAnswer, error) {
 	var p dnsmessage.Parser
 	h, err := p.Start(msg)
+	a := dnsAnswer{h: h}
 	if err != nil || !h.Response || h.ID != id {
-		return h, nil, errStray
+		return a, errStray
 	}
 	rq, err := p.Question()
 	if err != nil || rq.Type != q.Type || rq.Class != q.Class || !strings.EqualFold(rq.Name.String(), q.Name.String()) {
-		return h, nil, errStray
+		return a, errStray
 	}
 	if h.Truncated || h.RCode != dnsmessage.RCodeSuccess {
-		return h, nil, nil
+		return a, nil
 	}
 	if err := p.SkipAllQuestions(); err != nil {
-		return h, nil, err
+		return a, err
 	}
 
 	type record struct {
 		owner string
 		addr  netip.Addr
+		ttl   uint32
+	}
+	type alias struct {
+		target string
+		ttl    uint32
 	}
 	var records []record
-	cnames := map[string]string{}
+	cnames := map[string]alias{}
 	for {
 		rh, err := p.AnswerHeader()
 		if errors.Is(err, dnsmessage.ErrSectionDone) {
 			break
 		}
 		if err != nil {
-			return h, nil, err
+			return a, err
 		}
 		owner := strings.ToLower(rh.Name.String())
 		switch {
@@ -364,26 +682,34 @@ func parseResponse(msg []byte, id uint16, q dnsmessage.Question) (dnsmessage.Hea
 		case rh.Type == dnsmessage.TypeCNAME:
 			var r dnsmessage.CNAMEResource
 			if r, err = p.CNAMEResource(); err == nil {
-				cnames[owner] = strings.ToLower(r.CNAME.String())
+				cnames[owner] = alias{strings.ToLower(r.CNAME.String()), rh.TTL}
 			}
 		case rh.Type == q.Type && q.Type == dnsmessage.TypeA:
 			var r dnsmessage.AResource
 			if r, err = p.AResource(); err == nil {
-				records = append(records, record{owner, netip.AddrFrom4(r.A)})
+				records = append(records, record{owner, netip.AddrFrom4(r.A), rh.TTL})
 			}
 		case rh.Type == q.Type && q.Type == dnsmessage.TypeAAAA:
 			var r dnsmessage.AAAAResource
 			if r, err = p.AAAAResource(); err == nil {
-				records = append(records, record{owner, netip.AddrFrom16(r.AAAA)})
+				records = append(records, record{owner, netip.AddrFrom16(r.AAAA), rh.TTL})
 			}
 		default:
 			err = p.SkipAnswer()
 		}
 		if err != nil {
-			return h, nil, err
+			return a, err
 		}
 	}
 
+	// ttl is the smallest TTL seen; known reports whether there was one.
+	var ttl uint32
+	known := false
+	seen := func(t uint32) {
+		if !known || t < ttl {
+			ttl, known = t, true
+		}
+	}
 	// The names of the chain: q's name and up to maxCNAMEHops aliases.
 	names := map[string]bool{}
 	name := strings.ToLower(q.Name.String())
@@ -396,13 +722,45 @@ func parseResponse(msg []byte, id uint16, q dnsmessage.Question) (dnsmessage.Hea
 		if !ok {
 			break
 		}
-		name = next
+		seen(next.ttl)
+		name = next.target
 	}
-	var addrs []netip.Addr
 	for _, r := range records {
 		if names[r.owner] {
-			addrs = append(addrs, r.addr)
+			a.addrs = append(a.addrs, r.addr)
+			seen(r.ttl)
 		}
 	}
-	return h, addrs, nil
+	if len(a.addrs) == 0 {
+		if neg, ok := negativeTTL(&p); ok {
+			seen(neg)
+		}
+	}
+	if known {
+		a.ttl = time.Duration(ttl) * time.Second
+	}
+	return a, nil
+}
+
+// negativeTTL returns the negative TTL of the SOA record in the authority
+// section that p is at, the smaller of its TTL and MINIMUM (RFC 2308). A
+// malformed authority section counts as none.
+func negativeTTL(p *dnsmessage.Parser) (uint32, bool) {
+	for {
+		rh, err := p.AuthorityHeader()
+		if err != nil {
+			return 0, false
+		}
+		if rh.Type != dnsmessage.TypeSOA {
+			if p.SkipAuthority() != nil {
+				return 0, false
+			}
+			continue
+		}
+		soa, err := p.SOAResource()
+		if err != nil {
+			return 0, false
+		}
+		return min(rh.TTL, soa.MinTTL), true
+	}
 }

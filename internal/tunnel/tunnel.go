@@ -7,9 +7,10 @@
 //
 // A *Tunnel is the route layer's way to the internet through the tunnel:
 // LookupNetIP resolves host names with the tunnel's DNS servers inside the
-// netstack (own client, retrying lost queries after 1s), DialContext
-// connects to resolved addresses. Both start the device if needed;
-// concurrent first users share one start.
+// netstack (own client: first query to every server, retries after 0.5s,
+// answers cached while the device runs), DialContext connects to
+// resolved addresses. Both start the device if needed; concurrent first
+// users share one start.
 //
 // Keys never appear in errors or logs: the UAPI text is never passed on,
 // and wireguard-go's own log output (which names the peer by key
@@ -323,6 +324,10 @@ type Tunnel struct {
 	has4, has6 bool
 	// dns are the DNS servers of the file that the tunnel can reach.
 	dns []netip.Addr
+	// dnsTypes are the DNS query types of a lookup: only families the
+	// tunnel has an address for, so an IPv4-only tunnel never waits for
+	// AAAA answers.
+	dnsTypes []dnsmessage.Type
 
 	run   atomic.Pointer[running]
 	start *startCall // guarded by m.mu
@@ -354,17 +359,22 @@ type Tunnel struct {
 type running struct {
 	dev *device.Device
 	net *netstack.Net
+	// dns resolves with the tunnel's DNS servers and caches the answers
+	// for this run only.
+	dns *dnsClient
 	// started is when the first handshake completed, handshake how long
 	// it took after the device was up (Options.Clock).
 	started   time.Time
 	handshake time.Duration
 }
 
-// close closes the device. Every stop (failed start, idle close, drain,
-// Close) ends here. gVisor may still send packets while the netstack
-// closes; the netstack copy in ./netstack drops them instead of
-// panicking (#47).
+// close ends the lookups in progress, drops the DNS cache and closes the
+// device. Every stop (failed start, idle close, drain, Close) ends here,
+// so the next start begins with an empty cache. gVisor may still send
+// packets while the netstack closes; the netstack copy in ./netstack
+// drops them instead of panicking (#47).
 func (r *running) close() {
+	r.dns.close()
 	r.dev.Close()
 }
 
@@ -383,6 +393,12 @@ func newTunnel(m *Manager, cfg *wgquick.Tunnel) *Tunnel {
 		} else {
 			t.has6 = true
 		}
+	}
+	if t.has4 {
+		t.dnsTypes = append(t.dnsTypes, dnsmessage.TypeA)
+	}
+	if t.has6 {
+		t.dnsTypes = append(t.dnsTypes, dnsmessage.TypeAAAA)
 	}
 	for _, a := range cfg.DNS {
 		if t.check(a) == nil {
@@ -431,7 +447,9 @@ func (t *Tunnel) touch() {
 
 // LookupNetIP resolves host with the tunnel's DNS servers, inside the
 // tunnel (spec 2.1). It returns only addresses DialContext accepts, IPv4
-// first. An IP literal is returned as is if reachable. It starts the
+// first. An IP literal is returned as is if reachable. Answers are cached
+// per name and type for their TTL (10s to 5min) until the tunnel stops;
+// concurrent lookups of one name share one query. It starts the
 // tunnel if needed.
 func (t *Tunnel) LookupNetIP(ctx context.Context, host string) ([]netip.Addr, error) {
 	t.touch()
@@ -446,17 +464,7 @@ func (t *Tunnel) LookupNetIP(ctx context.Context, host string) ([]netip.Addr, er
 		if len(t.dns) == 0 {
 			return nil, fmt.Errorf("tunnel %q: lookup %s: %w", t.cfg.Name, host, ErrNoDNS)
 		}
-		// Only families the tunnel has an address for: an IPv4-only tunnel
-		// never waits for AAAA answers.
-		var types []dnsmessage.Type
-		if t.has4 {
-			types = append(types, dnsmessage.TypeA)
-		}
-		if t.has6 {
-			types = append(types, dnsmessage.TypeAAAA)
-		}
-		c := &dnsClient{net: r.net, servers: t.dns, clock: t.m.opts.Clock}
-		found, err := c.lookup(ctx, host, types)
+		found, err := r.dns.lookup(ctx, host)
 		if err != nil {
 			return nil, fmt.Errorf("tunnel %q: %w", t.cfg.Name, err)
 		}
@@ -677,6 +685,7 @@ func (t *Tunnel) startDevice() (*running, error) {
 	r := &running{
 		dev: device.NewDevice(tun, conn.NewDefaultBind(), wgLogger(m.opts.Logger, t.cfg.Name)),
 		net: tnet,
+		dns: newDNSClient(tnet, t.dns, t.dnsTypes, m.opts.Clock),
 	}
 	// IpcSet errors may quote the configuration: never pass them on
 	// (wgLogger drops wireguard-go's own log line of them).
