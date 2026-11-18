@@ -22,8 +22,8 @@ import (
 const trafficSize = 256 << 10
 
 // trafficHandler serves the stress traffic: /down sends trafficSize
-// bytes and holds the connection open, /up reads the request body until
-// the connection breaks.
+// bytes and holds the connection open, /up reads the upload until the
+// connection breaks.
 var trafficHandler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
 	case "/down":
@@ -35,7 +35,15 @@ var trafficHandler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Reques
 		}
 		<-r.Context().Done()
 	case "/up":
-		_, _ = io.Copy(io.Discard, r.Body)
+		// Hijacked: net/http would otherwise keep the connection
+		// goroutine 500ms after the body broke (closeWriteAndWait), and
+		// goleak would flag it.
+		c, rw, err := http.NewResponseController(w).Hijack()
+		if err != nil {
+			return
+		}
+		defer func() { _ = c.Close() }()
+		_, _ = io.Copy(io.Discard, rw)
 	}
 })
 
