@@ -29,6 +29,7 @@ commands:
   import       convert an M3U file to channel files
   epg          list or match EPG ids
   healthcheck  query /healthz on the listen address
+  tunnel       list tunnels or stop one (needs [debug] listen)
   version      print version and source URL
 `
 
@@ -46,8 +47,14 @@ type cli struct {
 	// listening, if set, is called with the listen address before
 	// serving starts.
 	listening func(net.Addr)
+	// debugListening, if set, is called with the address of the debug
+	// listener before serving starts.
+	debugListening func(net.Addr)
 	// healthTimeout bounds the healthcheck request; 0 means the default.
 	healthTimeout time.Duration
+	// tunnelTimeout bounds the requests of the tunnel command; 0 means
+	// the defaults.
+	tunnelTimeout time.Duration
 	// hangup, if set, replaces SIGHUP for serve: each value reloads.
 	hangup chan os.Signal
 	// reloaded, if set, is called with the result of each reload.
@@ -85,6 +92,8 @@ func (c *cli) run(args []string) int {
 		return c.check(args)
 	case "healthcheck":
 		return c.healthcheck(args)
+	case "tunnel":
+		return c.tunnelCmd(args)
 	case "import":
 		return c.importM3U(args)
 	case "epg":

@@ -414,7 +414,7 @@ stateDiagram-v2
     Starting --> Up: handshake ok
     Starting --> Stopped: start failed or no handshake<br/>within connect_timeout (502)
     Up --> Stopped: idle_timeout without activity
-    Up --> Draining: shutdown, or reload<br/>changed or removed it
+    Up --> Draining: shutdown, cool-down, or reload<br/>changed or removed it
     Draining --> [*]: in-flight done or 30s
     note right of Starting
         Concurrent first requests
@@ -431,8 +431,10 @@ stateDiagram-v2
 - **Idle close**: after `[tunnels] idle_timeout` (default `60m`) without
   activity the tunnel closes. Activity = any in-flight request or open
   stream.
-- **Drain**: on shutdown or when a reload changes or removes a tunnel,
-  in-flight requests get up to 30s, then the tunnel closes. A changed
+- **Drain**: on shutdown, on a cool-down (debug endpoints, spec 7.1) or
+  when a reload changes or removes a tunnel, in-flight requests get up to
+  30s, then the tunnel closes. After a cool-down the same tunnel starts
+  cold on the next request. A changed
   tunnel is recreated lazily: the new one starts in *Stopped*. Such a
   reload cancels a start in progress; its requests get `502` (spec 5.6).
 - `wsp_tunnel_up{tunnel}` is `1` while the device runs and the last
@@ -545,10 +547,14 @@ Requests go down the layers, responses travel back up.
   `/c/` and `/r/` request (status, bytes, `route.Trace` of its upstream
   requests); when the request ends, `Server.requestFinished` hands the
   finished request to its consumers: the timing histograms
-  (`wsp_upstream_phase_seconds`) and the debug line. The tunnel manager
+  (`wsp_upstream_phase_seconds`), the debug line and, while the debug
+  listener is on, a fixed ring of the last 256 requests
+  (`/debug/requests`). The tunnel manager
   reports each successful start (`wsp_tunnel_start_seconds`); the tunnel
   gauges are read from the tunnels at scrape time, so nothing polls the
-  devices. `/healthz` only says that the process serves.
+  devices. `/healthz` only says that the process serves. The debug
+  endpoints (profiler, recent requests, tunnel states and cool-down) run
+  on their own listener, never on the main one (spec 7.1).
 
 ### 7.2 Channels, routes and tunnels
 
@@ -827,14 +833,14 @@ together at run time.
 
 | Package | Role | Status |
 |---|---|---|
-| `cmd/wg-stream-proxy` | Subcommand dispatch; `serve`, `check`, `import`, `healthcheck`, `epg` and `version` work | exists |
+| `cmd/wg-stream-proxy` | Subcommand dispatch; `serve`, `check`, `import`, `healthcheck`, `epg`, `tunnel` and `version` work | exists |
 | `internal/config` | Config dir resolution (`Resolve`), loading and validation of `config.toml` and channel files (`Load`), slugs (`Slug`), route resolution | exists |
 | `internal/config/wgquick` | Tunnel file parser (`Parse`), UAPI conversion (`UAPIConfig`), `AllowedIPs` check (`Allows`) | exists |
 | `internal/hls` | Type detection (`Detect`), playlist rewriter (`Rewrite`), signed `/r/` URLs (`Signer`), signing key (`LoadSigningKey`); pure functions, no I/O | exists |
-| `internal/tunnel` | One `wireguard-go` device + gVisor netstack per tunnel, DNS inside the tunnel, lazy start ([#11](https://github.com/KingOfKalk/wg-stream-proxy/issues/11)); idle close and drain ([#16](https://github.com/KingOfKalk/wg-stream-proxy/issues/16)); reload (`Manager.Apply`) | exists |
+| `internal/tunnel` | One `wireguard-go` device + gVisor netstack per tunnel, DNS inside the tunnel, lazy start ([#11](https://github.com/KingOfKalk/wg-stream-proxy/issues/11)); idle close and drain ([#16](https://github.com/KingOfKalk/wg-stream-proxy/issues/16)); reload (`Manager.Apply`); state snapshots and cool-down (`Manager.Cooldown`, [#68](https://github.com/KingOfKalk/wg-stream-proxy/issues/68)) | exists |
 | `internal/tunnel/netstack` | Trimmed copy of wireguard-go's `tun/netstack` (MIT) that drops packets sent after `Close` ([#47](https://github.com/KingOfKalk/wg-stream-proxy/issues/47), spec 9) | exists |
 | `internal/route` | One route per tunnel plus `direct`, `http.Transport` settings, guard, upstream header rules, timeouts, status mapping ([#12](https://github.com/KingOfKalk/wg-stream-proxy/issues/12)); raw and ICY ([#15](https://github.com/KingOfKalk/wg-stream-proxy/issues/15)). Defines the `Network` interface (resolve + dial a resolved `IP:port`) that tunnels and `direct` implement | exists |
-| `internal/server` | `/playlist.m3u8`, `/c/`, `/r/`, `/healthz`, absolute URL base, graceful shutdown (`Run`) ([#14](https://github.com/KingOfKalk/wg-stream-proxy/issues/14)); `/logos/`, `healthcheck` ([#19](https://github.com/KingOfKalk/wg-stream-proxy/issues/19)); `/metrics` ([#18](https://github.com/KingOfKalk/wg-stream-proxy/issues/18)); `SIGHUP` reload (`Reloader`) | exists |
+| `internal/server` | `/playlist.m3u8`, `/c/`, `/r/`, `/healthz`, absolute URL base, graceful shutdown (`Run`) ([#14](https://github.com/KingOfKalk/wg-stream-proxy/issues/14)); `/logos/`, `healthcheck` ([#19](https://github.com/KingOfKalk/wg-stream-proxy/issues/19)); `/metrics` ([#18](https://github.com/KingOfKalk/wg-stream-proxy/issues/18)); `SIGHUP` reload (`Reloader`); debug endpoints on their own listener ([#68](https://github.com/KingOfKalk/wg-stream-proxy/issues/68)) | exists |
 | `internal/playlist` | Renders the channel list (spec 6) | exists |
 | `internal/metrics` | Private Prometheus registry with the `wsp_` metrics (spec 7.3) and the Go and process metrics; tunnel gauges read at scrape time ([#18](https://github.com/KingOfKalk/wg-stream-proxy/issues/18)) | exists |
 | `internal/importer` | `import` of an existing M3U file (spec 7.2), `--match-epg` with an `epg.Index`; pure function, no I/O | exists |

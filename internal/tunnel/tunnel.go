@@ -356,6 +356,9 @@ type Tunnel struct {
 	idleGen uint64
 	// onStop is called when the running device stops.
 	onStop func()
+	// draining counts the drains (Drain, Cooldown, reload) waiting for
+	// the requests before they stop the device.
+	draining atomic.Int32
 
 	lastActivity atomic.Int64 // unix nanoseconds, 0 = never
 	starts       atomic.Int64 // devices created, for tests

@@ -20,6 +20,7 @@ type dump struct {
 	Paths           Paths
 	LogosDir        string
 	Listen          string
+	DebugListen     string
 	LogLevel        string
 	LogFormat       LogFormat
 	PublicBaseURL   string
@@ -54,6 +55,7 @@ func dumpConfig(c *Config) dump {
 		Paths:         c.Paths(),
 		LogosDir:      c.LogosDir(),
 		Listen:        c.Listen(),
+		DebugListen:   c.DebugListen(),
 		LogLevel:      c.LogLevel().String(),
 		LogFormat:     c.LogFormat(),
 		PublicBaseURL: c.PublicBaseURL(),
@@ -178,6 +180,12 @@ func TestLoadErrors(t *testing.T) {
 		{"public base url", map[string]string{"config.toml": "public_base_url = \"wsp.lan\"\n"}, []string{"public_base_url: must be an absolute http(s) URL"}},
 		{"epg url", map[string]string{"config.toml": "[epg]\nurl = \"ftp://example.com/epg.xml\"\n"}, []string{"epg.url: must be an absolute http(s) URL"}},
 		{"user agent line break", map[string]string{"config.toml": "[upstream]\nuser_agent = \"a\\nb\"\n"}, []string{"upstream.user_agent: must not contain line breaks"}},
+		{"debug listen", map[string]string{"config.toml": "[debug]\nlisten = \"nope\"\n"}, []string{"config.toml: debug.listen: invalid address \"nope\": use [host]:port"}},
+		{"debug listen port name", map[string]string{"config.toml": "[debug]\nlisten = \"127.0.0.1:http\"\n"}, []string{"debug.listen: invalid address"}},
+		{"debug listen on the default port", map[string]string{"config.toml": "[debug]\nlisten = \"127.0.0.1:2349\"\n"}, []string{"config.toml: debug.listen: must not use the port of listen (2349)"}},
+		{"debug listen on the listen port", map[string]string{"config.toml": "listen = \"192.0.2.1:8080\"\n[debug]\nlisten = \"127.0.0.1:8080\"\n"}, []string{"debug.listen: must not use the port of listen (8080)"}},
+		{"debug listen equal to listen", map[string]string{"config.toml": "listen = \"127.0.0.1:8080\"\n[debug]\nlisten = \"127.0.0.1:8080\"\n"}, []string{"debug.listen: must not use the port of listen (8080)"}},
+		{"unknown debug key", map[string]string{"config.toml": "[debug]\npprof = true\n"}, []string{"unknown key \"debug.pprof\""}},
 		{"allow_private unknown route", map[string]string{"config.toml": "[upstream.allow_private]\nxx = [\"10.0.0.0/8\"]\n"}, []string{"upstream.allow_private.xx: unknown route \"xx\""}},
 		{"allow_private no prefix", map[string]string{"config.toml": "[upstream.allow_private]\ndirect = [\"10.0.0.1\"]\n"}, []string{"upstream.allow_private.direct: invalid prefix \"10.0.0.1\""}},
 		{"allow_private host bits", map[string]string{"config.toml": "[upstream.allow_private]\ndirect = [\"10.0.0.1/24\"]\n"}, []string{"upstream.allow_private.direct: \"10.0.0.1/24\" has host bits set, use \"10.0.0.0/24\""}},
@@ -346,6 +354,18 @@ func TestLoadOverrides(t *testing.T) {
 	}
 	if cfg.Listen() != "127.0.0.1:2000" || cfg.LogLevel().String() != "DEBUG" || cfg.LogFormat() != LogFormatText || cfg.PublicBaseURL() != "https://b.example.com" {
 		t.Errorf("overrides not applied: %+v", dumpConfig(cfg))
+	}
+
+	// [debug] listen is checked against the listen address in effect.
+	dbg := writeConfigDir(t, map[string]string{"config.toml": "[debug]\nlisten = \"127.0.0.1:2350\"\n"})
+	dbgPaths := Paths{ConfigDir: dbg, TunnelsDir: filepath.Join(dbg, "tunnels")}
+	cfg, err = Load(Options{Paths: dbgPaths, Overrides: Overrides{Listen: ":2351"}})
+	if err != nil || cfg.DebugListen() != "127.0.0.1:2350" {
+		t.Errorf("Load() error = %v; want debug listen 127.0.0.1:2350", err)
+	}
+	_, err = Load(Options{Paths: dbgPaths, Overrides: Overrides{Listen: ":2350"}})
+	if err == nil || !strings.Contains(err.Error(), "debug.listen: must not use the port of listen (2350)") {
+		t.Errorf("Load() error = %v, want debug listen conflict with the listen override", err)
 	}
 
 	_, err = Load(Options{Paths: paths, Overrides: Overrides{LogLevel: "loud"}})

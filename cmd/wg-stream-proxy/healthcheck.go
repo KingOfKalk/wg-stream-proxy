@@ -76,10 +76,15 @@ func (c *cli) probe(target string) error {
 	return nil
 }
 
-// healthcheckURL returns the /healthz URL for a listen address. An
-// unspecified host (":2349", "0.0.0.0", "::") means the loopback
-// interface of the same family.
+// healthcheckURL returns the /healthz URL for a listen address.
 func healthcheckURL(listen string) (string, error) {
+	return localURL(listen, "/healthz")
+}
+
+// localURL returns the http URL of path on a listen address of this
+// host. An unspecified host (":2349", "0.0.0.0", "::") means the loopback
+// interface of the same family.
+func localURL(listen, path string) (string, error) {
 	host, port, err := net.SplitHostPort(listen)
 	if err != nil {
 		return "", fmt.Errorf("listen address %q: %w", listen, err)
@@ -90,7 +95,7 @@ func healthcheckURL(listen string) (string, error) {
 	case "::":
 		host = "::1"
 	}
-	return "http://" + net.JoinHostPort(host, port) + "/healthz", nil
+	return "http://" + net.JoinHostPort(host, port) + path, nil
 }
 
 // firstLine returns the first line of an error message; config errors

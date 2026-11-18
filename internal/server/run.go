@@ -22,9 +22,9 @@ const (
 	// requests get this long before their connections are closed (spec
 	// 2.1, drain on shutdown).
 	DefaultShutdownTimeout = 30 * time.Second
-	// reloadDrainTimeout bounds the drain of a tunnel a reload changed or
-	// removed (spec 2.1).
-	reloadDrainTimeout = 30 * time.Second
+	// tunnelDrainTimeout bounds the drain of a tunnel a reload changed or
+	// removed (spec 2.1), and of a cool-down (spec 7.1).
+	tunnelDrainTimeout = 30 * time.Second
 	// readHeaderTimeout bounds reading a player's request headers. There
 	// is no write timeout: streams have no time limit (spec 9).
 	readHeaderTimeout = 10 * time.Second
@@ -45,6 +45,10 @@ type RunOptions struct {
 	// Listener accepts player connections, normally on Config.Listen().
 	// Required. Run closes it.
 	Listener net.Listener
+	// DebugListener, if set, serves the debug endpoints (spec 7.1),
+	// normally on Config.DebugListen(), and turns on the buffer of recent
+	// requests. nil: no debug endpoints. Run closes it.
+	DebugListener net.Listener
 	// ShutdownTimeout bounds the graceful shutdown; 0 means
 	// DefaultShutdownTimeout.
 	ShutdownTimeout time.Duration
@@ -82,6 +86,9 @@ func Run(ctx context.Context, opts RunOptions) (err error) {
 	defer func() {
 		if err != nil {
 			_ = opts.Listener.Close()
+			if opts.DebugListener != nil {
+				_ = opts.DebugListener.Close()
+			}
 		}
 	}()
 	switch {
@@ -132,7 +139,14 @@ func Run(ctx context.Context, opts RunOptions) (err error) {
 	if err != nil {
 		return err
 	}
-	srv, err := New(Options{Config: cfg, Routes: routes, Signer: opts.Signer, Logger: log, Version: opts.Version, Metrics: met})
+	recent := 0
+	if opts.DebugListener != nil {
+		recent = recentRequestsSize
+	}
+	srv, err := New(Options{
+		Config: cfg, Routes: routes, Signer: opts.Signer, Logger: log, Version: opts.Version, Metrics: met,
+		RecentRequests: recent,
+	})
 	if err != nil {
 		return err
 	}
@@ -153,6 +167,12 @@ func Run(ctx context.Context, opts RunOptions) (err error) {
 	served := make(chan error, 1)
 	go func() { served <- hs.Serve(opts.Listener) }()
 	log.Info("serving", "addr", opts.Listener.Addr().String(), "channels", len(cfg.Channels()), "tunnels", len(cfg.Tunnels()))
+	var dbg *debugServer
+	if opts.DebugListener != nil {
+		dbg = startDebug(opts.DebugListener, &debugHandler{srv: srv, mgr: mgr, drainTimeout: tunnelDrainTimeout}, log)
+		// Before the tunnels close: a cool-down in progress has returned.
+		defer dbg.stop()
+	}
 
 	select {
 	case err := <-served:
@@ -170,6 +190,11 @@ func Run(ctx context.Context, opts RunOptions) (err error) {
 		opts.Reloader.attach(nil)
 	}
 	log.Info("shutting down", "timeout", timeout.String())
+	if dbg != nil {
+		// Debug requests (profiles) end at once; a cool-down in progress
+		// ends with the tunnels.
+		dbg.close()
+	}
 	deadline := time.Now().Add(timeout)
 	sctx, cancel := context.WithDeadline(context.Background(), deadline)
 	defer cancel()

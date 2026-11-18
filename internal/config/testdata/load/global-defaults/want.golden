@@ -5,6 +5,7 @@
   },
   "LogosDir": "testdata/load/global-defaults/config/assets/logos",
   "Listen": ":2349",
+  "DebugListen": "",
   "LogLevel": "INFO",
   "LogFormat": "text",
   "PublicBaseURL": "",

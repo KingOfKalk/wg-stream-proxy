@@ -55,7 +55,7 @@ wg-stream-proxy
   - Lazy start on the first request; concurrent first requests share one start.
   - Closed after `[tunnels] idle_timeout` (default `60m`) without activity. Activity = any in-flight request or open stream; the idle time runs from the end of the last one. Pooled idle upstream connections are not activity and close with the tunnel; the next request starts it again.
   - Start failure or no handshake within `[upstream] connect_timeout`: request fails with `502`; the next request retries. Start, tunnel DNS and connect share one `connect_timeout` deadline.
-  - On shutdown or reload removal: drain in-flight requests for max 30s, then close.
+  - On shutdown, reload removal or cool-down (7.1): drain in-flight requests for max 30s, then close.
 - `direct` uses a plain `http.Transport` on the host network with the same settings.
 
 ## 3. Stream handling
@@ -179,9 +179,12 @@ idle_timeout = "60m"
 
 [epg]
 url = "https://ext.greektv.app/epg/epg.xml.gz"  # optional, no default
+
+[debug]
+listen = ""                           # off; e.g. "127.0.0.1:2350" (7.1)
 ```
 
-Unknown keys and wrong value types are config errors. Values are validated: `listen` is `[host]:port` with a numeric port; durations are positive; `max_playlist_size` is a whole number directly followed by `B`, `KiB` or `MiB`, positive and at most `32MiB`; `public_base_url` and `epg.url` are empty or absolute `http(s)` URLs; `user_agent` has no line breaks; `allow_private` keys are `direct` or existing tunnel names, values are CIDR prefixes without host bits.
+Unknown keys and wrong value types are config errors. Values are validated: `listen` is `[host]:port` with a numeric port; `debug.listen` is empty or of the same form, with a port other than the one of `listen` (as in effect after flag and environment); durations are positive; `max_playlist_size` is a whole number directly followed by `B`, `KiB` or `MiB`, positive and at most `32MiB`; `public_base_url` and `epg.url` are empty or absolute `http(s)` URLs; `user_agent` has no line breaks; `allow_private` keys are `direct` or existing tunnel names, values are CIDR prefixes without host bits.
 
 ### 5.4 Channel files (`channels.d/*.toml`)
 
@@ -260,7 +263,7 @@ url = "https://daserste-live.ard-mcdn.de/daserste/live/hls/de/master.m3u8"
 - Unchanged tunnels (same parsed content; comments and formatting do not count) keep running; changed or removed tunnels are drained (2.1) and recreated lazily.
 - A route (`direct` or a tunnel) keeps its pooled upstream connections only if its network, its `allow_private` entries and the whole `[upstream]` block are unchanged; otherwise new requests use a new route and the old route's idle connections are closed, while an unchanged tunnel keeps running.
 - A reload that changes or removes a tunnel which is still starting cancels the start; requests waiting for it get `502`; the new tunnel starts lazily on the next request.
-- Restart required for: `listen`, `log_format`, signing key, tunnels dir location. A reload that changes one of them logs a warning and keeps the old value.
+- Restart required for: `listen`, `debug.listen`, `log_format`, signing key, tunnels dir location. A reload that changes one of them logs a warning and keeps the old value.
 - A successful reload logs one info line `reloaded` with the channel and tunnel counts, `channels_added`, `channels_changed` and `channels_removed` (counts; changed means any difference of the merged channel config, comments, formatting and order do not count) and `tunnels_added`, `tunnels_changed` and `tunnels_removed` (names); a reload that changes nothing logs the same line with zeros. At debug level a second line lists the ids of the added, changed and removed channels; no line contains URLs.
 
 ## 6. Channel list
@@ -296,6 +299,21 @@ http://wsp.lan:2349/c/ert-world.m3u8
 Absolute URLs in responses use `public_base_url`, else `X-Forwarded-Proto` / `X-Forwarded-Host`, else the request `Host`.
 Of `X-Forwarded-Proto` / `X-Forwarded-Host` only the first comma-separated value counts; each replaces the scheme or host on its own, and invalid values (scheme other than `http`/`https`, host with characters outside `[A-Za-z0-9.:_[]-]`) are ignored. Without a usable `Host`, the local address of the connection is used.
 
+#### Debug endpoints
+
+Served only on their own listener `debug.listen` (5.3), off by default and never on `listen`; no authentication (8). Unsafe methods from a browser page of another origin (`Sec-Fetch-Site`, `Origin`) are rejected with `403`.
+
+| Path | Description |
+|---|---|
+| `/debug/pprof/…` | Go profiler (`net/http/pprof`: index, `profile`, `heap`, `goroutine`, `trace`, …) |
+| `GET /debug/requests` | JSON `{"requests": [...]}`: the last 256 finished `/c/` and `/r/` requests, newest first |
+| `GET /debug/tunnels` | JSON `{"tunnels": [...]}`: per configured tunnel, sorted by name |
+| `POST /debug/tunnels/{name}/stop` | Cool-down of a tunnel |
+
+- `/debug/requests`: the fields of the debug line (8): `id`, `time` (start of the request, RFC 3339), `method`, `channel`, `route`, `kind`, `status`, `bytes`, `client_gone`, `upstream_status` and `reason` (omitted without), `tunnel_start_ms` (only if the request waited for a tunnel start), `dns_ms`, `connect_ms`, `connect_attempts`, `tls_ms`, `ttfb_ms`, `total_ms`, `conn_reused`, `redirects`, `url`. Durations in milliseconds, to the microsecond; `url` as in the log (8: scheme, host, file name). A request is recorded when it ends (a stream: when it closes), at every log level, while the debug listener is on; the buffer has a fixed size and never grows.
+- `/debug/tunnels`: `name`, `state` (`stopped`, `starting`, `running`, `draining`), `started_at` (first handshake of the running device) and `last_handshake` (RFC 3339, omitted while no device runs), `active_requests`.
+- Cool-down: the tunnel is drained like a reload removal (2.1: open streams finish, or the 30s drain timeout cuts them; requests arriving meanwhile use the running device), then its device stops, the route's pooled connections close and its DNS cache is emptied; `tunnel closed reason=cooldown` is logged and the next request starts it cold. The answer comes when the tunnel is stopped: `200` with `{"name": "<name>", "was_running": true}`; for a tunnel that was not running nothing changes and `was_running` is `false`. Unknown tunnel (also `direct`): `404`; other methods: `405`.
+
 ### 7.2 CLI
 
 ```
@@ -305,6 +323,8 @@ wg-stream-proxy import <file.m3u> [--tunnel T] [--match-epg [--config-dir DIR]] 
 wg-stream-proxy epg ids               # list id and display-name from epg.url (config flags as for check)
 wg-stream-proxy epg match             # suggest tvg_id per channel, print TOML, write nothing
 wg-stream-proxy healthcheck           # GET /healthz on the listen address, exit 0/1
+wg-stream-proxy tunnel list           # tunnels and their state, from the debug endpoints (7.1)
+wg-stream-proxy tunnel stop <name>    # cool-down of a tunnel (7.1)
 wg-stream-proxy version               # print version and source URL (AGPL section 13)
 ```
 
@@ -313,6 +333,8 @@ wg-stream-proxy version               # print version and source URL (AGPL secti
 `check` also parses the tunnel files and the signing key variables (4), lists every error found and starts nothing.
 
 `healthcheck` resolves the config like `serve` (same flags and environment), sends `GET /healthz` to the listen address (an unspecified host such as `:2349` or `0.0.0.0` becomes `127.0.0.1`, `[::]` becomes `[::1]`) with a 3s timeout, follows no redirect and prints nothing on `200` (exit 0). Any other result, a connection error or an invalid config prints one line to stderr and exits 1. It needs no shell or curl, so it serves as the `HEALTHCHECK` of the container image.
+
+`tunnel list` and `tunnel stop <name>` resolve the config like `healthcheck` and call the debug endpoints (7.1) on `debug.listen` (unspecified host as for `healthcheck`), so they work through `docker exec` in the image. `list` (`GET /debug/tunnels`, 3s timeout) prints a table: name, state, active requests, start and last handshake time. `stop` (`POST /debug/tunnels/{name}/stop`, 45s timeout, covering the drain) waits until the tunnel is stopped and prints `tunnel <name> stopped`, or `tunnel <name> was not running`. The name may stand before or after the flags. Debug listener off, unknown tunnel, a connection error or another status: one line on stderr, exit 1; usage errors (missing or invalid name): exit 2.
 
 `import`:
 - Input: UTF-8 (invalid bytes become U+FFFD with a warning), optional BOM, lines end at LF, CRLF or CR; lines with control characters other than tab are dropped with a warning.
@@ -362,6 +384,7 @@ Only `/c/` and `/r/` requests of enabled channels count; `channel` is the channe
 - Intended for LAN use; exposure to the internet needs an authenticating reverse proxy.
 - WireGuard keys only in tunnel files and never logged; upstream URLs (in log lines and in error messages) are logged as scheme, host and file name only, e.g. `https://cdn.example.com/…/7.m3u8`: no user info, query string, fragment or other path segment, because CDNs put session ids and tokens there. The file name is reduced like `{name}` (spec 4); a URL without path shows scheme and host only.
 - Debug log (`log_level = "debug"`): one `request` line per `/c/` and `/r/` request when it ends, with request id, channel, route, kind, client status and bytes, client disconnect, upstream status and error reason, and where the time went: `tunnel_start` (only if the request waited for a tunnel start), `dns`, `connect` (Happy-Eyeballs fallback included), `tls`, `ttfb` (first upstream byte), `total`; drain waits and retired tunnels; wireguard-go's own events (handshakes, keepalives, retries) with the peer shown by tunnel name. Tunnel start (with handshake), start failure and close lines carry their durations at every level. The log never contains keys, key fragments, query strings or upstream paths beyond the file name. Above debug the debug lines cost only a level check; the timing behind them is collected at every level for the timing metrics (7.3).
+- Debug endpoints (7.1): off by default, on their own listener, without authentication. Bind them to loopback (e.g. `127.0.0.1:2350`, used through `docker exec … tunnel`) or at most the LAN, never beyond: the profiler exposes process internals (memory, goroutine stacks, command line), and whoever reaches the port can cool tunnels down. `/debug/requests` holds no keys, tokens, query strings or upstream paths beyond the file name (the same reduction as the log).
 - Container: non-root, read-only root filesystem, all capabilities dropped, single replica. Details: [deploy.md](deploy.md).
 
 ## 9. Engineering rules

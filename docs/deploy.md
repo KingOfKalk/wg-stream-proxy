@@ -112,6 +112,42 @@ histogram_quantile(0.95, sum by (le, tunnel) (rate(wsp_tunnel_start_seconds_buck
 
 A request that streams (a radio channel, a TS stream) is recorded when it closes, so its phases show up after the stream ends.
 
+## Debug endpoints
+
+Profiles, the last 256 requests with their timings, the tunnels' state and an on-demand cool-down of a tunnel, without restarting the proxy ([spec 7.1](spec.md)). Off by default; enable them in `config.toml` and restart (a reload does not open or move the listener):
+
+```toml
+[debug]
+listen = "127.0.0.1:2350"
+```
+
+The endpoints have no authentication (spec 8): keep them on loopback, or at most on the LAN, never on a port reachable from the internet.
+
+In Docker, loopback means inside the container: nothing is published, and the CLI reaches it through `docker exec` (the image has no shell or curl; the command reads `[debug] listen` like `healthcheck` reads `listen`):
+
+```bash
+docker exec wg-stream-proxy /wg-stream-proxy tunnel list
+docker exec wg-stream-proxy /wg-stream-proxy tunnel stop gr
+```
+
+`tunnel stop` drains the tunnel (open streams finish, or are cut after 30 s), stops it and returns; the log shows `tunnel closed reason=cooldown`. The next request starts it cold, so a cold start can be measured without waiting for `idle_timeout`: stop the tunnel, play a channel, then read `tunnel started … duration=…` in the log or `tunnel_start_ms` in `/debug/requests`.
+
+For `go tool pprof` from another machine, listen on all interfaces inside the container and publish the port on the host's LAN address only (here `192.168.1.10`):
+
+```toml
+[debug]
+listen = "0.0.0.0:2350"
+```
+
+```bash
+docker run … -p 2349:2349 -p 192.168.1.10:2350:2350 …
+go tool pprof http://192.168.1.10:2350/debug/pprof/profile?seconds=30   # CPU, 30 s
+go tool pprof http://192.168.1.10:2350/debug/pprof/heap                 # memory
+curl -s http://192.168.1.10:2350/debug/requests                         # recent requests, JSON
+```
+
+In Compose, add `"192.168.1.10:2350:2350"` to `ports`. Remove the port again when done.
+
 ## systemd (Later)
 
 `deploy/systemd/wg-stream-proxy.service`:

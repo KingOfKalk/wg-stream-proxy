@@ -27,6 +27,9 @@ type rawConfig struct {
 	EPG struct {
 		URL *string `toml:"url"`
 	} `toml:"epg"`
+	Debug struct {
+		Listen *string `toml:"listen"`
+	} `toml:"debug"`
 }
 
 type rawSettings struct {

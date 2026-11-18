@@ -126,13 +126,16 @@ func (l *requestRecord) finish(r *http.Request, ch config.Channel, rq *metrics.R
 
 // requestFinished is the one place where a finished /c/ or /r/ request is
 // handed on, at every log level and for every outcome. Its consumers are
-// the timing metrics and the debug line; a new consumer (such as a buffer
-// of recent requests) is one more call here. Consumers must not keep
+// the timing metrics, the debug line and, while the debug listener is on,
+// the buffer of recent requests (/debug/requests). Consumers must not keep
 // references into fr that they do not own, and must be cheap: the call
 // runs in the request's goroutine.
 func (s *Server) requestFinished(fr finishedRequest) {
 	s.observePhases(fr)
 	s.logRequest(fr)
+	if s.recent != nil {
+		s.recent.add(fr)
+	}
 }
 
 // observePhases records the phases of an upstream request that happened:

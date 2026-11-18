@@ -151,6 +151,18 @@ func (c *Config) applySettings(raw rawConfig, src string, ov Overrides, routes m
 		}
 	}
 
+	if v := raw.Debug.Listen; v != nil && *v != "" {
+		c.debugListen = *v
+		switch {
+		case !validListen(*v):
+			fail("debug.listen", src, "invalid address %q: use [host]:port", *v)
+		case validListen(c.listen) && samePort(*v, c.listen):
+			// Never on the main port (spec 5.3).
+			_, port, _ := net.SplitHostPort(c.listen)
+			fail("debug.listen", src, "must not use the port of listen (%s)", port)
+		}
+	}
+
 	if raw.EPG.URL != nil && *raw.EPG.URL != "" {
 		if !httpURL(*raw.EPG.URL) {
 			fail("epg.url", src, "must be an absolute http(s) URL")
@@ -201,4 +213,14 @@ func httpURL(s string) bool {
 // hasLineBreak reports whether s contains CR or LF.
 func hasLineBreak(s string) bool {
 	return strings.ContainsAny(s, "\r\n")
+}
+
+// samePort reports whether two valid listen addresses have the same port
+// other than 0 (port 0 picks a free port).
+func samePort(a, b string) bool {
+	_, pa, _ := net.SplitHostPort(a)
+	_, pb, _ := net.SplitHostPort(b)
+	na, _ := strconv.ParseUint(pa, 10, 16)
+	nb, _ := strconv.ParseUint(pb, 10, 16)
+	return na != 0 && na == nb
 }
