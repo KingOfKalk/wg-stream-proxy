@@ -16,7 +16,8 @@ import (
 	"time"
 
 	"golang.org/x/net/dns/dnsmessage"
-	"golang.zx2c4.com/wireguard/tun/netstack"
+
+	"github.com/KingOfKalk/wg-stream-proxy/internal/tunnel/netstack"
 )
 
 // dnsRetryDelays is the time from one attempt of a DNS query to the next

@@ -29,9 +29,9 @@ import (
 	"golang.org/x/net/dns/dnsmessage"
 	"golang.zx2c4.com/wireguard/conn"
 	"golang.zx2c4.com/wireguard/device"
-	"golang.zx2c4.com/wireguard/tun/netstack"
 
 	"github.com/KingOfKalk/wg-stream-proxy/internal/config/wgquick"
+	"github.com/KingOfKalk/wg-stream-proxy/internal/tunnel/netstack"
 )
 
 // Default addresses, from the documentation ranges (RFC 5737, RFC 3849).

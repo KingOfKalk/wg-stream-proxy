@@ -136,6 +136,11 @@ dependencies weekly ([`.github/dependabot.yml`](.github/dependabot.yml)):
   Major updates stay open for review.
 - gVisor is excluded from automatic updates; it moves together with
   `wireguard-go` ([spec 9](docs/spec.md#9-engineering-rules)).
+- `internal/tunnel/netstack` is a patched copy of `wireguard-go`'s
+  `tun/netstack`. Dependabot cannot see it: when a `wireguard-go` update
+  arrives, compare upstream `tun/netstack` at the new commit with the
+  copy, port relevant changes and update the commit in its header
+  ([spec 9](docs/spec.md#9-engineering-rules)).
 
 ## Releases
 

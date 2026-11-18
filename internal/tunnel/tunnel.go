@@ -35,10 +35,10 @@ import (
 	"golang.org/x/net/dns/dnsmessage"
 	"golang.zx2c4.com/wireguard/conn"
 	"golang.zx2c4.com/wireguard/device"
-	"golang.zx2c4.com/wireguard/tun/netstack"
 
 	"github.com/KingOfKalk/wg-stream-proxy/internal/config"
 	"github.com/KingOfKalk/wg-stream-proxy/internal/config/wgquick"
+	"github.com/KingOfKalk/wg-stream-proxy/internal/tunnel/netstack"
 )
 
 // DefaultIPv6ConnectTimeout is the default for Options.IPv6ConnectTimeout.
@@ -355,7 +355,9 @@ type running struct {
 }
 
 // close closes the device. Every stop (failed start, idle close, drain,
-// Close) ends here, so the close sequence lives in one place (#47).
+// Close) ends here. gVisor may still send packets while the netstack
+// closes; the netstack copy in ./netstack drops them instead of
+// panicking (#47).
 func (r *running) close() {
 	r.dev.Close()
 }
