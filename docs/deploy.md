@@ -29,6 +29,8 @@ Image: `ghcr.io/kingofkalk/wg-stream-proxy` (public), base `distroless/static:no
 
 There is no `latest` tag: pin a version tag.
 
+Retention: after every push to `main`, the `Prune` job keeps all `edge` and `X.Y.Z` / `X.Y` versions and the 10 newest `sha-<commit>` versions and deletes older ones. Images carry no provenance or SBOM attestations, so an index lists only `linux/amd64` and `linux/arm64`.
+
 - Entry point `/wg-stream-proxy`, default command `serve`; other commands as arguments (`docker run --rm … check`).
 - Config dir `/etc/wg-stream-proxy` (`WG_STREAM_PROXY_CONFIG_DIR`), port 2349.
 - `HEALTHCHECK`: `wg-stream-proxy healthcheck` every 30s (every 1s for the first 30s). It loads the config like `serve` but does not see `serve` flags: set options in `config.toml` or as env vars (e.g. `WG_STREAM_PROXY_LISTEN`).

@@ -24,6 +24,7 @@ env:
 # Required check in the main ruleset (job name): Container.
 # Publish runs only on push to main (tag edge) and on published releases
 # (version tags), never on pull requests.
+# Prune (not required) deletes old image versions after a push to main.
 #
 # docker buildx CLI instead of docker/* actions: only GitHub-owned actions
 # are allowed. The Dockerfile cross-compiles in a builder stage on the
@@ -51,6 +52,7 @@ jobs:
         run: |
           docker buildx build --platform "$PLATFORMS" \
             --build-arg VERSION="$VERSION" --build-arg REVISION="$GITHUB_SHA" \
+            --provenance=false --sbom=false \
             -t wg-stream-proxy:ci .
       # Only amd64 runs in the smoke test; check that every platform's
       # image holds a binary for its architecture (ELF e_machine).
@@ -125,10 +127,13 @@ jobs:
           for tag in $TAGS; do
             args+=(-t "${IMAGE}:${tag}")
           done
+          # No provenance/SBOM attestations: they add two unknown/unknown
+          # manifests to every index.
           # Index annotations: ghcr.io shows these for multi-arch images and
           # links the package to this repository.
           docker buildx build --platform "$PLATFORMS" \
             --build-arg VERSION="$VERSION" --build-arg REVISION="$GITHUB_SHA" \
+            --provenance=false --sbom=false \
             --annotation "index:org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
             --annotation "index:org.opencontainers.image.description=Routes IPTV streams through userspace WireGuard tunnels and serves them as one M3U8 playlist." \
             --annotation "index:org.opencontainers.image.licenses=AGPL-3.0-or-later" \
@@ -149,3 +154,30 @@ jobs:
               echo "| \`${IMAGE}:${tag}\` | \`${VERSION}\` | \`${digest}\` |"
             done
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # Retention, see .github/scripts/prune-ghcr.sh. Not a required check; it
+  # runs only after a push to main, never on pull requests or releases.
+  prune:
+    name: Prune
+    needs: publish
+    if: github.event_name == 'push'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Log in to ghcr.io
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin <<< "$GH_TOKEN"
+      - name: Prune old versions
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: .github/scripts/prune-ghcr.sh
+      - name: Log out
+        if: always()
+        run: docker logout ghcr.io
