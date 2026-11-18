@@ -146,7 +146,7 @@ go tool pprof http://192.168.1.10:2350/debug/pprof/heap                 # memory
 curl -s http://192.168.1.10:2350/debug/requests                         # recent requests, JSON
 ```
 
-In Compose, add `"192.168.1.10:2350:2350"` to `ports`. Remove the port again when done.
+Use the IP address, not a host name such as `libreelec.local`: the debug listener answers other host names with `403` (protection against DNS rebinding). In Compose, add `"192.168.1.10:2350:2350"` to `ports`. Remove the port again when done.
 
 ## systemd (Later)
 
