@@ -105,7 +105,7 @@ Resources under `/r/` use the same detection (steps 2.2-2.4): playlists are rewr
 - Response headers copied to the client: `Content-Type`, `Content-Range`, `Accept-Ranges`, `Cache-Control`, `Last-Modified`, `icy-*`; `Content-Length` and `ETag` only if the body is neither rewritten nor transparently decompressed.
 - Rewritten playlists: `Content-Type: application/vnd.apple.mpegurl`, uncompressed, `Cache-Control: no-cache`, status `200` (a playlist answered with `206` is refetched without `Range` and `If-Range`; another `206` gives `502`).
 - Status mapping: upstream `2xx` and `4xx` passed through; upstream `5xx`, other statuses (e.g. a `3xx` that is not followed) and connection errors return `502`; timeouts return `504`.
-- Limits: max 10 redirects (`301`, `302`, `303`, `307`, `308` with `Location`; each hop goes through the guard), playlist body max 2 MiB, upstream URL max 4096 bytes (redirect targets included).
+- Limits: max 10 redirects (`301`, `302`, `303`, `307`, `308` with `Location`; each hop goes through the guard), playlist body max `[upstream] max_playlist_size` (default 8 MiB, at most 32 MiB; a larger body gives `502`, metrics reason `size`), upstream URL max 4096 bytes (redirect targets included).
 - Timeouts (`[upstream]`): `connect_timeout` (10s), `header_timeout` until response headers (15s), `read_timeout` between body reads (30s, implemented as a resettable timer). No total timeout.
   - `connect_timeout` covers DNS lookup and TCP connect of one connection; running out counts as a connection error (`502`), like a tunnel without handshake (2.1).
   - `header_timeout` runs from the start of the request until the final response headers, across redirects; `504`.
@@ -168,6 +168,7 @@ user_agent = "Mozilla/5.0 (X11; Linux x86_64) Firefox/132.0"
 connect_timeout = "10s"
 header_timeout = "15s"
 read_timeout = "30s"
+max_playlist_size = "8MiB"            # B, KiB or MiB; at most 32MiB
 
 [upstream.allow_private]              # optional, per route name
 direct = []
@@ -179,7 +180,7 @@ idle_timeout = "60m"
 url = "https://ext.greektv.app/epg/epg.xml.gz"  # optional, no default
 ```
 
-Unknown keys and wrong value types are config errors. Values are validated: `listen` is `[host]:port` with a numeric port; durations are positive; `public_base_url` and `epg.url` are empty or absolute `http(s)` URLs; `user_agent` has no line breaks; `allow_private` keys are `direct` or existing tunnel names, values are CIDR prefixes without host bits.
+Unknown keys and wrong value types are config errors. Values are validated: `listen` is `[host]:port` with a numeric port; durations are positive; `max_playlist_size` is a whole number directly followed by `B`, `KiB` or `MiB`, positive and at most `32MiB`; `public_base_url` and `epg.url` are empty or absolute `http(s)` URLs; `user_agent` has no line breaks; `allow_private` keys are `direct` or existing tunnel names, values are CIDR prefixes without host bits.
 
 ### 5.4 Channel files (`channels.d/*.toml`)
 

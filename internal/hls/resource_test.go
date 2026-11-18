@@ -104,10 +104,10 @@ func TestResourceName(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.upstream, func(t *testing.T) {
-			if got := resourceName(tt.upstream); got != tt.want {
-				t.Errorf("resourceName(%q) = %q, want %q", tt.upstream, got, tt.want)
+			if got := string(appendResourceName([]byte("x"), []byte(tt.upstream))); got != "x"+tt.want {
+				t.Errorf("appendResourceName(%q) = %q, want %q", tt.upstream, got, "x"+tt.want)
 			}
-			if got := resourceName(tt.upstream); len(got) > 64 {
+			if got := appendResourceName(nil, []byte(tt.upstream)); len(got) > 64 {
 				t.Errorf("name %q longer than 64 bytes", got)
 			}
 		})
@@ -181,7 +181,7 @@ func TestSignerParseRejects(t *testing.T) {
 		{"newline in URL", join(channel, sig, b64[:10]+"\n"+b64[10:], name)},
 		{"carriage return in URL", join(channel, sig, b64[:10]+"\r"+b64[10:], name)},
 		{"newline in signature", join(channel, sig[:10]+"\n"+sig[11:], b64, name)},
-		{"empty URL", join(channel, s.sign(channel, ""), "", name)},
+		{"empty URL", join(channel, base64.RawURLEncoding.EncodeToString(s.mac(channel, "")), "", name)},
 		{"URL over limit", join("ch-1", tlSig, tlB64, "x")},
 		{"invalid channel chars", join("Ch-1", sig, b64, name)},
 		{"channel too long", join(strings.Repeat("c", 49), sig, b64, name)},
@@ -224,6 +224,9 @@ func TestSignerDoesNotPrintKey(t *testing.T) {
 	for _, format := range []string{"%v", "%+v", "%#v", "%s"} {
 		if out := fmt.Sprintf(format, s); out != "hls.Signer{key:redacted}" {
 			t.Errorf("Sprintf(%q, signer) = %q, want the key redacted", format, out)
+		}
+		if out := fmt.Sprintf(format, s.PathBuilder("a")); out != "hls.PathBuilder{key:redacted}" {
+			t.Errorf("Sprintf(%q, path builder) = %q, want the key redacted", format, out)
 		}
 	}
 }

@@ -47,6 +47,8 @@ type Upstream struct {
 	ConnectTimeout time.Duration
 	HeaderTimeout  time.Duration
 	ReadTimeout    time.Duration
+	// MaxPlaylistSize is the largest playlist body in bytes.
+	MaxPlaylistSize int64
 }
 
 // Tunnel is a tunnel file found in the tunnels dir. Its content is not

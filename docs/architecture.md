@@ -285,7 +285,8 @@ sequenceDiagram
 - Step 9: type detection (spec 3.1, `hls.Detect`): configured
   `upstream.type`, else `Content-Type`, else `#EXTM3U` at the start of the
   body, otherwise raw. Here: HLS, so `hls.Rewrite` replaces every
-  `http(s)` and relative URI with `/r/{channel}/{sig}/{b64url}/{name}` (`hls.Signer.Path`).
+  `http(s)` and relative URI with `/r/{channel}/{sig}/{b64url}/{name}`
+  (`hls.PathBuilder`, one HMAC state per playlist).
   Anything it cannot rewrite safely makes the whole playlist fail with
   `502` (fail closed, spec 3.2).
 - The rewrite is **stateless**: the player chooses variants and
@@ -525,7 +526,7 @@ Requests go down the layers, responses travel back up.
 |---|---|---|---|
 | 1 HTTP | Routing of the paths, absolute base URL, `/logos/` from disk, `/healthz`; graceful shutdown waits for running handlers | `internal/server`, `internal/playlist` | 6, 7.1 |
 | 2 Generation | The immutable `generation`: one `config.Config` plus the `route.Set` built for it, in an `atomic.Pointer`. Every request takes it once and keeps it to its end | `internal/server`, `internal/config` | 5.6 |
-| 3 Content | `Server.proxy`: fetch through the channel's route, then `hls.Detect`; playlists go through `hls.Rewrite` with `Signer.Path`, everything else through `stream` (`io.Copy` + flush). Status mapping, the `206` refetch | `internal/hls`, `internal/server` | 3.1-3.4, 4 |
+| 3 Content | `Server.proxy`: fetch through the channel's route, then `hls.Detect`; playlists go through `hls.Rewrite` with a `Signer.PathBuilder`, everything else through `stream` (`io.Copy` + flush). Status mapping, the `206` refetch | `internal/hls`, `internal/server` | 3.1-3.4, 4 |
 | 4 Routes | One `Route` per tunnel plus `direct`. `Fetch` applies the upstream header rules, redirects and timeouts; the route's `dial` resolves, runs `Guard.Check` and connects Happy-Eyeballs style. Two `http.Transport`s per route: the normal pool, and the ICY transport for `/c/` of raw and `auto` channels, which uses each connection for one request only | `internal/route` | 2.1, 3.3-3.5 |
 | 5 Tunnels | `tunnel.Manager` with one `Tunnel` per tunnel file: lazy start, idle close, drain, reload (`Apply`). `direct` is `route.Host()`: host resolver and dialer | `internal/tunnel`, `internal/tunnel/netstack`, `internal/config/wgquick` | 2.1, 5.5 |
 | 6 Host network | One UDP socket per running tunnel to its peer; plain TCP for `direct`. No TUN device, no routing table change | wireguard-go `conn` | 1.1, 2.1 |

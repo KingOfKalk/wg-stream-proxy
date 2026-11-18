@@ -269,7 +269,7 @@ wsp_upstream_errors_total{channel="radio",reason="timeout"} 1
 		},
 		{
 			name:   "rejected playlists",
-			config: allowLoopback,
+			config: allowLoopback + "\n[upstream]\nmax_playlist_size = \"2MiB\"\n",
 			run: func(t *testing.T, e *directEnv) {
 				// Auto channel /c/radio turns out to be a playlist.
 				e.up.add("/radio", file{ctype: mpegurl, body: "#EXTM3U\n\x00\n"})

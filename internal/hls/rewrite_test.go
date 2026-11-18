@@ -16,8 +16,8 @@ import (
 var update = flag.Bool("update", false, "rewrite golden files in testdata/")
 
 // proxyURL is a readable stand-in for the server's resource URL builder.
-func proxyURL(abs *url.URL) string {
-	return "http://proxy.example:2349/r/" + abs.String()
+func proxyURL(dst, abs []byte) []byte {
+	return append(append(dst, "http://proxy.example:2349/r/"...), abs...)
 }
 
 func mustParse(t testing.TB, s string) *url.URL {
@@ -141,7 +141,7 @@ func TestRewriteErrors(t *testing.T) {
 		name    string
 		in      []byte
 		final   *url.URL
-		urlFor  func(*url.URL) string
+		urlFor  func(dst, abs []byte) []byte
 		wantErr error
 	}{
 		{"too large", bytes.Repeat([]byte("#"), MaxPlaylistSize+1), mustParse(t, final), proxyURL, ErrPlaylistTooLarge},
@@ -163,9 +163,9 @@ func TestRewriteErrors(t *testing.T) {
 		{"nil final URL", []byte("seg.ts\n"), nil, proxyURL, ErrInvalidFinalURL},
 		{"relative final URL", []byte("seg.ts\n"), mustParse(t, "/live/index.m3u8"), proxyURL, ErrInvalidFinalURL},
 		{"non-http final URL", []byte("seg.ts\n"), mustParse(t, "ftp://example.com/index.m3u8"), proxyURL, ErrInvalidFinalURL},
-		{"urlFor returns quote", []byte("#EXT-X-MAP:URI=\"init.mp4\"\n"), mustParse(t, final), func(*url.URL) string { return `/r/"` }, ErrInvalidResourceURL},
-		{"urlFor returns newline", []byte("seg.ts\n"), mustParse(t, final), func(*url.URL) string { return "/r/a\n#EXT-X-ENDLIST" }, ErrInvalidResourceURL},
-		{"urlFor returns empty", []byte("seg.ts\n"), mustParse(t, final), func(*url.URL) string { return "" }, ErrInvalidResourceURL},
+		{"urlFor returns quote", []byte("#EXT-X-MAP:URI=\"init.mp4\"\n"), mustParse(t, final), func(dst, _ []byte) []byte { return append(dst, `/r/"`...) }, ErrInvalidResourceURL},
+		{"urlFor returns newline", []byte("seg.ts\n"), mustParse(t, final), func(dst, _ []byte) []byte { return append(dst, "/r/a\n#EXT-X-ENDLIST"...) }, ErrInvalidResourceURL},
+		{"urlFor returns empty", []byte("seg.ts\n"), mustParse(t, final), func(dst, _ []byte) []byte { return dst }, ErrInvalidResourceURL},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -213,9 +213,9 @@ func TestRewriteWithSigner(t *testing.T) {
 	}
 	final := mustParse(t, "https://origin.example.com/live/channel/720p/index.m3u8")
 	var want []string
-	out, err := Rewrite(in, final, func(abs *url.URL) string {
-		want = append(want, abs.String())
-		return "http://proxy.example:2349" + s.Path("ch-1", abs.String())
+	out, err := Rewrite(in, final, func(dst, abs []byte) []byte {
+		want = append(want, string(abs))
+		return append(dst, "http://proxy.example:2349"+s.Path("ch-1", string(abs))...)
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -17,18 +17,19 @@ var update = flag.Bool("update", false, "rewrite golden files")
 
 // dump is a stable, test-only view of a Config for golden files.
 type dump struct {
-	Paths         Paths
-	LogosDir      string
-	Listen        string
-	LogLevel      string
-	LogFormat     LogFormat
-	PublicBaseURL string
-	UserAgent     string
-	Timeouts      map[string]string
-	AllowPrivate  map[string][]netip.Prefix
-	EPGURL        string
-	Tunnels       []Tunnel
-	Channels      []dumpChannel
+	Paths           Paths
+	LogosDir        string
+	Listen          string
+	LogLevel        string
+	LogFormat       LogFormat
+	PublicBaseURL   string
+	UserAgent       string
+	Timeouts        map[string]string
+	MaxPlaylistSize int64
+	AllowPrivate    map[string][]netip.Prefix
+	EPGURL          string
+	Tunnels         []Tunnel
+	Channels        []dumpChannel
 }
 
 type dumpChannel struct {
@@ -63,9 +64,10 @@ func dumpConfig(c *Config) dump {
 			"read":    u.ReadTimeout.String(),
 			"idle":    c.IdleTimeout().String(),
 		},
-		AllowPrivate: c.AllowPrivate(),
-		EPGURL:       c.EPGURL(),
-		Tunnels:      c.Tunnels(),
+		MaxPlaylistSize: u.MaxPlaylistSize,
+		AllowPrivate:    c.AllowPrivate(),
+		EPGURL:          c.EPGURL(),
+		Tunnels:         c.Tunnels(),
 	}
 	for _, ch := range c.Channels() {
 		d.Channels = append(d.Channels, dumpChannel{
@@ -169,6 +171,9 @@ func TestLoadErrors(t *testing.T) {
 		{"duration syntax", map[string]string{"config.toml": "[upstream]\nconnect_timeout = \"10\"\n"}, []string{"upstream.connect_timeout: invalid duration \"10\""}},
 		{"duration negative", map[string]string{"config.toml": "[upstream]\nread_timeout = \"-1s\"\n"}, []string{"upstream.read_timeout: must be positive"}},
 		{"header timeout zero", map[string]string{"config.toml": "[upstream]\nheader_timeout = \"0s\"\n"}, []string{"upstream.header_timeout: must be positive"}},
+		{"size syntax", map[string]string{"config.toml": "[upstream]\nmax_playlist_size = \"8MB\"\n"}, []string{"upstream.max_playlist_size: invalid size \"8MB\": use a whole number with unit B, KiB or MiB, e.g. \"8MiB\""}},
+		{"size zero", map[string]string{"config.toml": "[upstream]\nmax_playlist_size = \"0KiB\"\n"}, []string{"upstream.max_playlist_size: must be positive"}},
+		{"size over bound", map[string]string{"config.toml": "[upstream]\nmax_playlist_size = \"33554433B\"\n"}, []string{"upstream.max_playlist_size: must be at most 32MiB"}},
 		{"idle zero", map[string]string{"config.toml": "[tunnels]\nidle_timeout = \"0s\"\n"}, []string{"tunnels.idle_timeout: must be positive"}},
 		{"public base url", map[string]string{"config.toml": "public_base_url = \"wsp.lan\"\n"}, []string{"public_base_url: must be an absolute http(s) URL"}},
 		{"epg url", map[string]string{"config.toml": "[epg]\nurl = \"ftp://example.com/epg.xml\"\n"}, []string{"epg.url: must be an absolute http(s) URL"}},

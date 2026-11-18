@@ -621,7 +621,7 @@ func TestUpstreamStatus(t *testing.T) {
 }
 
 func TestUpstreamErrors(t *testing.T) {
-	e := newDirectEnv(t, allowLoopback+"\n[upstream]\nheader_timeout = \"20ms\"\n", channelsTOML)
+	e := newDirectEnv(t, allowLoopback+"\n[upstream]\nheader_timeout = \"20ms\"\nmax_playlist_size = \"2MiB\"\n", channelsTOML)
 	e.up.add("/hang", file{hang: true})
 	e.up.add("/radio", file{ctype: "application/vnd.apple.mpegurl", body: "#EXTM3U\n\x00\n"})
 	big := "#EXTM3U\n" + strings.Repeat("#"+strings.Repeat("x", 1023)+"\n", 2049)
@@ -633,7 +633,7 @@ func TestUpstreamErrors(t *testing.T) {
 	}
 	resp, _ = e.get(t, "/c/partial", nil)
 	if resp.StatusCode != http.StatusBadGateway {
-		t.Errorf("playlist over 2 MiB: status %d, want 502", resp.StatusCode)
+		t.Errorf("playlist over max_playlist_size: status %d, want 502", resp.StatusCode)
 	}
 	resp, _ = e.get(t, "/c/hang", nil)
 	if resp.StatusCode != http.StatusGatewayTimeout {

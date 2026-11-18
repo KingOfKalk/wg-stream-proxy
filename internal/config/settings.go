@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"math"
 	"net"
 	"net/netip"
 	"net/url"
@@ -23,7 +24,12 @@ const (
 	defaultHeaderTimeout  = 15 * time.Second
 	defaultReadTimeout    = 30 * time.Second
 	defaultIdleTimeout    = 60 * time.Minute
+	defaultPlaylistSize   = 8 << 20
 )
+
+// MaxPlaylistSizeLimit is the upper bound of [upstream] max_playlist_size
+// (spec 3.4), the largest playlist hls.Rewrite accepts.
+const MaxPlaylistSizeLimit = 32 << 20
 
 var logLevels = map[string]slog.Level{
 	"debug": slog.LevelDebug,
@@ -111,6 +117,20 @@ func (c *Config) applySettings(raw rawConfig, src string, ov Overrides, routes m
 	c.upstream.ReadTimeout = duration("upstream.read_timeout", up.ReadTimeout, defaultReadTimeout)
 	c.idleTimeout = duration("tunnels.idle_timeout", raw.Tunnels.IdleTimeout, defaultIdleTimeout)
 
+	c.upstream.MaxPlaylistSize = defaultPlaylistSize
+	if v := up.MaxPlaylistSize; v != nil {
+		n, ok := parseSize(*v)
+		switch {
+		case !ok:
+			fail("upstream.max_playlist_size", src, `invalid size %q: use a whole number with unit B, KiB or MiB, e.g. "8MiB"`, *v)
+		case n <= 0:
+			fail("upstream.max_playlist_size", src, "must be positive")
+		case n > MaxPlaylistSizeLimit:
+			fail("upstream.max_playlist_size", src, "must be at most %dMiB", MaxPlaylistSizeLimit>>20)
+		}
+		c.upstream.MaxPlaylistSize = n
+	}
+
 	c.allowPrivate = map[string][]netip.Prefix{}
 	for _, route := range slices.Sorted(maps.Keys(up.AllowPrivate)) {
 		key := "upstream.allow_private." + route
@@ -138,6 +158,28 @@ func (c *Config) applySettings(raw rawConfig, src string, ov Overrides, routes m
 		c.epgURL = *raw.EPG.URL
 	}
 	return errs
+}
+
+// sizeUnits are the units of a size value, as multipliers.
+var sizeUnits = map[string]int64{"B": 1, "KiB": 1 << 10, "MiB": 1 << 20}
+
+// parseSize parses a size: a whole number of decimal digits directly
+// followed by the unit B, KiB or MiB ("8MiB"). ok is false for other
+// forms and for values that do not fit an int64.
+func parseSize(s string) (n int64, ok bool) {
+	i := 0
+	for i < len(s) && s[i] >= '0' && s[i] <= '9' {
+		i++
+	}
+	unit, ok := sizeUnits[s[i:]]
+	if i == 0 || !ok {
+		return 0, false
+	}
+	v, err := strconv.ParseInt(s[:i], 10, 64)
+	if err != nil || v > math.MaxInt64/unit {
+		return 0, false
+	}
+	return v * unit, true
 }
 
 // validListen reports whether s is host:port with a numeric port.

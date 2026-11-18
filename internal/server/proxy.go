@@ -223,15 +223,16 @@ func (s *Server) rewrite(w http.ResponseWriter, r *http.Request, g *generation, 
 	}
 
 	final := resp.Request.URL
-	data, err := route.ReadPlaylist(body)
+	data, err := route.ReadPlaylist(body, g.cfg.Upstream().MaxPlaylistSize)
 	if err != nil {
 		clearHeader(h)
 		s.fail(w, r, ch, err, rq.Error)
 		return
 	}
 	base := baseURL(g.cfg.PublicBaseURL(), r)
-	out, err := hls.Rewrite(data, final, func(abs *url.URL) string {
-		return base + s.signer.Path(ch.ID(), abs.String())
+	paths := s.signer.PathBuilder(ch.ID())
+	out, err := hls.Rewrite(data, final, func(dst, abs []byte) []byte {
+		return paths.AppendPath(append(dst, base...), abs)
 	})
 	if err != nil {
 		// hls errors never contain URIs from the playlist.

@@ -3,11 +3,13 @@
 package hls
 
 import (
+	"bytes"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"hash"
 	"net/url"
 	"strings"
 )
@@ -60,8 +62,43 @@ func (s *Signer) GoString() string { return s.String() }
 // MaxURLLen bytes (Rewrite enforces the limit); otherwise Parse rejects the
 // result.
 func (s *Signer) Path(channel, upstream string) string {
-	return resourcePrefix + channel + "/" + s.sign(channel, upstream) + "/" +
-		b64.EncodeToString([]byte(upstream)) + "/" + resourceName(upstream)
+	return string(s.PathBuilder(channel).AppendPath(nil, []byte(upstream)))
+}
+
+// PathBuilder returns a builder of signed resource paths for channel. It
+// keeps one HMAC state for all paths, so a playlist rewrite does not set
+// up the HMAC for every URI.
+func (s *Signer) PathBuilder(channel string) *PathBuilder {
+	return &PathBuilder{channel: channel, mac: hmac.New(sha256.New, s.key)}
+}
+
+// PathBuilder builds the signed resource paths of one channel, like
+// Signer.Path. It is not safe for concurrent use.
+type PathBuilder struct {
+	channel string
+	mac     hash.Hash
+	msg     []byte // channel + "\n" + upstream
+	sum     []byte
+}
+
+// String hides the HMAC state, which is derived from the key, from fmt and
+// log/slog.
+func (b *PathBuilder) String() string { return "hls.PathBuilder{key:redacted}" }
+
+// GoString hides the HMAC state from %#v.
+func (b *PathBuilder) GoString() string { return b.String() }
+
+// AppendPath appends the signed resource path for upstream (Signer.Path)
+// to dst and returns the extended slice.
+func (b *PathBuilder) AppendPath(dst, upstream []byte) []byte {
+	b.msg = append(append(append(b.msg[:0], b.channel...), '\n'), upstream...)
+	b.mac.Reset()
+	b.mac.Write(b.msg)
+	b.sum = b.mac.Sum(b.sum[:0])
+	dst = append(append(append(dst, resourcePrefix...), b.channel...), '/')
+	dst = append(b64.AppendEncode(dst, b.sum[:sigLen]), '/')
+	dst = append(b64.AppendEncode(dst, upstream), '/')
+	return appendResourceName(dst, upstream)
 }
 
 // Parse verifies an escaped request path (r.URL.EscapedPath()) and returns
@@ -120,10 +157,6 @@ func (s *Signer) mac(channel, upstream string) []byte {
 	return m.Sum(nil)[:sigLen]
 }
 
-func (s *Signer) sign(channel, upstream string) string {
-	return b64.EncodeToString(s.mac(channel, upstream))
-}
-
 // validChannel reports whether id matches the channel id format of spec
 // 5.2: [a-z0-9-], 1-48 bytes.
 func validChannel(id string) bool {
@@ -138,33 +171,82 @@ func validChannel(id string) bool {
 	return true
 }
 
-// resourceName returns the {name} segment for an upstream URL (spec 4): the
-// last path segment reduced to [A-Za-z0-9._-], at most maxNameLen bytes
-// with the extension kept. Empty or dots-only results (which path
-// cleaning would remove) become "data".
-func resourceName(upstream string) string {
-	u, err := url.Parse(upstream)
-	if err != nil {
-		return fallbackName
-	}
-	seg := u.Path[strings.LastIndexByte(u.Path, '/')+1:]
-	name := strings.Map(func(r rune) rune {
-		if r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '.' || r == '_' || r == '-' {
-			return r
+// appendResourceName appends the {name} segment for an upstream URL (spec
+// 4): the last path segment reduced to [A-Za-z0-9._-], at most maxNameLen
+// bytes with the extension kept. Empty or dots-only results (which path
+// cleaning would remove) become "data", as does a URL that does not parse.
+func appendResourceName(dst, upstream []byte) []byte {
+	path, ok := simplePath(upstream)
+	if !ok {
+		u, err := url.Parse(string(upstream))
+		if err != nil {
+			return append(dst, fallbackName...)
 		}
-		return -1
-	}, seg)
-	if len(name) > maxNameLen {
-		ext := ""
-		if i := strings.LastIndexByte(name, '.'); i >= 0 && len(name)-i < maxNameLen {
-			ext = name[i:]
+		path = []byte(u.Path)
+	}
+	start := len(dst)
+	for _, c := range path[bytes.LastIndexByte(path, '/')+1:] {
+		// Bytes, not runes: the kept characters are ASCII, and ASCII
+		// bytes never occur inside a multi-byte UTF-8 sequence.
+		if byteClass[c]&className != 0 {
+			dst = append(dst, c)
 		}
-		name = name[:maxNameLen-len(ext)] + ext
 	}
-	if strings.Trim(name, ".") == "" {
-		return fallbackName
+	if name := dst[start:]; len(name) > maxNameLen {
+		ext := 0
+		if i := bytes.LastIndexByte(name, '.'); i >= 0 && len(name)-i < maxNameLen {
+			ext = len(name) - i
+		}
+		copy(name[maxNameLen-ext:], name[len(name)-ext:])
+		dst = dst[:start+maxNameLen]
 	}
-	return name
+	if len(bytes.Trim(dst[start:], ".")) == 0 {
+		return append(dst[:start], fallbackName...)
+	}
+	return dst
+}
+
+// simplePath returns the path of an upstream URL whose url.Parse result is
+// known without parsing: "http://" or "https://", a host of
+// [A-Za-z0-9.-] with an optional numeric port, a path of ASCII bytes
+// without '%', an optional query, no fragment and no control bytes. Such
+// a URL parses, and its Path is the path bytes as they are. ok is false
+// for every other URL.
+func simplePath(u []byte) (path []byte, ok bool) {
+	rest, ok := bytes.CutPrefix(u, []byte("https://"))
+	if !ok {
+		if rest, ok = bytes.CutPrefix(u, []byte("http://")); !ok {
+			return nil, false
+		}
+	}
+	for _, c := range u {
+		if byteClass[c]&classURL == 0 {
+			return nil, false
+		}
+	}
+	host, port := 0, -1
+	for ; host < len(rest) && rest[host] != '/'; host++ {
+		c := rest[host]
+		switch {
+		case c >= '0' && c <= '9':
+		case port < 0 && (c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c == '.' || c == '-'):
+		case port < 0 && c == ':' && host > 0:
+			port = host
+		default:
+			return nil, false
+		}
+	}
+	if host == 0 || port == host-1 || host == len(rest) {
+		return nil, false
+	}
+	path = rest[host:]
+	if i := bytes.IndexByte(path, '?'); i >= 0 {
+		path = path[:i]
+	}
+	if bytes.IndexByte(path, '%') >= 0 {
+		return nil, false
+	}
+	return path, true
 }
 
 func isB64URLByte(c byte) bool {

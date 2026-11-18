@@ -4,6 +4,7 @@ package route
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -11,11 +12,8 @@ import (
 	"strings"
 )
 
-// MaxPlaylistSize is the largest playlist body in bytes (spec 3.4).
-const MaxPlaylistSize = 2 << 20
-
-// ErrTooLarge: a playlist body is larger than MaxPlaylistSize.
-var ErrTooLarge = errors.New("route: playlist larger than 2 MiB")
+// ErrTooLarge: a playlist body is larger than [upstream] max_playlist_size.
+var ErrTooLarge = errors.New("route: playlist too large")
 
 // copiedHeaders are always copied from the upstream response (spec 3.4).
 var copiedHeaders = []string{"Content-Type", "Content-Range", "Accept-Ranges", "Cache-Control", "Last-Modified"}
@@ -55,14 +53,15 @@ func ClientStatus(code int) int {
 	return http.StatusBadGateway
 }
 
-// ReadPlaylist reads a playlist body of at most MaxPlaylistSize bytes.
-func ReadPlaylist(r io.Reader) ([]byte, error) {
-	b, err := io.ReadAll(io.LimitReader(r, MaxPlaylistSize+1))
+// ReadPlaylist reads a playlist body of at most limit bytes
+// ([upstream] max_playlist_size, spec 3.4).
+func ReadPlaylist(r io.Reader, limit int64) ([]byte, error) {
+	b, err := io.ReadAll(io.LimitReader(r, limit+1))
 	if err != nil {
 		return nil, err
 	}
-	if len(b) > MaxPlaylistSize {
-		return nil, ErrTooLarge
+	if int64(len(b)) > limit {
+		return nil, fmt.Errorf("%w: more than %d bytes (upstream.max_playlist_size)", ErrTooLarge, limit)
 	}
 	return b, nil
 }
@@ -99,7 +98,7 @@ func LogURL(s string) string {
 	return out + "/…/" + name
 }
 
-// logFileName reduces a path segment like hls.resourceName does.
+// logFileName reduces a path segment like hls.appendResourceName does.
 func logFileName(seg string) string {
 	name := strings.Map(func(r rune) rune {
 		if r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '.' || r == '_' || r == '-' {
