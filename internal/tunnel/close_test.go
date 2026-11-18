@@ -16,10 +16,6 @@ import (
 	"github.com/KingOfKalk/wg-stream-proxy/internal/tunnel/tunneltest"
 )
 
-// closeRounds is how many times each case of TestCloseWhileTrafficFlows
-// closes a tunnel with traffic in flight.
-const closeRounds = 1
-
 // trafficSize bounds the data each stress connection moves, so a
 // connection never busy-loops on a tunnel that is gone; it takes
 // seconds through the netstack, so it is still flowing at close.
@@ -47,8 +43,7 @@ var trafficHandler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Reques
 // netstack while gVisor still sends packets (TCP data, ACKs, window
 // updates, retransmits and RSTs from TCP timers and processors, ICMP
 // port unreachable for late UDP answers) must neither race nor panic
-// with "send on closed channel". Before the fix, a run with -race failed
-// almost always.
+// with "send on closed channel". Stress it with -race -count=N.
 func TestCloseWhileTrafficFlows(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -66,16 +61,14 @@ func TestCloseWhileTrafficFlows(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			for range closeRounds {
-				s := newCloseSetup(t)
-				stop := tt.traffic(t, s.tun)
-				tt.close(t, s)
-				stop()
-				// Both sides close in any order; the other side ends
-				// with traffic still in flight towards it.
-				_ = s.m.Close()
-				s.peer.Close()
-			}
+			s := newCloseSetup(t)
+			stop := tt.traffic(t, s.tun)
+			tt.close(t, s)
+			stop()
+			// Both sides close in any order; the other side ends with
+			// traffic still in flight towards it.
+			_ = s.m.Close()
+			s.peer.Close()
 		})
 	}
 }
