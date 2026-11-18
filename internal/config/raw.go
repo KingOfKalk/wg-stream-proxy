@@ -45,6 +45,16 @@ type rawChannelFile struct {
 	Channel  []rawChannel `toml:"channel"`
 }
 
+// rawGlobalFile is the TOML structure of channels.d/_defaults.toml
+// (spec 5.4). Group, Tunnel and Channel are not allowed there; they are
+// decoded only to report them with a clear message.
+type rawGlobalFile struct {
+	Group    any      `toml:"group"`
+	Tunnel   any      `toml:"tunnel"`
+	Channel  any      `toml:"channel"`
+	Defaults rawLayer `toml:"defaults"`
+}
+
 // rawLayer holds the keys shared by [defaults.*] and a channel.
 type rawLayer struct {
 	Upstream rawUpstream `toml:"upstream"`

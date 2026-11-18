@@ -213,7 +213,8 @@ func (ch Channel) Enabled() bool { return ch.enabled }
 func (ch Channel) Type() UpstreamType { return ch.typ }
 
 // Header returns the merged upstream request headers with canonical names.
-// User-Agent is always present if [upstream] user_agent is set.
+// User-Agent is always present if [upstream] user_agent is set; it is
+// empty if a layer removed it (spec 5.4), and then none is sent.
 func (ch Channel) Header() http.Header { return ch.header.Clone() }
 
 // TVGID returns the EPG id, possibly empty.

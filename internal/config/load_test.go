@@ -8,6 +8,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -233,6 +234,25 @@ func TestLoadErrors(t *testing.T) {
 		{"channel group line break", map[string]string{gr: "", "channels.d/gr.toml": ch("group = \"a\\nb\"")}, []string{"channel 1 (\"Example\"): group: must not contain line breaks"}},
 		{"tvg_id line break", map[string]string{gr: "", "channels.d/gr.toml": ch("[channel.playlist]", "tvg_id = \"a\\nb\"")}, []string{"playlist.tvg_id: must not contain line breaks"}},
 		{"logo line break", map[string]string{gr: "", "channels.d/gr.toml": ch("[channel.playlist]", "logo = \"a\\nb\"")}, []string{"playlist.logo: must not contain line breaks"}},
+		// channels.d/_defaults.toml (5.4)
+		{"global toml syntax", map[string]string{"channels.d/_defaults.toml": "[defaults\n"}, []string{"_defaults.toml:1:"}},
+		{"global unknown key", map[string]string{"channels.d/_defaults.toml": "[defaults.upstream]\nproxy = \"x\"\n"}, []string{"_defaults.toml:2:1: unknown key \"defaults.upstream.proxy\""}},
+		{"global tunnel", map[string]string{gr: "", "channels.d/_defaults.toml": "tunnel = \"gr\"\n"}, []string{"_defaults.toml: tunnel: not allowed in _defaults.toml"}},
+		{"global tunnel does not route", map[string]string{
+			gr: "", "channels.d/_defaults.toml": "tunnel = \"gr\"\n", "channels.d/news.toml": ch(),
+		}, []string{"news.toml: channel 1 (\"Example\"): no route"}},
+		{"global group", map[string]string{"channels.d/_defaults.toml": "group = \"TV\"\n"}, []string{"_defaults.toml: group: not allowed in _defaults.toml"}},
+		{"global channel", map[string]string{"channels.d/_defaults.toml": "tunnel = \"direct\"\n" + ch()}, []string{"_defaults.toml: [[channel]]: not allowed in _defaults.toml", "_defaults.toml: tunnel: not allowed"}},
+		{"global tvg_id", map[string]string{"channels.d/_defaults.toml": "[defaults.playlist]\ntvg_id = \"x\"\n"}, []string{"_defaults.toml: defaults.playlist.tvg_id: not allowed in _defaults.toml"}},
+		{"global upstream type", map[string]string{"channels.d/_defaults.toml": "[defaults.upstream]\ntype = \"dash\"\n"}, []string{"_defaults.toml: defaults.upstream.type: invalid value \"dash\""}},
+		{"global header name", map[string]string{"channels.d/_defaults.toml": "[defaults.upstream]\nheaders = { \"Bad Header\" = \"x\" }\n"}, []string{"_defaults.toml: defaults.upstream.headers: invalid header name \"Bad Header\""}},
+		{"global header case duplicate", map[string]string{"channels.d/_defaults.toml": "[defaults.upstream]\nheaders = { Referer = \"a\", REFERER = \"\" }\n"}, []string{"_defaults.toml: defaults.upstream.headers: duplicate header \"Referer\""}},
+		{"global reserved attr", map[string]string{"channels.d/_defaults.toml": "[defaults.playlist]\nattrs = { Group-Title = \"x\" }\n"}, []string{"_defaults.toml: defaults.playlist.attrs: \"Group-Title\" is reserved"}},
+		{"global forbidden directive", map[string]string{"channels.d/_defaults.toml": "[defaults.playlist.extra.EXTINF]\na = \"b\"\n"}, []string{"_defaults.toml: defaults.playlist.extra: directive \"EXTINF\" is forbidden"}},
+		{"global extra value line break", map[string]string{"channels.d/_defaults.toml": "[defaults.playlist.extra.KODIPROP]\na = \"x\\ny\"\n"}, []string{"_defaults.toml: defaults.playlist.extra.KODIPROP: value of \"a\" must not contain line breaks"}},
+		{"reserved file name", map[string]string{"channels.d/_tv.toml": "tunnel = \"direct\"\n" + ch()}, []string{"_tv.toml: reserved file name: channels.d names starting with \"_\" are reserved"}},
+		{"reserved file name case", map[string]string{"channels.d/_Defaults.toml": ""}, []string{"_Defaults.toml: reserved file name"}},
+
 		{"all errors reported", map[string]string{
 			"config.toml":       "log_level = \"x\"\n",
 			"channels.d/a.toml": "[[channel]]\nurl = \"https://example.com/\"\ntunnel = \"direct\"\n[[channel]]\nname = \"B\"\ntunnel = \"direct\"\n",
@@ -359,5 +379,24 @@ func TestConfigIsImmutable(t *testing.T) {
 	}
 	if _, ok := cfg.Channel("missing"); ok {
 		t.Errorf("Channel(missing) found")
+	}
+}
+
+// TestExampleConfig: the example config dir loads, its _defaults.toml
+// gives every channel inputstream.adaptive and radio.toml opts out.
+func TestExampleConfig(t *testing.T) {
+	cfg, err := loadDir("../../examples/config")
+	if err != nil {
+		t.Fatal(err)
+	}
+	adaptive := Extra{Directive: "KODIPROP", Key: "inputstream", Value: "inputstream.adaptive"}
+	want := map[string]bool{"ert-world": true, "das-erste": true, "example-radio": false}
+	if len(cfg.Channels()) != len(want) {
+		t.Fatalf("channels = %d, want %d", len(cfg.Channels()), len(want))
+	}
+	for _, c := range cfg.Channels() {
+		if got := slices.Contains(c.Extra(), adaptive); got != want[c.ID()] {
+			t.Errorf("channel %s: inputstream.adaptive = %v, want %v (extra %v)", c.ID(), got, want[c.ID()], c.Extra())
+		}
 	}
 }

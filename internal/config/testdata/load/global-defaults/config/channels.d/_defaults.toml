@@ -1,0 +1,13 @@
+# Global layer for every channel file: only [defaults.upstream] and
+# [defaults.playlist]. Header names are case-insensitive across layers.
+[defaults.upstream]
+type = "hls"
+headers = { user-agent = "Global/1.0", Referer = "https://global.example.com/", X-Token = "g" }
+
+[defaults.playlist]
+logo = "news.png"
+attrs = { catchup = "default", tvg-chno = "0" }
+
+[defaults.playlist.extra.KODIPROP]
+"inputstream" = "inputstream.adaptive"
+"inputstream.adaptive.manifest_type" = "hls"

@@ -146,17 +146,25 @@ func checkLoads(t *testing.T, data []byte, opts Options, out []byte) {
 			group = testTunnel // file stem
 		}
 		header := map[string][]string{"User-Agent": {"Mozilla/5.0 (X11; Linux x86_64) Firefox/132.0"}}
+		// An empty value removes the key (spec 5.4); a removed User-Agent
+		// stays empty, as [upstream] user_agent is set.
 		for k, v := range ch.headers {
-			header[k] = []string{v}
+			if v != "" || k == "User-Agent" {
+				header[k] = []string{v}
+			}
 		}
 		var attrs []config.Attr
 		for _, k := range slices.Sorted(maps.Keys(ch.attrs)) {
-			attrs = append(attrs, config.Attr{Key: k, Value: ch.attrs[k]})
+			if ch.attrs[k] != "" {
+				attrs = append(attrs, config.Attr{Key: k, Value: ch.attrs[k]})
+			}
 		}
 		var extra []config.Extra
 		for _, d := range slices.Sorted(maps.Keys(ch.extra)) {
 			for _, k := range slices.Sorted(maps.Keys(ch.extra[d])) {
-				extra = append(extra, config.Extra{Directive: d, Key: k, Value: ch.extra[d][k]})
+				if ch.extra[d][k] != "" {
+					extra = append(extra, config.Extra{Directive: d, Key: k, Value: ch.extra[d][k]})
+				}
 			}
 		}
 		checks := []struct {

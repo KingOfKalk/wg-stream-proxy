@@ -84,6 +84,46 @@ func TestCheckExampleConfig(t *testing.T) {
 	}
 }
 
+// TestCheckGlobalDefaults: channels.d/_defaults.toml is checked but adds
+// no channels; channel-file keys in it and other _*.toml names fail.
+func TestCheckGlobalDefaults(t *testing.T) {
+	const tv = "tunnel = \"direct\"\n[[channel]]\nname = \"News\"\nurl = \"https://tv.example.com/news.m3u8\"\n"
+	const global = "[defaults.playlist.extra.KODIPROP]\n\"inputstream\" = \"inputstream.adaptive\"\n"
+	tests := []struct {
+		name  string
+		files map[string]string
+		code  int
+		out   string
+		err   []string
+	}{
+		{"valid", map[string]string{"channels.d/_defaults.toml": global, "channels.d/tv.toml": tv}, 0, "config ok: 1 channels (1 enabled), 0 tunnels\n", nil},
+		{"tunnel and channel", map[string]string{"channels.d/_defaults.toml": "tunnel = \"direct\"\n" + tv[len("tunnel = \"direct\"\n"):]}, 1, "", []string{
+			"_defaults.toml: tunnel: not allowed in _defaults.toml",
+			"_defaults.toml: [[channel]]: not allowed in _defaults.toml",
+		}},
+		{"invalid value", map[string]string{"channels.d/_defaults.toml": "[defaults.playlist]\nattrs = { tvg-id = \"x\" }\n", "channels.d/tv.toml": tv}, 1, "", []string{
+			"_defaults.toml: defaults.playlist.attrs: \"tvg-id\" is reserved",
+		}},
+		{"reserved name", map[string]string{"channels.d/_tv.toml": tv}, 1, "", []string{"_tv.toml: reserved file name"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c, out, errOut := testCLI(nil)
+			if code := c.run([]string{"check", "--config-dir", writeDir(t, tt.files)}); code != tt.code {
+				t.Fatalf("exit code = %d, want %d; stderr:\n%s", code, tt.code, errOut)
+			}
+			if out.String() != tt.out {
+				t.Errorf("stdout = %q, want %q", out.String(), tt.out)
+			}
+			for _, w := range tt.err {
+				if !strings.Contains(errOut.String(), w) {
+					t.Errorf("stderr lacks %q:\n%s", w, errOut)
+				}
+			}
+		})
+	}
+}
+
 func TestCheckListsAllErrors(t *testing.T) {
 	dir := writeDir(t, map[string]string{
 		"config.toml":        "listen = \"nope\"\n",

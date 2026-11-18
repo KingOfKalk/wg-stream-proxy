@@ -97,7 +97,7 @@ Resources under `/r/` use the same detection (steps 2.2-2.4): playlists are rewr
 ### 3.4 Upstream HTTP rules
 
 - Request headers to upstream:
-  - `User-Agent`: from merged `upstream.headers` if set, else `[upstream] user_agent`.
+  - `User-Agent`: from merged `upstream.headers` if set, else `[upstream] user_agent`; none if a layer removed it with an empty value (5.4).
   - Merged `upstream.headers` (header names case-insensitive, canonicalised).
   - From the client only: `Range`, `If-Range`, `Icy-MetaData`. `Range` is not forwarded for URLs whose path ends in `.m3u8` or `.m3u` (case-insensitive, query ignored).
   - The same rules apply on every redirect hop; no automatic `Referer`.
@@ -136,7 +136,7 @@ Resources under `/r/` use the same detection (steps 2.2-2.4): playlists are rewr
 
 - Config dir: `--config-dir`, then `WG_STREAM_PROXY_CONFIG_DIR`, then `/etc/wg-stream-proxy` if it exists, then `$XDG_CONFIG_HOME/wg-stream-proxy` (fallback `~/.config/wg-stream-proxy`).
 - Tunnel dir: `WG_STREAM_PROXY_TUNNELS_DIR`, default `<config-dir>/tunnels`.
-- Read non-recursively: `<config-dir>/config.toml`, `<tunnels-dir>/*.conf`, `<config-dir>/channels.d/*.toml`; other files are ignored. A missing `config.toml`, tunnels dir or `channels.d` counts as empty (defaults, no tunnels, no channels); a missing config dir is an error. Channel order: by file name, then by position in the file. Local logos: `<config-dir>/assets/logos/` (flat).
+- Read non-recursively: `<config-dir>/config.toml`, `<tunnels-dir>/*.conf`, `<config-dir>/channels.d/*.toml` (channel files, plus the optional global layer `channels.d/_defaults.toml`, 5.4); other files are ignored. A missing `config.toml`, tunnels dir or `channels.d` counts as empty (defaults, no tunnels, no channels); a missing config dir is an error. Channel order: by file name, then by position in the file. Local logos: `<config-dir>/assets/logos/` (flat).
 - Flag / env (CLI flag beats env beats `config.toml`): `--listen` / `WG_STREAM_PROXY_LISTEN`, `--log-level` / `WG_STREAM_PROXY_LOG_LEVEL`, `--log-format` / `WG_STREAM_PROXY_LOG_FORMAT`, `WG_STREAM_PROXY_PUBLIC_BASE_URL`. Empty values count as not set.
 - Invalid config at startup: exit code 1. All errors found are reported, each with its file (and line for TOML errors).
 
@@ -220,7 +220,9 @@ url = "https://daserste-live.ard-mcdn.de/daserste/live/hls/de/master.m3u8"
 ```
 
 - Sub-tables apply to the `[[channel]]` directly above.
-- Merge order: `config.toml`, file `[defaults.*]`, channel. Maps (`headers`, `attrs`, `extra.<DIRECTIVE>`) merge key by key; the more specific layer wins. Single values are overridden. `[defaults.upstream]` and `[defaults.playlist]` take the same keys as the channel. `[upstream] user_agent` is the `config.toml` layer of `headers` (as `User-Agent`).
+- Merge order: `config.toml`, `channels.d/_defaults.toml`, file `[defaults.*]`, channel. Maps (`headers`, `attrs`, `extra.<DIRECTIVE>`) merge key by key; the more specific layer wins (header names case-insensitively). Single values are overridden. `[defaults.upstream]` and `[defaults.playlist]` take the same keys as the channel. `[upstream] user_agent` is the `config.toml` layer of `headers` (as `User-Agent`).
+- Opt-out: an empty value in `headers`, `attrs` or `extra.<DIRECTIVE>` removes the key set by a lower layer (and is not set itself): the header is not sent (for `User-Agent` also not `[upstream] user_agent`), the attribute or extra line is not written. A more specific layer can set the key again. `logo = ""` gives no logo.
+- `channels.d/_defaults.toml` (optional): the global layer for all channel files, e.g. one `inputstream.adaptive` for every channel (deploy.md). It takes only `[defaults.upstream]` (`type`, `headers`) and `[defaults.playlist]` (`logo`, `attrs`, `extra.<DIRECTIVE>`), validated like file defaults. `tunnel` (a global route would bypass fail closed, 5.2), `group`, `[[channel]]` and `tvg_id` are config errors. It is not a channel file: no channels, no file-stem route. Other `channels.d/_*.toml` names are reserved (config error).
 - Channel `url`: absolute `http(s)` URL, max 4096 bytes. `name`: required, not blank.
 - `upstream.headers`: names are HTTP tokens, values without CR, LF or NUL; two names in one layer that differ only in case are a config error.
 - No line breaks in `name`, `group`, `playlist.tvg_id`, `playlist.logo` and `attrs` values.
@@ -264,7 +266,7 @@ url = "https://daserste-live.ard-mcdn.de/daserste/live/hls/de/master.m3u8"
 - `GET /playlist.m3u8`, `Content-Type: audio/x-mpegurl; charset=utf-8`, no BOM; disabled channels omitted; optional `?group=<name>` (exact match; empty lists all).
 - Header: `#EXTM3U x-tvg-url="<epg.url>" url-tvg="<epg.url>"` if `epg.url` is set (EPG link mode: the player fetches it).
 - Per channel:
-  1. `playlist.extra` lines, sorted by directive, then key.
+  1. `playlist.extra` lines, sorted by directive, then key; keys removed with an empty value (5.4) are not written.
   2. `#EXTINF:-1 tvg-id=".." tvg-name=".." tvg-logo=".." group-title=".."`, then `attrs` sorted by key, then `,<name>`. Empty values are omitted; `"` in values and names is replaced by `'`. Commas in names are fine (IPTV Simple Client takes the name after the last quoted attribute). Kodi lists a channel in its Radio section only with `radio="true"`, which comes from `attrs = { radio = "true" }` (no extra key).
   3. URL: `/c/{id}.m3u8` if `upstream.type = "hls"` or the upstream URL path contains `.m3u8`, otherwise `/c/{id}`. The handler strips a trailing `.m3u8` from the id.
 - `#KODIPROP` and other `extra` lines appear only here, never in playlists under `/c/` or `/r/`.

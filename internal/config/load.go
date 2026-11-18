@@ -11,10 +11,15 @@ import (
 	"strings"
 )
 
+// globalDefaultsFile is the optional global layer in channels.d (spec
+// 5.4). It is not a channel file.
+const globalDefaultsFile = "_defaults.toml"
+
 // Load reads and validates the configuration (spec 5.1-5.4): config.toml,
-// the tunnel file names in the tunnels dir and channels.d/*.toml. Missing
-// config.toml, tunnels dir or channels.d count as empty. All errors found
-// are returned joined, each prefixed with its file.
+// the tunnel file names in the tunnels dir, the global layer
+// channels.d/_defaults.toml and the channel files channels.d/*.toml.
+// Missing config.toml, tunnels dir or channels.d count as empty. All
+// errors found are returned joined, each prefixed with its file.
 func Load(opts Options) (*Config, error) {
 	p := opts.Paths
 	fi, err := os.Stat(p.ConfigDir)
@@ -64,10 +69,27 @@ func Load(opts Options) (*Config, error) {
 	}
 	files, ferrs := listFiles(filepath.Join(p.ConfigDir, "channels.d"), ".toml")
 	errs = append(errs, ferrs...)
+	// The global layer applies to every channel file, so it is loaded
+	// first; other names starting with "_" are reserved (spec 5.4).
+	var channelFiles []string
 	for _, f := range files {
+		switch base := filepath.Base(f); {
+		case base == globalDefaultsFile:
+			if data, err := os.ReadFile(f); err != nil {
+				l.errs = append(l.errs, err)
+			} else {
+				l.loadGlobal(f, data)
+			}
+		case strings.HasPrefix(base, "_"):
+			l.fail(f, "reserved file name: channels.d names starting with \"_\" are reserved (only %s is known)", globalDefaultsFile)
+		default:
+			channelFiles = append(channelFiles, f)
+		}
+	}
+	for _, f := range channelFiles {
 		data, err := os.ReadFile(f)
 		if err != nil {
-			errs = append(errs, err)
+			l.errs = append(l.errs, err)
 			continue
 		}
 		l.loadFile(f, data)

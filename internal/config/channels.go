@@ -37,6 +37,7 @@ type channelLoader struct {
 	configDir string
 	tunnels   map[string]bool
 	userAgent string
+	global    layer // channels.d/_defaults.toml
 	errs      []error
 	ids       map[string]string // id -> location of first use
 	channels  []Channel
@@ -44,6 +45,32 @@ type channelLoader struct {
 
 func (l *channelLoader) fail(prefix, format string, args ...any) {
 	l.errs = append(l.errs, fmt.Errorf("%s: %s", prefix, fmt.Sprintf(format, args...)))
+}
+
+// loadGlobal validates channels.d/_defaults.toml and keeps it as the
+// global layer (spec 5.4). It must be loaded before the channel files.
+// The file has no channels, group or route: a global tunnel would route
+// every channel file without a tunnel of its own (fail closed, spec 5.2).
+func (l *channelLoader) loadGlobal(path string, data []byte) {
+	var f rawGlobalFile
+	if errs := decodeTOML(path, data, &f); errs != nil {
+		l.errs = append(l.errs, errs...)
+		return
+	}
+	if f.Tunnel != nil {
+		l.fail(path, "tunnel: not allowed in %s: set it in each channel file or channel (no global route, fail closed)", globalDefaultsFile)
+	}
+	if f.Group != nil {
+		l.fail(path, "group: not allowed in %s: set it in each channel file or channel", globalDefaultsFile)
+	}
+	if f.Channel != nil {
+		l.fail(path, "[[channel]]: not allowed in %s: put channels into channel files", globalDefaultsFile)
+	}
+	if f.Defaults.Playlist.TVGID != nil {
+		l.fail(path, "defaults.playlist.tvg_id: not allowed in %s: the EPG id is per channel", globalDefaultsFile)
+		f.Defaults.Playlist.TVGID = nil
+	}
+	l.global = l.layer(path+": defaults.", f.Defaults.Upstream, f.Defaults.Playlist)
 }
 
 // route resolves an explicitly written tunnel value.
@@ -161,7 +188,7 @@ func (l *channelLoader) loadFile(path string, data []byte) {
 		}
 
 		own := l.layer(label+": ", rc.Upstream, rc.Playlist)
-		l.merge(&ch, defaults, own)
+		l.merge(&ch, l.global, defaults, own)
 
 		if len(l.errs) == before && fileRouteOK {
 			l.channels = append(l.channels, ch)
@@ -169,8 +196,10 @@ func (l *channelLoader) loadFile(path string, data []byte) {
 	}
 }
 
-// merge applies config.toml, file defaults and channel layer in this
-// order; the more specific layer wins, maps merge key by key (spec 5.4).
+// merge applies config.toml, then layers (global defaults, file defaults,
+// channel) in this order; the more specific layer wins, maps merge key by
+// key (spec 5.4). An empty map value removes the key set by a lower
+// layer: the header is not sent, the attr or extra line not written.
 func (l *channelLoader) merge(ch *Channel, layers ...layer) {
 	headers := map[string]string{}
 	if l.userAgent != "" {
@@ -197,6 +226,16 @@ func (l *channelLoader) merge(ch *Channel, layers ...layer) {
 			}
 			maps.Copy(extra[d], kv)
 		}
+	}
+	// Opt-out (spec 5.4): drop removed keys. A removed User-Agent stays
+	// as an empty value while [upstream] user_agent is set, so the
+	// upstream request does not fall back to it and sends none.
+	maps.DeleteFunc(headers, func(k, v string) bool {
+		return v == "" && (k != "User-Agent" || l.userAgent == "")
+	})
+	maps.DeleteFunc(attrs, func(_, v string) bool { return v == "" })
+	for _, kv := range extra {
+		maps.DeleteFunc(kv, func(_, v string) bool { return v == "" })
 	}
 	ch.header = http.Header{}
 	for k, v := range headers {
