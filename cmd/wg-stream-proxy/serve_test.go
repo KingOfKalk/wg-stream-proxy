@@ -79,7 +79,7 @@ func TestCheckExampleConfig(t *testing.T) {
 	if code := c.run([]string{"check", "--config-dir", exampleDir}); code != 0 {
 		t.Fatalf("exit code = %d, want 0; stderr:\n%s", code, errOut)
 	}
-	if want := "config ok: 2 channels (2 enabled), 1 tunnels\n"; out.String() != want {
+	if want := "config ok: 3 channels (3 enabled), 1 tunnels\n"; out.String() != want {
 		t.Errorf("stdout = %q, want %q", out.String(), want)
 	}
 }

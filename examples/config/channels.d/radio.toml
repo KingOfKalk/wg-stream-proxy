@@ -1,0 +1,13 @@
+# Example radio channel file. Kodi's IPTV Simple Client lists a channel in
+# its Radio section only if the #EXTINF line carries radio="true"; the file
+# default below sets it for every channel in this file.
+
+group = "Radio"
+tunnel = "direct"
+
+[defaults.playlist]
+attrs = { radio = "true" }
+
+[[channel]]
+name = "Example Radio"
+url = "https://radio.example.com/live/stream.mp3"
