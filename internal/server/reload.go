@@ -147,8 +147,12 @@ func (st *runState) reload(cfg *config.Config, err error) error {
 		st.log.Warn("reload: log_format changed, restart required; keeping the old format",
 			"log_format", string(old.cfg.LogFormat()), "configured", string(cfg.LogFormat()))
 	}
+	if cfg.DebugListen() != old.cfg.DebugListen() {
+		st.log.Warn("reload: debug.listen changed, restart required; keeping the old address",
+			"debug_listen", old.cfg.DebugListen(), "configured", cfg.DebugListen())
+	}
 
-	changes, err := st.mgr.Apply(tunnels, reloadDrainTimeout)
+	changes, err := st.mgr.Apply(tunnels, tunnelDrainTimeout)
 	if err == nil {
 		err = st.mgr.SetTimeouts(cfg.Upstream().ConnectTimeout, cfg.IdleTimeout())
 	}

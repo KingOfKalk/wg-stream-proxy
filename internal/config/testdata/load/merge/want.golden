@@ -5,6 +5,7 @@
   },
   "LogosDir": "testdata/load/merge/config/assets/logos",
   "Listen": ":2349",
+  "DebugListen": "",
   "LogLevel": "INFO",
   "LogFormat": "text",
   "PublicBaseURL": "",

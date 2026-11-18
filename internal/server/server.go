@@ -43,6 +43,9 @@ type Options struct {
 	// Metrics receives the request metrics and is served on /metrics;
 	// nil means a new registry without tunnel metrics.
 	Metrics *metrics.Metrics
+	// RecentRequests is how many finished /c/ and /r/ requests are kept
+	// for /debug/requests; 0 keeps none (no debug listener).
+	RecentRequests int
 }
 
 // Server serves the player-facing HTTP interface. It is an http.Handler.
@@ -56,6 +59,9 @@ type Server struct {
 	metrics *metrics.Metrics
 	// requestIDs numbers the /c/ and /r/ requests.
 	requestIDs atomic.Uint64
+	// recent keeps the latest finished requests for /debug/requests;
+	// nil while the debug listener is off.
+	recent *recentRequests
 
 	// mu guards closed and the Add calls of handlers, so drain does not
 	// race with a request that is just starting.
@@ -83,6 +89,9 @@ func New(opts Options) (*Server, error) {
 	}
 	if s.metrics == nil {
 		s.metrics = metrics.New(metrics.Options{})
+	}
+	if opts.RecentRequests > 0 {
+		s.recent = newRecentRequests(opts.RecentRequests)
 	}
 	s.swap(opts.Config, opts.Routes)
 	if s.log == nil {

@@ -89,6 +89,8 @@ func (m *Manager) Apply(tunnels []*wgquick.Tunnel, drainTimeout time.Duration) (
 // flight, at most timeout, then closes its device.
 func (m *Manager) drainRetired(t *Tunnel, timeout time.Duration) {
 	defer m.drains.Done()
+	t.draining.Add(1)
+	defer t.draining.Add(-1)
 	m.wait([]*Tunnel{t}, timeout)
 	t.stop("reload")
 	m.mu.Lock()

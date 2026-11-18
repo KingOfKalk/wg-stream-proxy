@@ -35,6 +35,13 @@ func (c *cli) parseFlags(cmd string, args []string) (config.Options, int, bool) 
 // parseFlagSet is parseFlags that also returns the flags, for resolving
 // again on a reload.
 func (c *cli) parseFlagSet(cmd string, args []string) (config.Flags, config.Options, int, bool) {
+	f, opts, _, code, ok := c.parseFlagArgs(cmd, args, 0)
+	return f, opts, code, ok
+}
+
+// parseFlagArgs is parseFlagSet that also accepts up to maxArgs
+// arguments after the flags and returns them.
+func (c *cli) parseFlagArgs(cmd string, args []string, maxArgs int) (config.Flags, config.Options, []string, int, bool) {
 	fs := flag.NewFlagSet(cmd, flag.ContinueOnError)
 	fs.SetOutput(c.stderr)
 	var f config.Flags
@@ -44,20 +51,20 @@ func (c *cli) parseFlagSet(cmd string, args []string) (config.Flags, config.Opti
 	fs.StringVar(&f.LogFormat, "log-format", "", "text or json (env "+config.EnvLogFormat+")")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
-			return f, config.Options{}, 0, false
+			return f, config.Options{}, nil, 0, false
 		}
-		return f, config.Options{}, 2, false
+		return f, config.Options{}, nil, 2, false
 	}
-	if fs.NArg() > 0 {
+	if fs.NArg() > maxArgs {
 		_, _ = fmt.Fprintf(c.stderr, "wg-stream-proxy: %s: unexpected arguments: %s\n", cmd, strings.Join(fs.Args(), " "))
-		return f, config.Options{}, 2, false
+		return f, config.Options{}, nil, 2, false
 	}
 	opts, err := config.Resolve(f, c.env)
 	if err != nil {
 		c.printErrors(err)
-		return f, config.Options{}, 1, false
+		return f, config.Options{}, nil, 1, false
 	}
-	return f, opts, 0, true
+	return f, opts, fs.Args(), 0, true
 }
 
 // printErrors prints every line of a (joined) error.
@@ -127,6 +134,20 @@ func (c *cli) serve(args []string) int {
 	if c.listening != nil {
 		c.listening(ln.Addr())
 	}
+	// The debug endpoints only on their own listener, off by default
+	// (spec 7.1).
+	var debugLn net.Listener
+	if addr := cfg.DebugListen(); addr != "" {
+		debugLn, err = net.Listen("tcp", addr)
+		if err != nil {
+			_ = ln.Close()
+			log.Error("cannot listen", "addr", addr, "error", err)
+			return 1
+		}
+		if c.debugListening != nil {
+			c.debugListening(debugLn.Addr())
+		}
+	}
 
 	ctx, stop := signal.NotifyContext(c.ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -157,13 +178,14 @@ func (c *cli) serve(args []string) int {
 	defer close(done)
 
 	err = server.Run(ctx, server.RunOptions{
-		Config:   cfg,
-		Signer:   signer,
-		Logger:   log,
-		Version:  version,
-		Listener: ln,
-		Reloader: reloader,
-		LogLevel: &level,
+		Config:        cfg,
+		Signer:        signer,
+		Logger:        log,
+		Version:       version,
+		Listener:      ln,
+		DebugListener: debugLn,
+		Reloader:      reloader,
+		LogLevel:      &level,
 	})
 	if err != nil {
 		log.Error("server failed", "error", err)

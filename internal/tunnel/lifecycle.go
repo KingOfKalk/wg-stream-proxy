@@ -3,7 +3,6 @@
 package tunnel
 
 import (
-	"fmt"
 	"maps"
 	"slices"
 	"sync"
@@ -111,13 +110,14 @@ func (t *Tunnel) idleFired(gen uint64) {
 	t.finishStop(r, hook, "idle")
 }
 
-// stop stops the running device, if any. A later lookup or dial starts
-// it again unless the manager is closed.
-func (t *Tunnel) stop(reason string) {
+// stop stops the running device, if any, and reports whether one ran. A
+// later lookup or dial starts it again unless the manager is closed.
+func (t *Tunnel) stop(reason string) bool {
 	t.mu.Lock()
 	r, hook := t.detach()
 	t.mu.Unlock()
 	t.finishStop(r, hook, reason)
+	return r != nil
 }
 
 // detach disarms the idle timer and takes the running device. t.mu is
@@ -143,14 +143,10 @@ func (t *Tunnel) finishStop(r *running, hook func(), reason string) {
 // waits until no request on it is in flight, at most timeout (measured
 // by Options.Clock), then closes the device; connections still open
 // break. The tunnel stays usable: a later request starts it again.
+// An unknown name gives ErrNoSuchTunnel, a closed manager ErrClosed.
 func (m *Manager) Drain(name string, timeout time.Duration) error {
-	t, ok := m.Tunnel(name)
-	if !ok {
-		return fmt.Errorf("tunnel %q: no such tunnel", name)
-	}
-	m.wait([]*Tunnel{t}, timeout)
-	t.stop("drain")
-	return nil
+	_, err := m.drain(name, timeout, "drain")
+	return err
 }
 
 // Shutdown drains every tunnel, including tunnels still draining after a

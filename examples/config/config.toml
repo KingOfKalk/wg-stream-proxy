@@ -21,3 +21,6 @@ idle_timeout = "60m"
 
 # [epg]
 # url = "https://epg.example.com/epg.xml.gz"  # optional, no default
+
+# [debug]                             # debug endpoints, no authentication (spec 8)
+# listen = "127.0.0.1:2350"           # default "": off

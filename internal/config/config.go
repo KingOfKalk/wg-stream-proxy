@@ -63,6 +63,7 @@ type Tunnel struct {
 type Config struct {
 	paths         Paths
 	listen        string
+	debugListen   string
 	logLevel      slog.Level
 	logFormat     LogFormat
 	publicBaseURL string
@@ -83,6 +84,10 @@ func (c *Config) LogosDir() string { return logosDir(c.paths.ConfigDir) }
 
 // Listen returns the listen address.
 func (c *Config) Listen() string { return c.listen }
+
+// DebugListen returns [debug] listen, the address of the debug
+// endpoints, or "" when they are off.
+func (c *Config) DebugListen() string { return c.debugListen }
 
 // LogLevel returns the log level.
 func (c *Config) LogLevel() slog.Level { return c.logLevel }
