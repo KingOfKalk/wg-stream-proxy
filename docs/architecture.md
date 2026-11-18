@@ -841,18 +841,20 @@ together at run time.
 
 | Version | Adds | Where it shows up |
 |---|---|---|
-| **v0.1 Core** | Everything in the spec: config, tunnels, routes and guard, HLS rewrite, raw/ICY, signed `/r/`, channel list, `SIGHUP` reload, metrics, `import`, `epg`; Dockerfile, Compose file, image on `ghcr.io` (`linux/amd64`, `linux/arm64`); test layers L1-L6 | the whole picture above |
-| **v0.2 Experience** | Placeholder and error clips with seamless switchover (own design doc), per-request prefetch, file-watch reload | data plane (clips, prefetch), control plane (reload trigger) |
-| **v0.3 Distribution** | GoReleaser, systemd unit, launchd plist, Kustomize | deployment only |
-| **Later** | 32-bit ARM, scaling beyond 3 viewers, EPG proxy mode, logo proxying, per-tunnel overrides, ad-hoc proxy endpoint, DASH | mostly data plane |
+| **v0.1 Core** (released as v0.1.0) | Everything in the spec: config, tunnels, routes and guard, HLS rewrite, raw/ICY, signed `/r/`, channel list, `SIGHUP` reload, metrics, `import`, `epg`; Dockerfile, Compose file, image on `ghcr.io` (`linux/amd64`, `linux/arm64`); test layers L1-L6 | the whole picture above |
+| **v0.2 Observability** | Timing histograms, debug endpoints with profiles, recent requests and cool-down | metrics (`/metrics`), new debug endpoints |
+| **v0.3 Experience** | Placeholder and error clips with seamless switchover (own design doc), per-request prefetch, file-watch reload | data plane (clips, prefetch), control plane (reload trigger) |
+| **v0.4 Content** | DASH without DRM, EPG proxy mode, logo proxying, ad-hoc proxy endpoint | data plane |
+| **Later** | Distribution (GoReleaser, systemd unit, launchd plist, Kustomize), 32-bit ARM, scaling beyond 3 viewers, per-tunnel overrides | deployment, limits |
 
 ```mermaid
 flowchart LR
     v01["v0.1 Core<br/>spec complete<br/>container image"]:::proxy
-    v02["v0.2 Experience<br/>clips, prefetch,<br/>file-watch reload"]:::later
-    v03["v0.3 Distribution<br/>GoReleaser, systemd,<br/>launchd, Kustomize"]:::later
-    later["Later<br/>EPG and logo proxy, DASH,<br/>32-bit ARM, more viewers,<br/>per-tunnel overrides,<br/>ad-hoc endpoint"]:::later
-    v01 --> v02 --> v03 -.-> later
+    v02["v0.2 Observability<br/>timing histograms,<br/>debug endpoints"]:::later
+    v03["v0.3 Experience<br/>clips, prefetch,<br/>file-watch reload"]:::later
+    v04["v0.4 Content<br/>DASH, EPG proxy,<br/>logo proxy,<br/>ad-hoc endpoint"]:::later
+    later["Later<br/>GoReleaser, systemd, launchd,<br/>Kustomize, 32-bit ARM,<br/>more viewers,<br/>per-tunnel overrides"]:::later
+    v01 --> v02 --> v03 --> v04 -.-> later
 
     classDef proxy fill:#6f5cc2,stroke:#46398a,color:#ffffff
     classDef later fill:#c3cad2,stroke:#5b6670,color:#1b1f24,stroke-dasharray:5 3
@@ -872,11 +874,12 @@ flowchart LR
     subgraph proxy["wg-stream-proxy"]
         direction TB
         ctl["Config + reload<br/>SIGHUP"]:::proxy
-        watch["File-watch reload<br/>v0.2"]:::later
+        watch["File-watch reload<br/>v0.3"]:::later
         srv["HTTP server<br/>playlist, /c, /r"]:::proxy
-        clips["Placeholder and<br/>error clips v0.2"]:::later
-        pre["Prefetch v0.2"]:::later
-        extra["EPG proxy, logo proxy,<br/>ad-hoc endpoint, DASH<br/>later"]:::later
+        obs["Timing histograms,<br/>debug endpoints<br/>v0.2"]:::later
+        clips["Placeholder and<br/>error clips v0.3"]:::later
+        pre["Prefetch v0.3"]:::later
+        extra["EPG proxy, logo proxy,<br/>ad-hoc endpoint, DASH<br/>v0.4"]:::later
         routes{{"Routes + guard"}}:::guard
     end
     subgraph nets["Tunnels and direct"]
@@ -893,6 +896,7 @@ flowchart LR
     players --> srv
     watch -.-> ctl
     ctl --> srv
+    srv -.-> obs
     srv -.-> clips
     srv -.-> pre
     srv -.-> extra
@@ -918,12 +922,16 @@ flowchart LR
 
 - The core stays the same in every version: one process, routes with the
   guard in front of every dial, tunnels in userspace, fail closed.
-- v0.2 adds behaviour *in front of* the routes (clips, prefetch) and a
+- v0.2 adds measurements only (timing histograms, debug endpoints with
+  recent requests and cool-down); it does not change how requests are
+  routed.
+- v0.3 adds behaviour *in front of* the routes (clips, prefetch) and a
   second reload trigger next to `SIGHUP`.
-- v0.3 changes only how the binary is shipped and run (section 10).
-- Later items extend the data plane (EPG and logos fetched through the
-  proxy, an ad-hoc endpoint, DASH) or the limits (more viewers, 32-bit
-  ARM).
+- v0.4 extends the data plane (DASH without DRM, EPG and logos fetched
+  through the proxy, an ad-hoc endpoint).
+- Later items change how the binary is shipped and run (distribution,
+  section 10) or the limits (more viewers, 32-bit ARM, per-tunnel
+  overrides).
 
 ## 10. Deployment
 
@@ -939,7 +947,7 @@ flowchart TB
         img --> pi & compose
         bin --> host
     end
-    subgraph v03["v0.3"]
+    subgraph lt["Later"]
         direction LR
         gor["GoReleaser<br/>release binaries"]:::later
         svc["systemd unit (Linux)<br/>launchd plist (macOS)"]:::later
@@ -948,13 +956,13 @@ flowchart TB
         gor -.-> svc
         k8s -.-> cluster
     end
-    v01 ~~~ v03
+    v01 ~~~ lt
 
     classDef lan fill:#3b7fb0,stroke:#24577d,color:#ffffff
     classDef proxy fill:#6f5cc2,stroke:#46398a,color:#ffffff
     classDef later fill:#c3cad2,stroke:#5b6670,color:#1b1f24,stroke-dasharray:5 3
     style v01 fill:none,stroke:#6f5cc2,stroke-width:2px
-    style v03 fill:none,stroke:#5b6670,stroke-width:2px,stroke-dasharray:5 3
+    style lt fill:none,stroke:#5b6670,stroke-width:2px,stroke-dasharray:5 3
 ```
 
 - **One instance only**: tunnel state lives in memory, and VPN providers

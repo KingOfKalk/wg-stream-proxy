@@ -18,7 +18,7 @@ Companion to [spec.md](spec.md). Section numbers refer to the spec.
 | L2 Fuzz | Parsers | push (10s each), nightly (10min each) | v0.1 |
 | L3 Integration | Proxy + fixture upstreams + in-process tunnels | every push | v0.1 |
 | L4 Player | ffmpeg against the running binary | every push | v0.1 |
-| L5 Platform | Cross-compile, container smoke; manifests from v0.3 | every push | v0.1 / v0.3 |
+| L5 Platform | Cross-compile, container smoke; manifests (Later) | every push | v0.1 / Later |
 | L6 Manual | Real players, streams and hardware | before each release | v0.1 |
 
 All Go tests run with `-race` and `go.uber.org/goleak`.
@@ -76,7 +76,7 @@ Proxy in-process with a test config dir, fixture upstreams as `httptest.Server`s
 
 - v0.1: cross-compile `linux/amd64`, `linux/arm64`, `darwin/arm64` on every push; container smoke test (build image, start with `examples/config`, wait for `healthcheck`, fetch `/playlist.m3u8`); `docker compose config` for Compose.
 - v0.1, nightly: unit and integration tests on a native arm64 CI runner (QEMU only as fallback, without `-race`).
-- v0.3: `kubeconform` for Kustomize output, `systemd-analyze verify` for the unit.
+- Later (with distribution): `kubeconform` for Kustomize output, `systemd-analyze verify` for the unit.
 
 ## L6 Manual release checklist
 

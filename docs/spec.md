@@ -21,7 +21,8 @@
 ### 1.2 Non-goals
 
 - Decryption, DRM licenses or keys inside the proxy (permanent). AES-128 HLS keys are only passed through.
-- Transcoding, restreaming, DASH, Widevine passthrough, Kodi add-on, web UI, Xtream Codes, multi-user.
+- Transcoding, restreaming, Widevine passthrough, Kodi add-on, web UI, Xtream Codes, multi-user.
+- DASH in v0.1; DASH without DRM is planned for v0.4 (spec 10).
 
 ### 1.3 Platforms
 
@@ -372,10 +373,11 @@ Only `/c/` and `/r/` requests of enabled channels count; `channel` is the channe
 
 ## 10. Roadmap
 
-- **v0.1 Core:** everything in this spec, plus Dockerfile, Compose file and the v0.1 test layers in [testing.md](testing.md). Publishes the container image `ghcr.io/kingofkalk/wg-stream-proxy` (`linux/amd64` + `linux/arm64`, public package): tag `edge` on every push to `main`, version tags on release.
-- **v0.2 Experience:** placeholder and error clips with seamless switchover (own design doc), per-request prefetch, file-watch reload.
-- **v0.3 Distribution:** GoReleaser, systemd unit, launchd plist, Kustomize.
-- **Later:** 32-bit ARM, scaling beyond 3 viewers, EPG proxy mode, logo proxying, per-tunnel overrides, ad-hoc proxy endpoint, DASH.
+- **v0.1 Core** (released as v0.1.0): everything in this spec, plus Dockerfile, Compose file and the v0.1 test layers in [testing.md](testing.md). Publishes the container image `ghcr.io/kingofkalk/wg-stream-proxy` (`linux/amd64` + `linux/arm64`, public package): tag `edge` on every push to `main`, version tags on release.
+- **v0.2 Observability:** timing histograms, debug endpoints with profiles, recent requests and cool-down.
+- **v0.3 Experience:** placeholder and error clips with seamless switchover (own design doc), per-request prefetch, file-watch reload.
+- **v0.4 Content:** DASH without DRM, EPG proxy mode, logo proxying, ad-hoc proxy endpoint.
+- **Later:** distribution (GoReleaser, systemd unit, launchd plist, Kustomize), 32-bit ARM, scaling beyond 3 viewers, per-tunnel overrides.
 
 ## 11. Risks
 
