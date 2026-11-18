@@ -263,7 +263,7 @@ url = "https://daserste-live.ard-mcdn.de/daserste/live/hls/de/master.m3u8"
 - Header: `#EXTM3U x-tvg-url="<epg.url>" url-tvg="<epg.url>"` if `epg.url` is set (EPG link mode: the player fetches it).
 - Per channel:
   1. `playlist.extra` lines, sorted by directive, then key.
-  2. `#EXTINF:-1 tvg-id=".." tvg-name=".." tvg-logo=".." group-title=".."`, then `attrs` sorted by key, then `,<name>`. Empty values are omitted; `"` in values and names is replaced by `'`. Commas in names are fine (IPTV Simple Client takes the name after the last quoted attribute).
+  2. `#EXTINF:-1 tvg-id=".." tvg-name=".." tvg-logo=".." group-title=".."`, then `attrs` sorted by key, then `,<name>`. Empty values are omitted; `"` in values and names is replaced by `'`. Commas in names are fine (IPTV Simple Client takes the name after the last quoted attribute). Kodi lists a channel in its Radio section only with `radio="true"`, which comes from `attrs = { radio = "true" }` (no extra key).
   3. URL: `/c/{id}.m3u8` if `upstream.type = "hls"` or the upstream URL path contains `.m3u8`, otherwise `/c/{id}`. The handler strips a trailing `.m3u8` from the id.
 - `#KODIPROP` and other `extra` lines appear only here, never in playlists under `/c/` or `/r/`.
 

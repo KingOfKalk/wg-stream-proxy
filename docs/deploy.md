@@ -51,6 +51,17 @@ Compose: [`deploy/compose/compose.yaml`](../deploy/compose/compose.yaml) (`read_
 - Reload: `docker kill -s HUP wg-stream-proxy`.
 - LibreELEC 12+ on Raspberry Pi 4/5: the Docker add-on runs the `linux/arm64` image.
 
+## Radio channels in Kodi
+
+Kodi's IPTV Simple Client puts a channel into its Radio section only if the `#EXTINF` line has `radio="true"`. Set it through `playlist.attrs`, for a whole channel file with a file default (see [`examples/config/channels.d/radio.toml`](../examples/config/channels.d/radio.toml)):
+
+```toml
+[defaults.playlist]
+attrs = { radio = "true" }
+```
+
+The playlist then has `#EXTINF:-1 tvg-name="Example Radio" group-title="Radio" radio="true",Example Radio`. `import` keeps `radio="true"` from an M3U as an attr.
+
 ## systemd (v0.3)
 
 `deploy/systemd/wg-stream-proxy.service`:
