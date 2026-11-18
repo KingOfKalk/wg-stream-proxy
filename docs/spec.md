@@ -89,8 +89,8 @@ Resources under `/r/` use the same detection (steps 2.2-2.4): playlists are rewr
 
 - Upstream body piped with `io.Copy` and flush; no size or total time limit.
 - Shoutcast v1 servers answer `ICY 200 OK`; the raw route's connection wrapper rewrites a leading `ICY ` status line to `HTTP/1.0 ` before Go's HTTP parser sees it.
-  - Used for `/c/` requests of `raw` and `auto` channels (the type of `auto` is only known from the response; the wrapper leaves `HTTP/` responses unchanged). These connections have their own pool per route; `hls` channels and `/r/` resources use the normal one.
-  - Only the first bytes of each connection are checked; an ICY response has no length and ends with its connection. Over `https` the wrapper sees TLS records and changes nothing (Shoutcast v1 has no TLS).
+  - Used for `/c/` requests of `raw` and `auto` channels (the type of `auto` is only known from the response; the wrapper leaves `HTTP/` responses unchanged). These connections are not reused (one request per connection); `hls` channels and `/r/` resources use the normal pool.
+  - Only the first bytes of each connection are checked, so a connection carries one request: an ICY response has no length and ends with its connection, and a server may answer one port with ICY or HTTP per path. Over `https` the wrapper sees TLS records and changes nothing (Shoutcast v1 has no TLS).
 - `Icy-MetaData` is forwarded from the client; `icy-*` response headers are copied back.
 
 ### 3.4 Upstream HTTP rules

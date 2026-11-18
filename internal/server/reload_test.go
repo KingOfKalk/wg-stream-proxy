@@ -254,8 +254,11 @@ func closedByReload(name string) string {
 func TestReloadKeepsUnchangedTunnel(t *testing.T) {
 	peer, up := newPeer(t, "seg")
 	conf := peer.ClientConfig()
+	// Segments (/r/) use the normal connection pool; /c/ requests of auto
+	// channels use the ICY transport, which does not keep connections.
+	seg := func(id string) string { return newSigner(t).Path(id, "http://upstream.test/seg.ts") }
 	e := startTunnels(t, map[string]string{"tunnels/gr.conf": conf, "channels.d/gr.toml": tunnelChannels("gr")})
-	e.get(t, "/c/gr-seg", http.StatusOK)
+	e.get(t, seg("gr-seg"), http.StatusOK)
 
 	// Only comments in the tunnel file change; a channel is added.
 	writeFiles(t, e.dir, map[string]string{
@@ -265,8 +268,8 @@ func TestReloadKeepsUnchangedTunnel(t *testing.T) {
 	if err := e.reload(t); err != nil {
 		t.Fatalf("Reload: %v", err)
 	}
-	e.get(t, "/c/gr-seg", http.StatusOK)
-	e.get(t, "/c/more", http.StatusOK)
+	e.get(t, seg("gr-seg"), http.StatusOK)
+	e.get(t, seg("more"), http.StatusOK)
 
 	if n := e.starts("gr"); n != 1 {
 		t.Errorf("tunnel starts = %d, want 1 (same device, no new handshake)", n)

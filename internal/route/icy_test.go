@@ -251,23 +251,10 @@ func TestFetchICY(t *testing.T) {
 	}
 }
 
-// countingNet counts dials and closes of fixture connections.
+// countingNet counts dials of fixture connections.
 type countingNet struct {
 	*fakeNet
-	dials, closes atomic.Int64
-}
-
-type countedConn struct {
-	net.Conn
-	closes *atomic.Int64
-	once   atomic.Bool
-}
-
-func (c *countedConn) Close() error {
-	if c.once.CompareAndSwap(false, true) {
-		c.closes.Add(1)
-	}
-	return c.Conn.Close()
+	dials atomic.Int64
 }
 
 func (n *countingNet) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
@@ -276,12 +263,11 @@ func (n *countingNet) DialContext(ctx context.Context, network, address string) 
 		return nil, err
 	}
 	n.dials.Add(1)
-	return &countedConn{Conn: c, closes: &n.closes}, nil
+	return c, nil
 }
 
-// The ICY transport has its own connection pool: HLS connections of the
-// normal transport are never wrapped, and CloseIdleConnections closes
-// both pools.
+// The ICY transport has no connection pool: HLS connections of the
+// normal transport are never wrapped, and every ICY request dials.
 func TestICYTransportSeparatePool(t *testing.T) {
 	_, fixture, _ := newFixture(t, recorder(make(chan seen, 8)))
 	n := &countingNet{fakeNet: fixture}
@@ -302,11 +288,34 @@ func TestICYTransportSeparatePool(t *testing.T) {
 	}
 	fetch(true)
 	fetch(true)
-	if d := n.dials.Load(); d != 2 {
-		t.Fatalf("after ICY requests: %d dials, want 2 (one per pool)", d)
+	if d := n.dials.Load(); d != 3 {
+		t.Fatalf("after 2 ICY requests: %d dials, want 3 (one each, no keep-alive)", d)
 	}
-	r.CloseIdleConnections()
-	if c := n.closes.Load(); c != 2 {
-		t.Errorf("CloseIdleConnections closed %d connections, want 2", c)
+}
+
+// A Shoutcast v1 server may answer an HTTP request (status page) with
+// keep-alive and the next one, on the same port, with a raw ICY stream.
+// The ICY transport must not reuse a connection for that second request:
+// the wrapper only rewrites the first response of a connection (#51).
+func TestFetchICYAfterKeepAliveResponse(t *testing.T) {
+	icy := icyHandler(t)
+	r, _, _ := newFixture(t, func(w http.ResponseWriter, req *http.Request) {
+		if req.URL.Path == "/stream" {
+			icy(w, req)
+			return
+		}
+		_, _ = io.WriteString(w, "status")
+	})
+
+	resp := mustFetch(t, r, Request{URL: "http://cdn.example.com/7.html", ICY: true})
+	if body := readClose(t, resp); body != "status" {
+		t.Fatalf("status page body %q", body)
+	}
+	resp, err := r.Fetch(context.Background(), Request{URL: "http://cdn.example.com/stream", ICY: true})
+	if err != nil {
+		t.Fatalf("ICY stream after a keep-alive response: %v", err)
+	}
+	if body := readClose(t, resp); body != "AUDIO" || resp.Header.Get("Icy-Name") != "Radio" {
+		t.Errorf("ICY stream: body %q, icy-name %q", body, resp.Header.Get("Icy-Name"))
 	}
 }
