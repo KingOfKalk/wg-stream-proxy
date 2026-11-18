@@ -87,7 +87,7 @@ Proxy in-process with a test config dir, fixture upstreams as `httptest.Server`s
 
 ## CI and coverage
 
-- Every push: `golangci-lint` (incl. `gofumpt`, `errcheck`, `staticcheck`), `govulncheck`, L1, L2 short, L3, L4, L5.
+- Every push ([`ci.yml`](../.github/workflows/ci.yml)): `golangci-lint` (incl. `gofumpt`, `errcheck`, `staticcheck`), `govulncheck`, L1, L2 short (`Fuzz`: every target 10 s with `-fuzzminimizetime 2s`, a failing input is attached to the run as artifact `fuzz-failure`), L3 including the 30 s capacity test (`Capacity`, `WSP_CAPACITY=30s` with `-race`, a job of its own next to `Player`), L4, L5.
 - Nightly ([`nightly.yml`](../.github/workflows/nightly.yml), not a required check): L2 long, capacity 5 minutes, native arm64 run.
   - L2 long: every fuzz target (found with `go test -list '^Fuzz' ./...`) for 10 minutes with `-fuzzminimizetime 2s` (the default 60s stalls `FuzzRewrite`); a failing input is attached to the run as an artifact.
   - Capacity: `TestCapacity` in `internal/server/capacitytest` with `-race`. `WSP_CAPACITY` sets the duration (`5m` nightly; `30s` or `1` for the 30s run on push); unset, the test skips, so plain `go test ./...` does not run it. Bounds: every segment arrives, in order and unaltered, within 3 target durations of being published; goroutines grow by at most 20 and the heap in use (after GC) by at most 32 MiB over the first sample after the warm-up; `goleak` after shutdown.

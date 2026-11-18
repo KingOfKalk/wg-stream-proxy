@@ -9,9 +9,10 @@ on:
 permissions: {}
 
 # Required checks in the main ruleset (job names): Lint, Test, Security,
-# Player, Build.
-# Order: Lint -> Test and Security in parallel -> Player (after Test) ->
-# Cross-compile -> Build.
+# Player, Fuzz, Capacity, Build.
+# Order: Lint -> Test, Security and Fuzz in parallel -> Player and Capacity
+# (after Test) -> Cross-compile -> Build. Fuzz and Capacity run next to Test
+# and Player, so they should not lengthen the critical path.
 # Every job writes a short summary to the run page ($GITHUB_STEP_SUMMARY).
 jobs:
   lint:
@@ -75,6 +76,125 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           exit "$rc"
 
+  # L2 fuzzing on every push (docs/testing.md): every fuzz target of the
+  # module for 10 s. The targets are found with go test -list, as in
+  # nightly.yml, so new targets are fuzzed without a change here. One job
+  # runs them one after the other; it runs next to Test and Security, off
+  # the critical path.
+  fuzz:
+    name: Fuzz
+    needs: lint
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      FUZZTIME: 10s
+      # The default (60s) stalls FuzzRewrite at 0 execs/s while every
+      # worker minimises new corpus entries (#24).
+      FUZZMINIMIZETIME: 2s
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Go cache paths
+        id: go
+        run: |
+          {
+            echo "mod=$(go env GOMODCACHE)"
+            echo "build=$(go env GOCACHE)"
+            echo "version=$(go env GOVERSION)"
+          } >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ steps.go.outputs.mod }}
+            ${{ steps.go.outputs.build }}
+          key: go-fuzz-${{ runner.os }}-${{ steps.go.outputs.version }}-${{ hashFiles('go.sum', '.github/workflows/ci.yml') }}
+          restore-keys: |
+            go-fuzz-${{ runner.os }}-${{ steps.go.outputs.version }}-
+      - name: Fuzz
+        run: |
+          mod="$(go list -m)"
+          if ! go test -json -run '^$' -list '^Fuzz' ./... > "$RUNNER_TEMP/list.json"; then
+            jq -j 'select(.Action == "output") | .Output' "$RUNNER_TEMP/list.json"
+            echo "## Fuzz" >> "$GITHUB_STEP_SUMMARY"
+            echo "Listing the fuzz targets failed." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          # One "<package> <target>" line per target.
+          jq -rs '
+            .[] | select(.Action == "output" and (.Output | test("^Fuzz[^ \t]*\n$")))
+                | "\(.Package) \(.Output | rtrimstr("\n"))"' "$RUNNER_TEMP/list.json" > "$RUNNER_TEMP/targets.txt"
+          {
+            echo "## Fuzz"
+            echo
+            echo "$(wc -l < "$RUNNER_TEMP/targets.txt") target(s), ${FUZZTIME} each (\`-fuzzminimizetime ${FUZZMINIMIZETIME}\`)."
+          } >> "$GITHUB_STEP_SUMMARY"
+          failed=0
+          while read -r pkg target; do
+            name="${pkg#"${mod}"/}.${target}"
+            echo "::group::${name}"
+            set +e
+            go test -run '^$' -fuzz "^${target}\$" -fuzztime "$FUZZTIME" -fuzzminimizetime "$FUZZMINIMIZETIME" \
+              "$pkg" < /dev/null > "$RUNNER_TEMP/fuzz.txt" 2>&1
+            rc=$?
+            set -e
+            cat "$RUNNER_TEMP/fuzz.txt"
+            echo "::endgroup::"
+            # A failing input is written to the package's testdata/fuzz.
+            # Collect it for the artifact and remove it, so that it is not
+            # attributed to the next target.
+            git ls-files --others --exclude-standard -- '*testdata/fuzz/*' > "$RUNNER_TEMP/new.txt"
+            if [ -s "$RUNNER_TEMP/new.txt" ]; then
+              mkdir -p "$RUNNER_TEMP/fuzz-failure"
+              while IFS= read -r f; do
+                cp --parents "$f" "$RUNNER_TEMP/fuzz-failure/"
+                rm "$f"
+              done < "$RUNNER_TEMP/new.txt"
+            fi
+            {
+              echo
+              echo "### \`${name}\`"
+              echo
+              if [ "$rc" -eq 0 ]; then
+                echo "No failure in ${FUZZTIME}."
+                echo
+                echo '~~~'
+                grep '^fuzz: elapsed' "$RUNNER_TEMP/fuzz.txt" | tail -n 1 || true
+                echo '~~~'
+              else
+                echo "Failed (exit ${rc})."
+                if [ -s "$RUNNER_TEMP/new.txt" ]; then
+                  echo "Failing input, attached as artifact \`fuzz-failure\`; commit it to make it a regression test:"
+                  echo
+                  while IFS= read -r f; do
+                    echo "- \`${f}\`"
+                  done < "$RUNNER_TEMP/new.txt"
+                fi
+                echo
+                echo '~~~'
+                tail -n 40 "$RUNNER_TEMP/fuzz.txt"
+                echo '~~~'
+              fi
+            } >> "$GITHUB_STEP_SUMMARY"
+            if [ "$rc" -ne 0 ]; then
+              failed=1
+            fi
+          done < "$RUNNER_TEMP/targets.txt"
+          exit "$failed"
+      - name: Upload failing input
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fuzz-failure
+          path: ${{ runner.temp }}/fuzz-failure/
+          if-no-files-found: ignore
+
   test:
     name: Test
     needs: lint
@@ -114,6 +234,65 @@ jobs:
           set -e
           jq -j 'select(.Action == "output") | .Output' "$RUNNER_TEMP/test.json"
           jq -rs -f .github/scripts/test-summary.jq "$RUNNER_TEMP/test.json" >> "$GITHUB_STEP_SUMMARY"
+          exit "$rc"
+
+  # Capacity test of testing.md (L3): 3 viewers through the proxy and
+  # in-process tunnels for 30 s, with -race (nightly.yml runs 5 minutes).
+  # Its own job next to Player: it starts after Test and adds nothing to
+  # the critical path.
+  capacity:
+    name: Capacity
+    needs: test
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      WSP_CAPACITY: 30s
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Go cache paths
+        id: go
+        run: |
+          {
+            echo "mod=$(go env GOMODCACHE)"
+            echo "build=$(go env GOCACHE)"
+            echo "version=$(go env GOVERSION)"
+          } >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ steps.go.outputs.mod }}
+            ${{ steps.go.outputs.build }}
+          key: go-capacity-${{ runner.os }}-${{ steps.go.outputs.version }}-${{ hashFiles('go.sum', '.github/workflows/ci.yml') }}
+          restore-keys: |
+            go-capacity-${{ runner.os }}-${{ steps.go.outputs.version }}-
+      - name: Capacity test
+        run: |
+          set +e
+          go test -race -count=1 -run '^TestCapacity$' -v -timeout 5m -json ./internal/server/capacitytest > "$RUNNER_TEMP/test.json"
+          rc=$?
+          set -e
+          jq -j 'select(.Action == "output") | .Output' "$RUNNER_TEMP/test.json"
+          {
+            echo "## Capacity"
+            echo
+            if [ "$rc" -eq 0 ]; then
+              echo "Passed (\`WSP_CAPACITY=${WSP_CAPACITY}\`, \`-race\`)."
+            else
+              echo "Failed (exit ${rc}, \`WSP_CAPACITY=${WSP_CAPACITY}\`, \`-race\`)."
+            fi
+            echo
+            echo '~~~'
+            jq -j 'select(.Action == "output" and .Test == "TestCapacity" and (.Output | startswith("    "))) | .Output' "$RUNNER_TEMP/test.json"
+            echo '~~~'
+          } >> "$GITHUB_STEP_SUMMARY"
           exit "$rc"
 
   # Security checks of code and dependencies; govulncheck for now.
@@ -231,7 +410,7 @@ jobs:
 
   cross-compile:
     name: Cross-compile (${{ matrix.goos }}/${{ matrix.goarch }})
-    needs: [test, security, player]
+    needs: [test, security, player, fuzz, capacity]
     runs-on: ubuntu-26.04
     timeout-minutes: 15
     permissions:

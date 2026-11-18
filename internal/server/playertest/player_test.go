@@ -47,8 +47,6 @@ type playerCase struct {
 	// reloaded is a live media playlist the player must fetch more than
 	// once.
 	reloaded string
-	// skip is the reason to skip the case for now.
-	skip string
 }
 
 var playerCases = []playerCase{
@@ -92,11 +90,9 @@ var playerCases = []playerCase{
 		name: "icecast radio", id: "icecast", upstream: "/icecast/radio/tone.mp3", seconds: 5,
 		fetched: []string{"/icecast/radio/tone.mp3"},
 	},
-	// TODO(#15): enable once the raw route rewrites the "ICY 200 OK"
-	// status line (spec 3.3, https://github.com/KingOfKalk/wg-stream-proxy/issues/15).
 	{
 		name: "icy radio", id: "icy", upstream: "/shoutcast/radio/tone.mp3", seconds: 5,
-		fetched: []string{"/shoutcast/radio/tone.mp3"}, skip: "needs the ICY status line rewrite of #15",
+		fetched: []string{"/shoutcast/radio/tone.mp3"},
 	},
 }
 
@@ -120,9 +116,6 @@ func TestPlayer(t *testing.T) {
 
 	for _, tc := range playerCases {
 		t.Run(tc.name, func(t *testing.T) {
-			if tc.skip != "" {
-				t.Skip(tc.skip)
-			}
 			t.Parallel()
 			u := base + "/c/" + tc.id
 			if tc.hls {
