@@ -852,7 +852,7 @@ flowchart LR
     v01["v0.1 Core<br/>spec complete<br/>container image"]:::proxy
     v02["v0.2 Observability<br/>timing histograms,<br/>debug endpoints"]:::later
     v03["v0.3 Experience<br/>clips, prefetch,<br/>file-watch reload"]:::later
-    v04["v0.4 Content<br/>DASH, EPG proxy,<br/>logo proxy, ad-hoc endpoint"]:::later
+    v04["v0.4 Content<br/>DASH, EPG proxy,<br/>logo proxy,<br/>ad-hoc endpoint"]:::later
     later["Later<br/>GoReleaser, systemd, launchd,<br/>Kustomize, 32-bit ARM,<br/>more viewers,<br/>per-tunnel overrides"]:::later
     v01 --> v02 --> v03 --> v04 -.-> later
 
