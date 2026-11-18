@@ -62,6 +62,24 @@ attrs = { radio = "true" }
 
 The playlist then has `#EXTINF:-1 tvg-name="Example Radio" group-title="Radio" radio="true",Example Radio`. `import` keeps `radio="true"` from an M3U as an attr.
 
+## HLS channels in Kodi
+
+By default Kodi's IPTV Simple Client hands HLS to Kodi's internal FFmpeg. On a Raspberry Pi 5 two HLS channels stalled after about 20 s that way, although the proxy answered every request. With `inputstream.adaptive` they played stably and started faster. If an HLS channel stalls or starts slowly in Kodi, hand it to that add-on through `playlist.extra`:
+
+```toml
+[channel.playlist.extra.KODIPROP]
+"inputstream" = "inputstream.adaptive"
+```
+
+For a whole channel file, set it once as a file default:
+
+```toml
+[defaults.playlist.extra.KODIPROP]
+"inputstream" = "inputstream.adaptive"
+```
+
+The playlist then has `#KODIPROP:inputstream=inputstream.adaptive` before the channel's `#EXTINF` line (see [spec 5.4 and 6](spec.md)). The add-on must be installed and enabled in Kodi (VideoPlayer InputStream, InputStream Adaptive); the proxy does not check this.
+
 ## systemd (v0.3)
 
 `deploy/systemd/wg-stream-proxy.service`:
