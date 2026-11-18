@@ -3,8 +3,10 @@
 package route
 
 import (
+	"fmt"
 	"context"
 	"net"
+	"sync"
 )
 
 // Shoutcast v1 servers answer "ICY 200 OK" instead of an HTTP status
@@ -42,11 +44,30 @@ type icyConn struct {
 	head []byte
 	// err is a read error met while deciding, returned once after head.
 	err error
+	dbg []string
+	mu  sync.Mutex
 }
 
 func newICYConn(c net.Conn) net.Conn { return &icyConn{Conn: c} }
 
+func (c *icyConn) Close() error {
+	c.mu.Lock()
+	println("ICYDEBUG close", fmt.Sprint(c.dbg))
+	c.mu.Unlock()
+	return c.Conn.Close()
+}
+
 func (c *icyConn) Read(p []byte) (int, error) {
+	n, err := c.read(p)
+	c.mu.Lock()
+	if len(c.dbg) < 6 {
+		c.dbg = append(c.dbg, fmt.Sprintf("read(len %d)=%d %q %v", len(p), n, p[:min(n, 12)], err))
+	}
+	c.mu.Unlock()
+	return n, err
+}
+
+func (c *icyConn) read(p []byte) (int, error) {
 	if !c.decided {
 		if len(p) == 0 {
 			return 0, nil
