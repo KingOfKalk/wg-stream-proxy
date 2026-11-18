@@ -136,7 +136,7 @@ func (t *Tunnel) finishStop(r *running, hook func(), reason string) {
 		hook()
 	}
 	r.close()
-	t.m.opts.Logger.Info("tunnel closed", "tunnel", t.cfg.Name, "reason", reason)
+	t.m.opts.Logger.Info("tunnel closed", "tunnel", t.cfg.Name, "reason", reason, "uptime", t.m.opts.Clock.Now().Sub(r.started))
 }
 
 // Drain stops the tunnel name gracefully (spec 2.1, reload removal): it
@@ -166,7 +166,8 @@ func (m *Manager) Shutdown(timeout time.Duration) error {
 
 // wait blocks until no request on tunnels is in flight, timeout has
 // passed since the call or the manager is closed. It logs the tunnels
-// whose requests are cut by the timeout.
+// whose requests are cut by the timeout, and at debug level how long it
+// waited for the others.
 func (m *Manager) wait(tunnels []*Tunnel, timeout time.Duration) {
 	var (
 		expired chan struct{}
@@ -174,11 +175,13 @@ func (m *Manager) wait(tunnels []*Tunnel, timeout time.Duration) {
 	)
 	for _, t := range tunnels {
 		t.mu.Lock()
-		busy := t.busy
+		busy, requests := t.busy, t.inflight
 		t.mu.Unlock()
 		if busy == nil {
 			continue
 		}
+		// Before the timer starts, so a test clock sees the wait begin.
+		begin := m.opts.Clock.Now()
 		if expired == nil {
 			// The timer starts only when there is something to wait for.
 			expired = make(chan struct{})
@@ -191,9 +194,11 @@ func (m *Manager) wait(tunnels []*Tunnel, timeout time.Duration) {
 		}
 		select {
 		case <-busy:
+			m.opts.Logger.Debug("tunnel drained", "tunnel", t.cfg.Name, "requests", requests,
+				"waited", m.opts.Clock.Now().Sub(begin))
 		case <-expired:
 			m.opts.Logger.Warn("drain timeout: closing tunnel with requests in flight",
-				"tunnel", t.cfg.Name, "requests", t.inFlight())
+				"tunnel", t.cfg.Name, "requests", t.inFlight(), "waited", m.opts.Clock.Now().Sub(begin))
 		case <-m.closing:
 		}
 	}

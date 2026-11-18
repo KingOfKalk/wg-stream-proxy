@@ -11,8 +11,10 @@
 // connects to resolved addresses. Both start the device if needed;
 // concurrent first users share one start.
 //
-// Keys never appear in errors or logs: the UAPI text and wireguard-go's
-// own log output (which prints key fragments) are never passed on.
+// Keys never appear in errors or logs: the UAPI text is never passed on,
+// and wireguard-go's own log output (which names the peer by key
+// fragments) reaches the debug log only with the peer shown as the tunnel
+// name and anything key-like redacted (wgLogger).
 package tunnel
 
 import (
@@ -352,6 +354,10 @@ type Tunnel struct {
 type running struct {
 	dev *device.Device
 	net *netstack.Net
+	// started is when the first handshake completed, handshake how long
+	// it took after the device was up (Options.Clock).
+	started   time.Time
+	handshake time.Duration
 }
 
 // close closes the device. Every stop (failed start, idle close, drain,
@@ -569,6 +575,10 @@ func (t *Tunnel) ensure(ctx context.Context) (*running, error) {
 	}
 	m.mu.Unlock()
 
+	if f := startTrace(ctx); f != nil {
+		begin := m.opts.Clock.Now()
+		defer func() { f(m.opts.Clock.Now().Sub(begin)) }()
+	}
 	select {
 	case <-c.done:
 		return c.run, c.err
@@ -584,8 +594,10 @@ func (t *Tunnel) ensure(ctx context.Context) (*running, error) {
 
 func (t *Tunnel) doStart(c *startCall) {
 	defer t.m.starts.Done()
-	r, err := t.startDevice()
 	m := t.m
+	begin := m.opts.Clock.Now()
+	r, err := t.startDevice()
+	took := m.opts.Clock.Now().Sub(begin)
 	m.mu.Lock()
 	t.start = nil
 	switch {
@@ -603,10 +615,12 @@ func (t *Tunnel) doStart(c *startCall) {
 	m.mu.Unlock()
 	close(c.done)
 	if err != nil {
-		m.opts.Logger.Warn("tunnel start failed", "tunnel", t.cfg.Name, "err", err)
+		m.opts.Logger.Warn("tunnel start failed", "tunnel", t.cfg.Name, "err", err, "duration", took)
 		return
 	}
-	m.opts.Logger.Info("tunnel started", "tunnel", t.cfg.Name)
+	// duration: the whole start; handshake: its part after the device
+	// was up.
+	m.opts.Logger.Info("tunnel started", "tunnel", t.cfg.Name, "duration", took, "handshake", r.handshake)
 	// A start by callers that are not counted (no Begin) still ends in
 	// an idle close.
 	t.mu.Lock()
@@ -661,10 +675,11 @@ func (t *Tunnel) startDevice() (*running, error) {
 	}
 	t.starts.Add(1)
 	r := &running{
-		dev: device.NewDevice(tun, conn.NewDefaultBind(), &device.Logger{Verbosef: device.DiscardLogf, Errorf: device.DiscardLogf}),
+		dev: device.NewDevice(tun, conn.NewDefaultBind(), wgLogger(m.opts.Logger, t.cfg.Name)),
 		net: tnet,
 	}
-	// IpcSet errors may quote the configuration: never pass them on.
+	// IpcSet errors may quote the configuration: never pass them on
+	// (wgLogger drops wireguard-go's own log line of them).
 	if err := r.dev.IpcSet(uapi); err != nil {
 		r.close()
 		return nil, unavailable("configure device")
@@ -673,6 +688,7 @@ func (t *Tunnel) startDevice() (*running, error) {
 		r.close()
 		return nil, unavailable("device up: %v", err)
 	}
+	hs := m.opts.Clock.Now()
 	if peer := r.dev.LookupPeer(pk); peer != nil {
 		_ = peer.SendHandshakeInitiation(false)
 	}
@@ -686,6 +702,8 @@ func (t *Tunnel) startDevice() (*running, error) {
 		}
 		return nil, unavailable("no handshake within %s", timeout)
 	}
+	r.started = m.opts.Clock.Now()
+	r.handshake = r.started.Sub(hs)
 	return r, nil
 }
 

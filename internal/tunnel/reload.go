@@ -76,6 +76,7 @@ func (m *Manager) Apply(tunnels []*wgquick.Tunnel, drainTimeout time.Duration) (
 	m.mu.Unlock()
 
 	for _, t := range retired {
+		m.opts.Logger.Debug("tunnel retired", "tunnel", t.cfg.Name, "running", t.Running(), "requests", t.inFlight())
 		go m.drainRetired(t, drainTimeout)
 	}
 	slices.Sort(ch.Added)

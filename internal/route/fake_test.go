@@ -108,11 +108,16 @@ type fakeNet struct {
 	lookups  []string
 	dialed   []string // "network address"
 	started  chan string
+	// onLookup, if set, runs at the start of every lookup.
+	onLookup func()
 }
 
 var errNoRoute = errors.New("fake: no route to host")
 
 func (n *fakeNet) LookupNetIP(ctx context.Context, host string) ([]netip.Addr, error) {
+	if n.onLookup != nil {
+		n.onLookup()
+	}
 	n.mu.Lock()
 	n.lookups = append(n.lookups, host)
 	addrs, ok := n.hosts[host]

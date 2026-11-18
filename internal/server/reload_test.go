@@ -243,7 +243,7 @@ func startTunnels(t *testing.T, files map[string]string) *tunnelEnv {
 }
 
 func (e *tunnelEnv) starts(name string) int {
-	return strings.Count(e.logs.String(), `msg="tunnel started" tunnel=`+name+"\n")
+	return strings.Count(e.logs.String(), `msg="tunnel started" tunnel=`+name+" duration=")
 }
 
 // closedByReload is the log of a tunnel closed after a reload drain.

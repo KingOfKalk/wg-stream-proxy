@@ -6,15 +6,18 @@ import (
 	"bufio"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/KingOfKalk/wg-stream-proxy/internal/config"
 	"github.com/KingOfKalk/wg-stream-proxy/internal/hls"
 	"github.com/KingOfKalk/wg-stream-proxy/internal/metrics"
 	"github.com/KingOfKalk/wg-stream-proxy/internal/route"
+	"github.com/KingOfKalk/wg-stream-proxy/internal/tunnel"
 )
 
 // playlistContentType is the Content-Type of rewritten playlists (spec
@@ -120,9 +123,19 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request, g *generation, ch
 	// Only configured channel ids become labels, never URLs.
 	rq := s.metrics.Begin(ch.ID(), f.kind())
 	defer rq.End()
+	ctx := r.Context()
+	var trace *route.Trace
+	// The debug line costs nothing above debug level: no wrapper, no trace.
+	if s.log.Enabled(ctx, slog.LevelDebug) {
+		l := &requestLog{ResponseWriter: w, id: s.requestIDs.Add(1), start: time.Now()}
+		w = l
+		trace = &l.trace
+		ctx = tunnel.WithStartTrace(ctx, trace.NetworkWait)
+		defer s.logRequest(r, ch, rq, l)
+	}
 	client := r.Header
 	for refetch := false; ; refetch = true {
-		resp, err := rt.Fetch(r.Context(), route.Request{URL: f.upstream, Header: ch.Header(), Client: client, ICY: f.icy})
+		resp, err := rt.Fetch(ctx, route.Request{URL: f.upstream, Header: ch.Header(), Client: client, ICY: f.icy, Trace: trace})
 		if err != nil {
 			s.fail(w, r, ch, err, rq.FetchError)
 			return
@@ -144,6 +157,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request, g *generation, ch
 // without Range; refetch tells that this already happened.
 func (s *Server) respond(w http.ResponseWriter, r *http.Request, g *generation, ch config.Channel, rq *metrics.Request, resp *http.Response, f fetch, refetch bool) bool {
 	final := resp.Request.URL
+	debugLog(w).upstream(resp.StatusCode)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		rq.Response(resp.StatusCode)
 		if code := route.ClientStatus(resp.StatusCode); code != resp.StatusCode {
@@ -183,6 +197,7 @@ func (s *Server) respond(w http.ResponseWriter, r *http.Request, g *generation, 
 			s.log.Warn("upstream answered a playlist with 206 without Range", "channel", ch.ID(),
 				"url", route.RedactURL(final.String()))
 			rq.Error(string(route.ReasonOther))
+			debugLog(w).failed(route.ReasonOther)
 			http.Error(w, http.StatusText(http.StatusBadGateway), http.StatusBadGateway)
 			return false
 		}
@@ -223,6 +238,7 @@ func (s *Server) rewrite(w http.ResponseWriter, r *http.Request, g *generation, 
 		clearHeader(h)
 		s.log.Warn("playlist rejected", "channel", ch.ID(), "url", route.RedactURL(final.String()), "error", err)
 		rq.Error(string(route.ReasonOther))
+		debugLog(w).failed(route.ReasonOther)
 		http.Error(w, http.StatusText(http.StatusBadGateway), http.StatusBadGateway)
 		return
 	}
@@ -254,6 +270,7 @@ func (s *Server) stream(w http.ResponseWriter, r *http.Request, ch config.Channe
 		// upstream read a client disconnect cancelled.
 		if src.err != nil && r.Context().Err() == nil {
 			rq.Error(string(route.Classify(src.err)))
+			debugLog(w).failed(route.Classify(src.err))
 		}
 		s.log.Debug("stream ended", "channel", ch.ID(), "url", route.RedactURL(resp.Request.URL.String()),
 			"bytes", n, "reason", route.Classify(err))
@@ -273,6 +290,7 @@ func (s *Server) fail(w http.ResponseWriter, r *http.Request, ch config.Channel,
 	}
 	reason := route.Classify(err)
 	count(string(reason))
+	debugLog(w).failed(reason)
 	code := route.ErrorStatus(err)
 	s.log.Warn("upstream request failed", "channel", ch.ID(), "route", ch.Route(),
 		"reason", reason, "status", code, "error", err)
