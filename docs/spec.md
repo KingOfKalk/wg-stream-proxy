@@ -21,7 +21,8 @@
 ### 1.2 Non-goals
 
 - Decryption, DRM licenses or keys inside the proxy (permanent). AES-128 HLS keys are only passed through.
-- Transcoding, restreaming, DASH, Widevine passthrough, Kodi add-on, web UI, Xtream Codes, multi-user.
+- Transcoding, restreaming, Widevine passthrough, Kodi add-on, web UI, Xtream Codes, multi-user.
+- DASH in v0.1; DASH without DRM is planned for v0.4 (spec 10).
 
 ### 1.3 Platforms
 
