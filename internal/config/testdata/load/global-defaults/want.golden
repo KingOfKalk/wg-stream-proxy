@@ -15,6 +15,7 @@
     "idle": "1h0m0s",
     "read": "30s"
   },
+  "MaxPlaylistSize": 8388608,
   "AllowPrivate": {},
   "EPGURL": "",
   "Tunnels": [

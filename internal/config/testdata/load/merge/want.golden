@@ -15,6 +15,7 @@
     "idle": "1h0m0s",
     "read": "30s"
   },
+  "MaxPlaylistSize": 524288,
   "AllowPrivate": {
     "direct": [
       "192.168.1.0/24",

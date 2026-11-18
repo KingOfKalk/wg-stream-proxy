@@ -30,11 +30,12 @@ type rawConfig struct {
 }
 
 type rawSettings struct {
-	UserAgent      *string             `toml:"user_agent"`
-	ConnectTimeout *string             `toml:"connect_timeout"`
-	HeaderTimeout  *string             `toml:"header_timeout"`
-	ReadTimeout    *string             `toml:"read_timeout"`
-	AllowPrivate   map[string][]string `toml:"allow_private"`
+	UserAgent       *string             `toml:"user_agent"`
+	ConnectTimeout  *string             `toml:"connect_timeout"`
+	HeaderTimeout   *string             `toml:"header_timeout"`
+	ReadTimeout     *string             `toml:"read_timeout"`
+	MaxPlaylistSize *string             `toml:"max_playlist_size"`
+	AllowPrivate    map[string][]string `toml:"allow_private"`
 }
 
 // rawChannelFile is the TOML structure of a channel file (spec 5.4).

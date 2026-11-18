@@ -11,6 +11,7 @@ user_agent = "Mozilla/5.0 (X11; Linux x86_64) Firefox/132.0"
 connect_timeout = "10s"
 header_timeout = "15s"
 read_timeout = "30s"
+max_playlist_size = "8MiB"            # B, KiB or MiB; at most 32MiB
 
 [upstream.allow_private]              # optional, per route name
 direct = []

@@ -12,8 +12,9 @@ import (
 )
 
 const (
-	// MaxPlaylistSize is the largest playlist body Rewrite accepts (spec 3.4).
-	MaxPlaylistSize = 2 << 20
+	// MaxPlaylistSize is the largest playlist body Rewrite accepts: the
+	// upper bound of [upstream] max_playlist_size (spec 3.4, 5.3).
+	MaxPlaylistSize = 32 << 20
 	// MaxURLLen is the longest upstream URL in bytes (spec 3.4).
 	MaxURLLen = 4096
 )
@@ -35,8 +36,8 @@ var (
 	// outside a recognised URI attribute (unquoted value, escaped quote,
 	// broken attribute list).
 	ErrInvalidPlaylist = errors.New("hls: playlist rejected")
-	// ErrInvalidResourceURL: urlFor returned an empty string or one with
-	// a quote or line break, which would corrupt the playlist.
+	// ErrInvalidResourceURL: appendURL appended nothing or a quote or line
+	// break, which would corrupt the playlist.
 	ErrInvalidResourceURL = errors.New("hls: invalid resource URL")
 )
 
@@ -44,19 +45,20 @@ const lineSpace = " \t\v\f"
 
 // Rewrite rewrites an HLS playlist (spec 3.2). Every URI line (non-blank,
 // not starting with '#') and every quoted URI attribute (named URI or ending
-// in -URI) of an #EXT tag other than #EXTINF is replaced with urlFor(abs),
-// where abs is the URI resolved against final, the playlist's URL after
-// redirects. Only http, https and relative URIs are replaced; URIs with
-// other schemes and all other bytes (line endings LF, CRLF or lone CR, BOM,
-// blank lines, comments, other tags and attributes, whitespace around URI
-// lines) stay unchanged.
+// in -URI) of an #EXT tag other than #EXTINF is replaced with the URL
+// appendURL(dst, abs) appends to dst, where abs is the URI resolved against
+// final, the playlist's URL after redirects, in the form of
+// url.URL.String. abs is only valid during the call. Only http, https and
+// relative URIs are replaced; URIs with other schemes and all other bytes
+// (line endings LF, CRLF or lone CR, BOM, blank lines, comments, other tags
+// and attributes, whitespace around URI lines) stay unchanged.
 //
 // Fail closed: input larger than MaxPlaylistSize (the caller limits the
 // read as well), an http(s) or relative URI that does not parse or resolves
 // to a URL longer than MaxURLLen, and playlists players could read
 // differently (ErrInvalidPlaylist) are rejected as a whole. playlist is not
 // modified.
-func Rewrite(playlist []byte, final *url.URL, urlFor func(abs *url.URL) string) ([]byte, error) {
+func Rewrite(playlist []byte, final *url.URL, appendURL func(dst, abs []byte) []byte) ([]byte, error) {
 	if len(playlist) > MaxPlaylistSize {
 		return nil, ErrPlaylistTooLarge
 	}
@@ -66,7 +68,7 @@ func Rewrite(playlist []byte, final *url.URL, urlFor func(abs *url.URL) string) 
 	if bytes.IndexByte(playlist, 0) >= 0 {
 		return nil, fmt.Errorf("%w: NUL byte", ErrInvalidPlaylist)
 	}
-	rw := rewriter{final: final, urlFor: urlFor, out: make([]byte, 0, len(playlist)+len(playlist)/2)}
+	rw := rewriter{final: final, appendURL: appendURL, out: make([]byte, 0, outputCap(len(playlist)))}
 	first := true
 	for rest := playlist; len(rest) > 0; {
 		var content, eol []byte
@@ -86,17 +88,34 @@ func Rewrite(playlist []byte, final *url.URL, urlFor func(abs *url.URL) string) 
 	return rw.out, nil
 }
 
+// outputCap is the initial capacity of the output for a playlist of n
+// bytes. Signed resource URLs are longer than the URIs they replace;
+// playlists of long DVR windows grow to about twice their size.
+func outputCap(n int) int {
+	return 2*n + 4096
+}
+
 type rewriter struct {
-	final  *url.URL
-	urlFor func(*url.URL) string
-	out    []byte
+	final     *url.URL
+	appendURL func(dst, abs []byte) []byte
+	out       []byte
+	abs       []byte    // resolved URL of the current URI
+	dirs      []dirBase // resolved directories, see resolve
 }
 
 // nextLine splits off the first line of b. Lines end at LF, CRLF or a lone
 // CR (ffmpeg reads a lone CR as a line end too); eol is empty only for the
 // last line without terminator.
 func nextLine(b []byte) (content, eol, rest []byte) {
-	i := bytes.IndexAny(b, "\r\n")
+	// Two IndexByte calls are much faster than one IndexAny.
+	i := bytes.IndexByte(b, '\n')
+	head := b
+	if i >= 0 {
+		head = b[:i]
+	}
+	if cr := bytes.IndexByte(head, '\r'); cr >= 0 {
+		i = cr
+	}
 	switch {
 	case i < 0:
 		return b, nil, nil
@@ -106,18 +125,28 @@ func nextLine(b []byte) (content, eol, rest []byte) {
 	return b[:i], b[i : i+1], b[i+1:]
 }
 
+// isLineSpace reports whether c is in lineSpace.
+func isLineSpace(c byte) bool {
+	return c == ' ' || c == '\t' || c == '\v' || c == '\f'
+}
+
 // line appends the rewritten content of one line, without terminator.
 func (rw *rewriter) line(content []byte) error {
-	trimmed := bytes.TrimLeft(content, lineSpace)
-	lead := len(content) - len(trimmed)
-	trimmed = bytes.TrimRight(trimmed, lineSpace)
+	lead, end := 0, len(content)
+	for lead < end && isLineSpace(content[lead]) {
+		lead++
+	}
+	for end > lead && isLineSpace(content[end-1]) {
+		end--
+	}
+	trimmed := content[lead:end]
 	switch {
 	case len(trimmed) == 0:
 		rw.out = append(rw.out, content...)
 		return nil
 	case trimmed[0] == '#':
 		if bytes.HasPrefix(trimmed, []byte("#EXT")) {
-			return rw.tag(content)
+			return rw.tag(content, trimmed)
 		}
 		rw.out = append(rw.out, content...)
 		return nil
@@ -126,14 +155,15 @@ func (rw *rewriter) line(content []byte) error {
 	if err := rw.uri(trimmed); err != nil {
 		return err
 	}
-	rw.out = append(rw.out, content[lead+len(trimmed):]...)
+	rw.out = append(rw.out, content[end:]...)
 	return nil
 }
 
-// tag appends a tag line with the values of its URI attributes rewritten.
-// #EXTINF has no attribute list and is copied as is.
-func (rw *rewriter) tag(line []byte) error {
-	if bytes.HasPrefix(bytes.TrimLeft(line, lineSpace), []byte("#EXTINF:")) {
+// tag appends a tag line with the values of its URI attributes rewritten;
+// trimmed is the line without surrounding whitespace. #EXTINF has no
+// attribute list and is copied as is.
+func (rw *rewriter) tag(line, trimmed []byte) error {
+	if bytes.HasPrefix(trimmed, []byte("#EXTINF:")) {
 		rw.out = append(rw.out, line...)
 		return nil
 	}
@@ -261,23 +291,149 @@ func (rw *rewriter) uri(raw []byte) error {
 		rw.out = append(rw.out, raw...)
 		return nil
 	}
+	if err := rw.resolve(raw); err != nil {
+		return err
+	}
+	if len(rw.abs) > MaxURLLen {
+		return ErrURLTooLong
+	}
+	start := len(rw.out)
+	out := rw.appendURL(rw.out, rw.abs)
+	if len(out) <= start {
+		return ErrInvalidResourceURL
+	}
+	if repl := out[start:]; bytes.IndexByte(repl, '"') >= 0 || bytes.IndexByte(repl, '\r') >= 0 || bytes.IndexByte(repl, '\n') >= 0 {
+		return ErrInvalidResourceURL
+	}
+	rw.out = out
+	return nil
+}
+
+// maxDirs bounds the resolved directories one Rewrite keeps.
+const maxDirs = 16
+
+// dirBase is a URI directory and the resolved URL it stands for: dir +
+// name resolves to base + name for every plain name (see splitURI).
+type dirBase struct {
+	dir, base string
+	ok        bool // false: resolving dir + name needs net/url
+}
+
+// resolve sets rw.abs to raw resolved against the final URL, as
+// rw.final.ResolveReference(url.Parse(raw)).String() would.
+//
+// Playlists repeat the same directory in thousands of URIs, so the
+// directory is resolved once through net/url and the rest is appended:
+// splitURI cuts raw into a directory and a tail (file name and query)
+// that net/url copies as it is. Every other URI goes through net/url.
+func (rw *rewriter) resolve(raw []byte) error {
+	if dir, tail, ok := splitURI(raw); ok {
+		if base, ok := rw.dirBase(dir); ok {
+			rw.abs = append(append(rw.abs[:0], base...), tail...)
+			return nil
+		}
+	}
 	ref, err := url.Parse(string(raw))
 	if err != nil {
 		// The parse error is dropped: it quotes the URI, which may carry
 		// tokens that must not reach the logs (spec 8).
 		return ErrInvalidURI
 	}
-	abs := rw.final.ResolveReference(ref)
-	if len(abs.String()) > MaxURLLen {
-		return ErrURLTooLong
-	}
-	repl := rw.urlFor(abs)
-	if repl == "" || strings.ContainsAny(repl, "\"\r\n") {
-		return ErrInvalidResourceURL
-	}
-	rw.out = append(rw.out, repl...)
+	rw.abs = append(rw.abs[:0], rw.final.ResolveReference(ref).String()...)
 	return nil
 }
+
+// dirBase returns the resolved base of URI directory dir. It resolves
+// dir + "x" with net/url and keeps the result without its final "x", if
+// it ends in "/x".
+func (rw *rewriter) dirBase(dir []byte) (string, bool) {
+	for _, d := range rw.dirs {
+		if d.dir == string(dir) {
+			return d.base, d.ok
+		}
+	}
+	d := dirBase{dir: string(dir)}
+	if ref, err := url.Parse(d.dir + "x"); err == nil {
+		s := rw.final.ResolveReference(ref).String()
+		if strings.HasSuffix(s, "/x") {
+			d.base, d.ok = s[:len(s)-1], true
+		}
+	}
+	if len(rw.dirs) < maxDirs {
+		rw.dirs = append(rw.dirs, d)
+	}
+	return d.base, d.ok
+}
+
+// splitURI splits an http(s) or relative URI into dir, up to and including
+// the last '/' before the query, and tail, the file name and query after
+// it, if net/url resolves and prints the tail as it is: the file name is
+// not empty, not "." or "..", and has only bytes that need no escaping
+// in a path and cannot start a scheme ([A-Za-z0-9-._~$&+,;=@]); the
+// query has only printable ASCII; there is no fragment; dir does not end
+// in "//" (the file name would be the host).
+func splitURI(raw []byte) (dir, tail []byte, ok bool) {
+	end := len(raw)
+	if q := bytes.IndexByte(raw, '?'); q >= 0 {
+		end = q
+	}
+	slash := bytes.LastIndexByte(raw[:end], '/')
+	file := raw[slash+1 : end]
+	if len(file) == 0 || string(file) == "." || string(file) == ".." ||
+		slash > 0 && raw[slash-1] == '/' {
+		return nil, nil, false
+	}
+	for _, c := range file {
+		if !isPlainNameByte(c) {
+			return nil, nil, false
+		}
+	}
+	for _, c := range raw[end:] {
+		if byteClass[c]&classQuery == 0 {
+			return nil, nil, false
+		}
+	}
+	if bytes.IndexByte(raw[:slash+1], '#') >= 0 {
+		return nil, nil, false
+	}
+	return raw[:slash+1], raw[slash+1:], true
+}
+
+// isPlainNameByte reports whether c may appear in a file name splitURI
+// accepts: unreserved or a path sub-delimiter net/url does not escape,
+// but not ':'.
+func isPlainNameByte(c byte) bool { return byteClass[c]&classPlain != 0 }
+
+// Byte classes of the fast paths, as flags in byteClass.
+const (
+	classPlain = 1 << iota // [A-Za-z0-9-._~$&+,;=@]: isPlainNameByte
+	className              // [A-Za-z0-9._-]: kept in a resource {name}
+	classURL               // printable ASCII or space, not '#': simplePath
+	classQuery             // printable ASCII, not '#': splitURI query
+)
+
+var byteClass = func() (t [256]uint8) {
+	for c := ' '; c < 0x7f; c++ {
+		if c != '#' {
+			t[c] |= classURL
+			if c != ' ' {
+				t[c] |= classQuery
+			}
+		}
+	}
+	for c := range t {
+		if c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c >= '0' && c <= '9' {
+			t[c] |= classPlain | className
+		}
+	}
+	for _, c := range []byte("-._~$&+,;=@") {
+		t[c] |= classPlain
+	}
+	for _, c := range []byte("._-") {
+		t[c] |= className
+	}
+	return t
+}()
 
 // uriScheme returns the RFC 3986 scheme of a URI reference, or "" for a
 // relative reference.

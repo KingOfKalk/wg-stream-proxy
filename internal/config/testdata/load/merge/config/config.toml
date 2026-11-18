@@ -1,6 +1,7 @@
 [upstream]
 user_agent = "ExampleAgent/1.0"
 connect_timeout = "5s"
+max_playlist_size = "512KiB"
 
 [upstream.allow_private]
 direct = ["192.168.1.0/24", "fd00::/8"]

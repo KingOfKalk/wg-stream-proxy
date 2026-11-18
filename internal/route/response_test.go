@@ -110,17 +110,18 @@ func TestCopyResponseHeaderNonCanonicalIcy(t *testing.T) {
 }
 
 func TestReadPlaylist(t *testing.T) {
+	const limit = 1000
 	tests := []struct {
 		size    int
 		wantErr error
 	}{
 		{0, nil},
-		{MaxPlaylistSize, nil},
-		{MaxPlaylistSize + 1, ErrTooLarge},
+		{limit, nil},
+		{limit + 1, ErrTooLarge},
 	}
 	for _, tt := range tests {
 		t.Run(strconv.Itoa(tt.size), func(t *testing.T) {
-			b, err := ReadPlaylist(bytes.NewReader(make([]byte, tt.size)))
+			b, err := ReadPlaylist(bytes.NewReader(make([]byte, tt.size)), limit)
 			if !errors.Is(err, tt.wantErr) {
 				t.Fatalf("ReadPlaylist error = %v, want %v", err, tt.wantErr)
 			}
@@ -130,13 +131,16 @@ func TestReadPlaylist(t *testing.T) {
 			if err != nil && Classify(err) != ReasonSize {
 				t.Errorf("Classify = %q, want size", Classify(err))
 			}
+			if err != nil && err.Error() != "route: playlist too large: more than 1000 bytes (upstream.max_playlist_size)" {
+				t.Errorf("error %q does not name the limit", err)
+			}
 		})
 	}
 }
 
 func TestReadPlaylistReadError(t *testing.T) {
 	boom := errors.New("boom")
-	if _, err := ReadPlaylist(io.MultiReader(bytes.NewReader([]byte("#EXTM3U")), errReader{boom})); !errors.Is(err, boom) {
+	if _, err := ReadPlaylist(io.MultiReader(bytes.NewReader([]byte("#EXTM3U")), errReader{boom}), 1000); !errors.Is(err, boom) {
 		t.Errorf("ReadPlaylist error = %v, want %v", err, boom)
 	}
 }

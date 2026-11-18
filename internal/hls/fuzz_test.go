@@ -15,8 +15,8 @@ import (
 
 // fuzzURLFor is a short resource URL builder, so rewritten output stays
 // well below the URL limit and can be rewritten again.
-func fuzzURLFor(abs *url.URL) string {
-	return "/r/f/" + strconv.Itoa(len(abs.String()))
+func fuzzURLFor(dst, abs []byte) []byte {
+	return strconv.AppendInt(append(dst, "/r/f/"...), int64(len(abs)), 10)
 }
 
 // isRewritable reports whether the rewriter must replace URI s: it parses
@@ -162,6 +162,7 @@ func FuzzRewrite(f *testing.F) {
 		"#EXTINF:6.0,URI=\"https://example.com/x\"\nfoo:%zz\n",
 		"#EXT-X-KEY:METHOD=AES-128 URI=\"k\"\n#EXT-X-FOO:A=\"x\\\"\",URI=\"https://example.com/k\"\n",
 		"#EXT-X-FOO:URI=https://example.com/k,X-ASSET-URI=\"a\"\rseg.ts\r",
+		"../a/b.ts?x=1\n/abs/./c.ts\n//cdn.example.org/d.ts\nHTTP://h.example/../e.ts?\n%41/x.ts?#f\na b/c.ts\n#EXT-X-MAP:URI=\"../../i.mp4\"\n",
 	} {
 		f.Add([]byte(s))
 	}
@@ -170,6 +171,9 @@ func FuzzRewrite(f *testing.F) {
 		f.Fatal(err)
 	}
 	f.Fuzz(func(t *testing.T, in []byte) {
+		// The output with the signer is byte for byte the one of the
+		// implementation before issue #76 (reference_test.go).
+		rewriteBoth(t, in, final)
 		out, err := Rewrite(in, final, fuzzURLFor)
 		if err != nil {
 			if !errors.Is(err, ErrInvalidURI) && !errors.Is(err, ErrURLTooLong) && !errors.Is(err, ErrInvalidPlaylist) && !errors.Is(err, ErrPlaylistTooLarge) {
