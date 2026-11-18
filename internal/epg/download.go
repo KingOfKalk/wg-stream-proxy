@@ -23,7 +23,7 @@ func Download(ctx context.Context, rt *route.Route, url string) (*Index, error) 
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("epg: download %s: status %d", route.RedactURL(url), resp.StatusCode)
+		return nil, fmt.Errorf("epg: download %s: status %d", route.LogURL(url), resp.StatusCode)
 	}
 	return parseBody(resp.Body, MaxSize)
 }

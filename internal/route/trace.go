@@ -50,7 +50,7 @@ type Phases struct {
 	Reused bool
 	// Redirects counts the redirects followed.
 	Redirects int
-	// URL is the last upstream URL tried, redacted by RedactURL.
+	// URL is the last upstream URL tried, reduced by LogURL.
 	URL string
 }
 
@@ -177,12 +177,12 @@ func (t *Trace) redirected() {
 	t.p.Redirects++
 }
 
-// setURL records u, redacted, as the last URL tried.
+// setURL records u, reduced by LogURL, as the last URL tried.
 func (t *Trace) setURL(u *url.URL) {
 	if t == nil {
 		return
 	}
-	s := RedactURL(u.String())
+	s := LogURL(u.String())
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.p.URL = s

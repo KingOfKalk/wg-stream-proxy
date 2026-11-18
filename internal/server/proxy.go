@@ -162,7 +162,7 @@ func (s *Server) respond(w http.ResponseWriter, r *http.Request, g *generation, 
 		rq.Response(resp.StatusCode)
 		if code := route.ClientStatus(resp.StatusCode); code != resp.StatusCode {
 			s.log.Warn("upstream error status", "channel", ch.ID(), "route", ch.Route(),
-				"url", route.RedactURL(final.String()), "upstream_status", resp.StatusCode, "status", code)
+				"url", route.LogURL(final.String()), "upstream_status", resp.StatusCode, "status", code)
 			http.Error(w, http.StatusText(code), code)
 			return false
 		}
@@ -195,7 +195,7 @@ func (s *Server) respond(w http.ResponseWriter, r *http.Request, g *generation, 
 	if resp.StatusCode == http.StatusPartialContent {
 		if refetch {
 			s.log.Warn("upstream answered a playlist with 206 without Range", "channel", ch.ID(),
-				"url", route.RedactURL(final.String()))
+				"url", route.LogURL(final.String()))
 			rq.Error(string(route.ReasonOther))
 			debugLog(w).failed(route.ReasonOther)
 			http.Error(w, http.StatusText(http.StatusBadGateway), http.StatusBadGateway)
@@ -236,7 +236,7 @@ func (s *Server) rewrite(w http.ResponseWriter, r *http.Request, g *generation, 
 	if err != nil {
 		// hls errors never contain URIs from the playlist.
 		clearHeader(h)
-		s.log.Warn("playlist rejected", "channel", ch.ID(), "url", route.RedactURL(final.String()), "error", err)
+		s.log.Warn("playlist rejected", "channel", ch.ID(), "url", route.LogURL(final.String()), "error", err)
 		rq.Error(string(route.ReasonOther))
 		debugLog(w).failed(route.ReasonOther)
 		http.Error(w, http.StatusText(http.StatusBadGateway), http.StatusBadGateway)
@@ -245,7 +245,7 @@ func (s *Server) rewrite(w http.ResponseWriter, r *http.Request, g *generation, 
 	h.Set("Content-Length", strconv.Itoa(len(out)))
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(out)
-	s.log.Debug("playlist", "channel", ch.ID(), "url", route.RedactURL(final.String()))
+	s.log.Debug("playlist", "channel", ch.ID(), "url", route.LogURL(final.String()))
 }
 
 // stream relays a non-playlist response: headers per spec 3.4, the
@@ -272,11 +272,11 @@ func (s *Server) stream(w http.ResponseWriter, r *http.Request, ch config.Channe
 			rq.Error(string(route.Classify(src.err)))
 			debugLog(w).failed(route.Classify(src.err))
 		}
-		s.log.Debug("stream ended", "channel", ch.ID(), "url", route.RedactURL(resp.Request.URL.String()),
+		s.log.Debug("stream ended", "channel", ch.ID(), "url", route.LogURL(resp.Request.URL.String()),
 			"bytes", n, "reason", route.Classify(err))
 		return
 	}
-	s.log.Debug("stream done", "channel", ch.ID(), "url", route.RedactURL(resp.Request.URL.String()), "bytes", n)
+	s.log.Debug("stream done", "channel", ch.ID(), "url", route.LogURL(resp.Request.URL.String()), "bytes", n)
 }
 
 // fail answers an upstream error: 504 for timeouts, else 502 (spec 3.4).
