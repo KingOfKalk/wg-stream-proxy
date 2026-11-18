@@ -84,12 +84,17 @@ func (e *Error) Unwrap() error { return e.Err }
 // the final response headers, across redirects; read_timeout limits each
 // body Read, so a slow client does not count against it. The caller must
 // close the body. Errors are *Error values; see Classify and ErrorStatus.
+//
+// The request counts as activity of the route (Options.Activity) from the
+// start until the body is closed or the error is returned, so an open
+// stream keeps a tunnel up and a pooled idle connection does not.
 func (r *Route) Fetch(ctx context.Context, req Request) (*http.Response, error) {
 	u, err := parseUpstreamURL(req.URL)
 	if err != nil {
 		return nil, &Error{URL: RedactURL(req.URL), Err: err}
 	}
 
+	end := r.begin()
 	ctx, cancel := context.WithCancelCause(ctx)
 	headerTimer := r.clock.AfterFunc(r.upstream.HeaderTimeout, func() { cancel(ErrHeaderTimeout) })
 	t := r.transport
@@ -107,9 +112,10 @@ func (r *Route) Fetch(ctx context.Context, req Request) (*http.Response, error) 
 			err = ErrHeaderTimeout
 		}
 		cancel(nil)
+		end()
 		return nil, &Error{URL: RedactURL(u.String()), Err: err}
 	}
-	resp.Body = newTimedBody(ctx, cancel, resp.Body, r.clock, r.upstream.ReadTimeout)
+	resp.Body = newTimedBody(ctx, cancel, resp.Body, r.clock, r.upstream.ReadTimeout, end)
 	return resp, nil
 }
 
@@ -207,19 +213,20 @@ func isPlaylistPath(path string) bool {
 
 // timedBody is a response body with the resettable read timer: the timer
 // runs only while a Read waits for data and cancels the request when it
-// fires (spec 3.4 read_timeout).
+// fires (spec 3.4 read_timeout). Close ends the request's activity.
 type timedBody struct {
 	rc     io.ReadCloser
 	ctx    context.Context
 	cancel context.CancelCauseFunc
 	timer  Timer
 	d      time.Duration
+	end    func()
 }
 
-func newTimedBody(ctx context.Context, cancel context.CancelCauseFunc, rc io.ReadCloser, clk Clock, d time.Duration) *timedBody {
+func newTimedBody(ctx context.Context, cancel context.CancelCauseFunc, rc io.ReadCloser, clk Clock, d time.Duration, end func()) *timedBody {
 	t := clk.AfterFunc(d, func() { cancel(ErrReadTimeout) })
 	t.Stop()
-	return &timedBody{rc: rc, ctx: ctx, cancel: cancel, timer: t, d: d}
+	return &timedBody{rc: rc, ctx: ctx, cancel: cancel, timer: t, d: d, end: end}
 }
 
 func (b *timedBody) Read(p []byte) (int, error) {
@@ -236,5 +243,6 @@ func (b *timedBody) Close() error {
 	b.timer.Stop()
 	err := b.rc.Close()
 	b.cancel(nil)
+	b.end()
 	return err
 }

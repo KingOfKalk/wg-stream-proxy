@@ -94,6 +94,32 @@ func (c *fakeClock) waitTimers(n int) {
 	}
 }
 
+// armedIn reports whether a timer is armed that is due d from now.
+func (c *fakeClock) armedIn(d time.Duration) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, t := range c.timers {
+		if !t.stopped && t.when.Sub(c.now) == d {
+			return true
+		}
+	}
+	return false
+}
+
+// waitArmed blocks until a timer is armed that is due d from now. It
+// fails tb if none is armed within 10s.
+func (c *fakeClock) waitArmed(tb testing.TB, d time.Duration) {
+	tb.Helper()
+	giveUp := time.After(10 * time.Second)
+	for !c.armedIn(d) {
+		select {
+		case <-c.added:
+		case <-giveUp:
+			tb.Fatalf("no timer armed for %s", d)
+		}
+	}
+}
+
 // advance moves the clock forward and runs the timers that are due.
 func (c *fakeClock) advance(d time.Duration) {
 	c.mu.Lock()

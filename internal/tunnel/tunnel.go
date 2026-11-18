@@ -105,6 +105,9 @@ type Options struct {
 	// connect timeout and the caller can fall back to IPv4. 0 means
 	// DefaultIPv6ConnectTimeout.
 	IPv6ConnectTimeout time.Duration
+	// IdleTimeout stops a running tunnel after this long without activity
+	// ([tunnels] idle_timeout, spec 2.1). 0 disables idle close.
+	IdleTimeout time.Duration
 	// Logger receives start and stop events. nil discards them.
 	Logger *slog.Logger
 	// Clock defaults to the system clock.
@@ -186,6 +189,9 @@ func New(tunnels []*wgquick.Tunnel, opts Options) (*Manager, error) {
 	case opts.IPv6ConnectTimeout == 0:
 		opts.IPv6ConnectTimeout = DefaultIPv6ConnectTimeout
 	}
+	if opts.IdleTimeout < 0 {
+		return nil, errors.New("tunnel: idle timeout must not be negative")
+	}
 	if opts.Logger == nil {
 		opts.Logger = slog.New(slog.DiscardHandler)
 	}
@@ -225,9 +231,10 @@ func (m *Manager) Tunnels() []*Tunnel {
 	return slices.Clone(m.sorted)
 }
 
-// Close aborts pending starts and closes every running device. Open
-// connections through the tunnels break. Later calls on the tunnels
-// return ErrClosed. Close is idempotent.
+// Close aborts pending starts and closes every running device at once.
+// Open connections through the tunnels break; Shutdown drains them
+// first. Later calls on the tunnels return ErrClosed. Close is
+// idempotent.
 func (m *Manager) Close() error {
 	m.mu.Lock()
 	if m.closed {
@@ -240,15 +247,13 @@ func (m *Manager) Close() error {
 
 	m.starts.Wait()
 	for _, t := range m.sorted {
-		if r := t.run.Swap(nil); r != nil {
-			r.close()
-			m.opts.Logger.Info("tunnel closed", "tunnel", t.cfg.Name)
-		}
+		t.stop("shutdown")
 	}
 	return nil
 }
 
-// Tunnel is one tunnel. It implements the route layer's Network.
+// Tunnel is one tunnel. It implements the route layer's Network and
+// Activity.
 type Tunnel struct {
 	m   *Manager
 	cfg *wgquick.Tunnel
@@ -260,6 +265,20 @@ type Tunnel struct {
 	run   atomic.Pointer[running]
 	start *startCall // guarded by m.mu
 
+	// mu guards the activity state below. It is never held while m.mu
+	// is taken.
+	mu sync.Mutex
+	// inflight counts the requests between Begin and end.
+	inflight int
+	// busy is open while inflight > 0 and closed when it drops to 0.
+	busy chan struct{}
+	// idle is the armed idle timer, or nil; idleGen identifies it, so a
+	// timer that fires after it was replaced does nothing.
+	idle    Timer
+	idleGen uint64
+	// onStop is called when the running device stops.
+	onStop func()
+
 	lastActivity atomic.Int64 // unix nanoseconds, 0 = never
 	starts       atomic.Int64 // devices created, for tests
 }
@@ -270,6 +289,8 @@ type running struct {
 	net *netstack.Net
 }
 
+// close closes the device. Every stop (failed start, idle close, drain,
+// Close) ends here, so the close sequence lives in one place (#47).
 func (r *running) close() {
 	r.dev.Close()
 }
@@ -511,6 +532,13 @@ func (t *Tunnel) doStart(c *startCall) {
 		return
 	}
 	m.opts.Logger.Info("tunnel started", "tunnel", t.cfg.Name)
+	// A start by callers that are not counted (no Begin) still ends in
+	// an idle close.
+	t.mu.Lock()
+	if t.inflight == 0 {
+		t.armIdle()
+	}
+	t.mu.Unlock()
 }
 
 // startDevice creates the device and waits for the first handshake, both

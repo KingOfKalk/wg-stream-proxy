@@ -51,14 +51,18 @@ type RunOptions struct {
 	// WrapTunnel, if set, wraps the network of every tunnel; tests record
 	// its use.
 	WrapTunnel func(name string, n route.Network) route.Network
+	// TunnelClock is the tunnels' clock (idle close, start timeouts); nil
+	// means the system clock. Tests inject a manual one.
+	TunnelClock tunnel.Clock
 }
 
 // Run loads the tunnels of the configuration (none is started before
-// its first request), builds the routes and serves HTTP on the listener
-// until ctx ends. Then it shuts down gracefully: it stops accepting,
-// waits up to the shutdown timeout for in-flight requests, closes the
-// remaining connections, and closes the tunnels. It returns startup and
-// serve errors; a shutdown after ctx ended returns nil.
+// its first request; each closes after idle_timeout without requests),
+// builds the routes and serves HTTP on the listener until ctx ends. Then
+// it shuts down gracefully: it stops accepting, waits up to the shutdown
+// timeout for in-flight requests, closes the remaining connections, and
+// drains and closes the tunnels within the same timeout. It returns
+// startup and serve errors; a shutdown after ctx ended returns nil.
 func Run(ctx context.Context, opts RunOptions) (err error) {
 	if opts.Listener == nil {
 		return errors.New("server: no listener")
@@ -84,27 +88,41 @@ func Run(ctx context.Context, opts RunOptions) (err error) {
 		timeout = DefaultShutdownTimeout
 	}
 
-	mgr, err := tunnel.Load(cfg.Tunnels(), tunnel.Options{ConnectTimeout: cfg.Upstream().ConnectTimeout, Logger: log})
+	mgr, err := tunnel.Load(cfg.Tunnels(), tunnel.Options{
+		ConnectTimeout: cfg.Upstream().ConnectTimeout,
+		IdleTimeout:    cfg.IdleTimeout(),
+		Logger:         log,
+		Clock:          opts.TunnelClock,
+	})
 	if err != nil {
 		return err
 	}
 	defer func() { _ = mgr.Close() }()
 
 	nets := map[string]route.Network{}
+	activity := map[string]route.Activity{}
 	for _, t := range mgr.Tunnels() {
 		var n route.Network = t
 		if opts.WrapTunnel != nil {
 			n = opts.WrapTunnel(t.Name(), n)
 		}
 		nets[t.Name()] = n
+		activity[t.Name()] = t
 	}
 	direct := opts.Direct
 	if direct == nil {
 		direct = route.Host()
 	}
-	routes, err := route.NewSet(direct, nets, route.Options{Upstream: cfg.Upstream(), AllowPrivate: cfg.AllowPrivate()})
+	routes, err := route.NewSet(direct, nets, route.Options{Upstream: cfg.Upstream(), AllowPrivate: cfg.AllowPrivate(), Activity: activity})
 	if err != nil {
 		return err
+	}
+	// A stopped tunnel (idle close, drain) takes the route's pooled
+	// connections with it.
+	for _, t := range mgr.Tunnels() {
+		if rt, ok := routes.Route(t.Name()); ok {
+			t.OnStop(rt.CloseIdleConnections)
+		}
 	}
 	// Runs before the tunnels close, after all handlers returned.
 	defer routes.CloseIdleConnections()
@@ -132,7 +150,8 @@ func Run(ctx context.Context, opts RunOptions) (err error) {
 	}
 
 	log.Info("shutting down", "timeout", timeout.String())
-	sctx, cancel := context.WithTimeout(context.Background(), timeout)
+	deadline := time.Now().Add(timeout)
+	sctx, cancel := context.WithDeadline(context.Background(), deadline)
 	defer cancel()
 	if err := hs.Shutdown(sctx); err != nil {
 		log.Warn("shutdown timeout: closing open connections", "error", err)
@@ -142,6 +161,8 @@ func Run(ctx context.Context, opts RunOptions) (err error) {
 		log.Warn("serve", "error", err)
 	}
 	srv.drain()
+	// The tunnels drain within the same deadline, then close (spec 2.1).
+	_ = mgr.Shutdown(time.Until(deadline))
 	log.Info("stopped")
 	return nil
 }

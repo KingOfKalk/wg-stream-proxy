@@ -51,7 +51,7 @@ wg-stream-proxy
 - The `Endpoint` hostname is resolved by the host resolver when the tunnel starts (IPv4 preferred).
 - Lifecycle:
   - Lazy start on the first request; concurrent first requests share one start.
-  - Closed after `[tunnels] idle_timeout` (default `60m`) without activity. Activity = any in-flight request or open stream.
+  - Closed after `[tunnels] idle_timeout` (default `60m`) without activity. Activity = any in-flight request or open stream; the idle time runs from the end of the last one. Pooled idle upstream connections are not activity and close with the tunnel; the next request starts it again.
   - Start failure or no handshake within `[upstream] connect_timeout`: request fails with `502`; the next request retries. Start, tunnel DNS and connect share one `connect_timeout` deadline.
   - On shutdown or reload removal: drain in-flight requests for max 30s, then close.
 - `direct` uses a plain `http.Transport` on the host network with the same settings.

@@ -39,6 +39,11 @@ func NewSet(direct Network, tunnels map[string]Network, opts Options) (*Set, err
 			return nil, fmt.Errorf("route: allow_private for unknown route %q", name)
 		}
 	}
+	for _, name := range slices.Sorted(maps.Keys(opts.Activity)) {
+		if _, ok := s.routes[name]; !ok {
+			return nil, fmt.Errorf("route: activity for unknown route %q", name)
+		}
+	}
 	return s, nil
 }
 

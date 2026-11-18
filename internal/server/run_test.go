@@ -49,8 +49,9 @@ func loadDir(t *testing.T, dir string) *config.Config {
 	return cfg
 }
 
-// startRun runs the proxy for the config dir until the test ends.
-func startRun(t *testing.T, dir string, shutdown time.Duration) *runEnv {
+// startRun runs the proxy for the config dir until the test ends. mods
+// adjust the options.
+func startRun(t *testing.T, dir string, shutdown time.Duration, mods ...func(*RunOptions)) *runEnv {
 	t.Helper()
 	e := &runEnv{logs: &syncBuffer{}, direct: &recorder{n: route.Host()}, tunnels: map[string]*recorder{}}
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -76,6 +77,9 @@ func startRun(t *testing.T, dir string, shutdown time.Duration) *runEnv {
 			e.mu.Unlock()
 			return r
 		},
+	}
+	for _, mod := range mods {
+		mod(&opts)
 	}
 	go func() { done <- Run(ctx, opts) }()
 	t.Cleanup(func() {
