@@ -27,6 +27,7 @@ import (
 
 	"github.com/KingOfKalk/wg-stream-proxy/internal/config"
 	"github.com/KingOfKalk/wg-stream-proxy/internal/hls"
+	"github.com/KingOfKalk/wg-stream-proxy/internal/metrics"
 	"github.com/KingOfKalk/wg-stream-proxy/internal/route"
 )
 
@@ -107,6 +108,7 @@ type file struct {
 	header   http.Header // extra response headers
 	endless  bool        // stream until the client goes away
 	hang     bool        // send nothing until the client goes away
+	stall    bool        // send the body, then nothing until the client goes away
 }
 
 // seen is a request the fixture received.
@@ -174,6 +176,11 @@ func (u *upstream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case f.location != "":
 		http.Redirect(w, r, f.location, http.StatusFound)
 	case f.hang:
+		<-r.Context().Done()
+	case f.stall:
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, f.body)
+		_ = http.NewResponseController(w).Flush()
 		<-r.Context().Done()
 	case f.endless:
 		w.WriteHeader(http.StatusOK)
@@ -377,13 +384,14 @@ func (r *recorder) used() int64 { return r.lookups.Load() + r.dials.Load() }
 // directEnv is a proxy (New + httptest) with a direct route to one
 // fixture upstream.
 type directEnv struct {
-	proxy  *httptest.Server
-	client *http.Client
-	up     *upstream
-	upURL  string
-	logs   *syncBuffer
-	signer *hls.Signer
-	cfg    *config.Config
+	proxy   *httptest.Server
+	client  *http.Client
+	up      *upstream
+	upURL   string
+	logs    *syncBuffer
+	signer  *hls.Signer
+	cfg     *config.Config
+	metrics *metrics.Metrics
 }
 
 // allowLoopback lets the direct route reach the loopback fixtures.
@@ -394,7 +402,7 @@ const allowLoopback = "\n[upstream.allow_private]\ndirect = [\"127.0.0.0/8\", \"
 // replaced with the upstream base URL.
 func newDirectEnv(t *testing.T, configTOML, channels string) *directEnv {
 	t.Helper()
-	e := &directEnv{up: newUpstream(), logs: &syncBuffer{}, signer: newSigner(t)}
+	e := &directEnv{up: newUpstream(), logs: &syncBuffer{}, signer: newSigner(t), metrics: metrics.New(metrics.Options{})}
 	upSrv := httptest.NewServer(e.up)
 	t.Cleanup(upSrv.Close)
 	e.upURL = upSrv.URL
@@ -407,7 +415,7 @@ func newDirectEnv(t *testing.T, configTOML, channels string) *directEnv {
 		t.Fatal(err)
 	}
 	t.Cleanup(routes.CloseIdleConnections)
-	s, err := New(Options{Config: e.cfg, Routes: routes, Signer: e.signer, Logger: newLogger(e.logs), Version: "1.2.3"})
+	s, err := New(Options{Config: e.cfg, Routes: routes, Signer: e.signer, Logger: newLogger(e.logs), Version: "1.2.3", Metrics: e.metrics})
 	if err != nil {
 		t.Fatal(err)
 	}

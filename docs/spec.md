@@ -324,10 +324,19 @@ wg-stream-proxy version               # print version and source URL (AGPL secti
 ### 7.3 Metrics (prefix `wsp_`)
 
 - `tunnel_up{tunnel}`: 1 while the device runs and the last handshake is younger than 180s.
-- `tunnel_last_handshake_timestamp_seconds{tunnel}`
+- `tunnel_last_handshake_timestamp_seconds{tunnel}`: `0` while the tunnel is not running or has no handshake yet.
 - `active_requests{channel,kind}`: in-flight requests incl. open raw streams; `kind` = `playlist`, `segment`, `raw`.
 - `upstream_requests_total{channel,kind,code}`: `code` = upstream status, or `error`.
 - `upstream_errors_total{channel,reason}`: `reason` = `connect`, `timeout`, `guard`, `tls`, `redirects`, `size`, `other`.
+
+Only `/c/` and `/r/` requests of enabled channels count; `channel` is the channel id, never a URL.
+
+- `kind`: `playlist` if the response is detected as a playlist (3.1), else `raw` for `/c/` and `segment` for `/r/`. Until the type is detected, and if it never is (error, non-`2xx` status), an `hls` channel and, without a configured type, an upstream path ending in `.m3u8` or `.m3u` count as `playlist`.
+- `upstream_requests_total` counts every upstream request, the refetch of a partial playlist (3.4) included.
+- `upstream_errors_total` counts failures before the response (with `code="error"`) and after it: playlist body or sniff read errors, a rejected playlist or a second `206` (`other`), a stream ended by an upstream error. Upstream statuses count only in `upstream_requests_total`.
+- A request the client gave up counts neither as error nor, if no response came, as upstream request.
+
+`/metrics` also serves the standard `go_*` and `process_*` metrics of the Prometheus Go client.
 
 ## 8. Operations and security
 

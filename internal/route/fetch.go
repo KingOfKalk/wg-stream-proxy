@@ -198,15 +198,15 @@ func requestHeader(u *url.URL, merged, client http.Header, userAgent string) htt
 			h[k] = slices.Clone(v)
 		}
 	}
-	if isPlaylistPath(u.Path) {
+	if IsPlaylistPath(u.Path) {
 		h.Del("Range")
 	}
 	return h
 }
 
-// isPlaylistPath reports whether path ends in .m3u8 or .m3u,
+// IsPlaylistPath reports whether path ends in .m3u8 or .m3u,
 // case-insensitively.
-func isPlaylistPath(path string) bool {
+func IsPlaylistPath(path string) bool {
 	p := strings.ToLower(path)
 	return strings.HasSuffix(p, ".m3u8") || strings.HasSuffix(p, ".m3u")
 }

@@ -13,6 +13,7 @@ import (
 
 	"github.com/KingOfKalk/wg-stream-proxy/internal/config"
 	"github.com/KingOfKalk/wg-stream-proxy/internal/hls"
+	"github.com/KingOfKalk/wg-stream-proxy/internal/metrics"
 	"github.com/KingOfKalk/wg-stream-proxy/internal/route"
 )
 
@@ -44,7 +45,7 @@ func (s *Server) handleChannel(w http.ResponseWriter, r *http.Request) {
 	// known only from the response, and the ICY wrapper leaves HTTP
 	// responses unchanged, so an auto channel that turns out to be HLS
 	// works too.
-	s.proxy(w, r, ch, ch.URL(), typ, typ != hls.HLS)
+	s.proxy(w, r, ch, fetch{upstream: ch.URL(), configured: typ, icy: typ != hls.HLS, other: metrics.KindRaw})
 }
 
 // handleResource serves /r/{channel}/{sig}/{b64url}/{name} (spec 4).
@@ -61,7 +62,7 @@ func (s *Server) handleResource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Resources (segments, keys, sub-playlists) are HTTP: normal pool.
-	s.proxy(w, r, ch, upstream, hls.Auto, false)
+	s.proxy(w, r, ch, fetch{upstream: upstream, configured: hls.Auto, other: metrics.KindSegment})
 }
 
 // channel returns the enabled channel with the given id.
@@ -73,12 +74,40 @@ func (s *Server) channel(id string) (config.Channel, bool) {
 	return ch, true
 }
 
+// fetch describes the upstream side of a /c/ or /r/ request.
+type fetch struct {
+	// upstream is the upstream URL.
+	upstream string
+	// configured is the channel's upstream type for /c/ and Auto for /r/.
+	configured hls.Type
+	// icy selects the route's ICY transport (route.Request.ICY).
+	icy bool
+	// other is the metrics kind of a response that is not a playlist:
+	// raw for /c/, segment for /r/.
+	other metrics.Kind
+}
+
+// kind returns the metrics kind of the request until the response type
+// is known, and for responses whose type is never detected (errors,
+// non-2xx): playlist for an hls channel or, without a configured type,
+// an upstream path ending in .m3u8 or .m3u; else f.other.
+func (f fetch) kind() metrics.Kind {
+	switch f.configured {
+	case hls.HLS:
+		return metrics.KindPlaylist
+	case hls.Auto:
+		if u, err := url.Parse(f.upstream); err == nil && route.IsPlaylistPath(u.Path) {
+			return metrics.KindPlaylist
+		}
+	}
+	return f.other
+}
+
 // proxy fetches upstream through the channel's route and answers with a
-// rewritten playlist or the piped body (spec 3.1-3.4). configured is the
-// channel's upstream type for /c/ and Auto for /r/; icy selects the
-// route's ICY transport (route.Request.ICY). The request context is the
-// upstream context: a client disconnect cancels the upstream request.
-func (s *Server) proxy(w http.ResponseWriter, r *http.Request, ch config.Channel, upstream string, configured hls.Type, icy bool) {
+// rewritten playlist or the piped body (spec 3.1-3.4). The request
+// context is the upstream context: a client disconnect cancels the
+// upstream request.
+func (s *Server) proxy(w http.ResponseWriter, r *http.Request, ch config.Channel, f fetch) {
 	rt, ok := s.routes.Route(ch.Route())
 	if !ok {
 		// The config only has channels with existing routes; fail closed.
@@ -86,14 +115,17 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request, ch config.Channel
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
+	// Only configured channel ids become labels, never URLs.
+	rq := s.metrics.Begin(ch.ID(), f.kind())
+	defer rq.End()
 	client := r.Header
 	for refetch := false; ; refetch = true {
-		resp, err := rt.Fetch(r.Context(), route.Request{URL: upstream, Header: ch.Header(), Client: client, ICY: icy})
+		resp, err := rt.Fetch(r.Context(), route.Request{URL: f.upstream, Header: ch.Header(), Client: client, ICY: f.icy})
 		if err != nil {
-			s.fail(w, r, ch, err)
+			s.fail(w, r, ch, err, rq.FetchError)
 			return
 		}
-		retry := s.respond(w, r, ch, resp, configured, refetch)
+		retry := s.respond(w, r, ch, rq, resp, f, refetch)
 		_ = resp.Body.Close()
 		if !retry {
 			return
@@ -108,9 +140,10 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request, ch config.Channel
 // respond answers the client from an upstream response. It returns true
 // if the response is a partial playlist that must be fetched again
 // without Range; refetch tells that this already happened.
-func (s *Server) respond(w http.ResponseWriter, r *http.Request, ch config.Channel, resp *http.Response, configured hls.Type, refetch bool) bool {
+func (s *Server) respond(w http.ResponseWriter, r *http.Request, ch config.Channel, rq *metrics.Request, resp *http.Response, f fetch, refetch bool) bool {
 	final := resp.Request.URL
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		rq.Response(resp.StatusCode)
 		if code := route.ClientStatus(resp.StatusCode); code != resp.StatusCode {
 			s.log.Warn("upstream error status", "channel", ch.ID(), "route", ch.Route(),
 				"url", route.RedactURL(final.String()), "upstream_status", resp.StatusCode, "status", code)
@@ -118,42 +151,48 @@ func (s *Server) respond(w http.ResponseWriter, r *http.Request, ch config.Chann
 			return false
 		}
 		// 4xx: relayed like any other non-playlist response.
-		s.stream(w, r, ch, resp, resp.Body)
+		s.stream(w, r, ch, rq, resp, resp.Body)
 		return false
 	}
 
 	body := bufio.NewReaderSize(resp.Body, hls.SniffLen)
-	typ := hls.Detect(resp.Header.Get("Content-Type"), nil, configured)
-	if typ != hls.HLS && configured == hls.Auto && r.Method != http.MethodHead {
+	typ := hls.Detect(resp.Header.Get("Content-Type"), nil, f.configured)
+	if typ != hls.HLS && f.configured == hls.Auto && r.Method != http.MethodHead {
 		// Look at the start of the body (spec 3.1 step 2.3). A HEAD
 		// request closes the upstream body unread (spec 3.4).
 		prefix, err := body.Peek(hls.SniffLen)
 		if err != nil && !errors.Is(err, io.EOF) {
-			s.fail(w, r, ch, err)
+			rq.Response(resp.StatusCode)
+			s.fail(w, r, ch, err, rq.Error)
 			return false
 		}
-		typ = hls.Detect(resp.Header.Get("Content-Type"), prefix, configured)
+		typ = hls.Detect(resp.Header.Get("Content-Type"), prefix, f.configured)
 	}
 	if typ != hls.HLS {
-		s.stream(w, r, ch, resp, body)
+		rq.SetKind(f.other)
+		rq.Response(resp.StatusCode)
+		s.stream(w, r, ch, rq, resp, body)
 		return false
 	}
+	rq.SetKind(metrics.KindPlaylist)
+	rq.Response(resp.StatusCode)
 	if resp.StatusCode == http.StatusPartialContent {
 		if refetch {
 			s.log.Warn("upstream answered a playlist with 206 without Range", "channel", ch.ID(),
 				"url", route.RedactURL(final.String()))
+			rq.Error(string(route.ReasonOther))
 			http.Error(w, http.StatusText(http.StatusBadGateway), http.StatusBadGateway)
 			return false
 		}
 		return true
 	}
-	s.rewrite(w, r, ch, resp, body)
+	s.rewrite(w, r, ch, rq, resp, body)
 	return false
 }
 
 // rewrite answers with the rewritten playlist (spec 3.2, 3.4): every URI
 // becomes an absolute resource URL of the channel.
-func (s *Server) rewrite(w http.ResponseWriter, r *http.Request, ch config.Channel, resp *http.Response, body io.Reader) {
+func (s *Server) rewrite(w http.ResponseWriter, r *http.Request, ch config.Channel, rq *metrics.Request, resp *http.Response, body io.Reader) {
 	h := w.Header()
 	route.CopyResponseHeader(h, resp, true)
 	// The rewritten body is a new, whole representation.
@@ -170,7 +209,7 @@ func (s *Server) rewrite(w http.ResponseWriter, r *http.Request, ch config.Chann
 	data, err := route.ReadPlaylist(body)
 	if err != nil {
 		clearHeader(h)
-		s.fail(w, r, ch, err)
+		s.fail(w, r, ch, err, rq.Error)
 		return
 	}
 	base := baseURL(s.cfg.PublicBaseURL(), r)
@@ -181,6 +220,7 @@ func (s *Server) rewrite(w http.ResponseWriter, r *http.Request, ch config.Chann
 		// hls errors never contain URIs from the playlist.
 		clearHeader(h)
 		s.log.Warn("playlist rejected", "channel", ch.ID(), "url", route.RedactURL(final.String()), "error", err)
+		rq.Error(string(route.ReasonOther))
 		http.Error(w, http.StatusText(http.StatusBadGateway), http.StatusBadGateway)
 		return
 	}
@@ -197,19 +237,22 @@ func (s *Server) rewrite(w http.ResponseWriter, r *http.Request, ch config.Chann
 // Raw channels (radio, MPEG-TS) take this path too: the route forwarded
 // Icy-MetaData and turned an ICY status line into HTTP/1.0; icy-*
 // headers are copied back, metadata in the body passes unchanged.
-func (s *Server) stream(w http.ResponseWriter, r *http.Request, ch config.Channel, resp *http.Response, body io.Reader) {
+func (s *Server) stream(w http.ResponseWriter, r *http.Request, ch config.Channel, rq *metrics.Request, resp *http.Response, body io.Reader) {
 	route.CopyResponseHeader(w.Header(), resp, false)
 	w.WriteHeader(resp.StatusCode)
 	if r.Method == http.MethodHead {
 		return
 	}
 	fw := flushWriter{w: w, rc: http.NewResponseController(w)}
-	// readerOnly hides bufio.Reader.WriteTo, which would copy in
-	// SniffLen-sized chunks.
-	n, err := io.CopyBuffer(fw, readerOnly{body}, make([]byte, copyBufferSize))
+	src := &upstreamReader{r: body}
+	n, err := io.CopyBuffer(fw, src, make([]byte, copyBufferSize))
 	if err != nil {
 		// The client went away or the upstream failed mid-stream; the
-		// status is sent already.
+		// status is sent already. Only upstream failures count, not the
+		// upstream read a client disconnect cancelled.
+		if src.err != nil && r.Context().Err() == nil {
+			rq.Error(string(route.Classify(src.err)))
+		}
 		s.log.Debug("stream ended", "channel", ch.ID(), "url", route.RedactURL(resp.Request.URL.String()),
 			"bytes", n, "reason", route.Classify(err))
 		return
@@ -218,15 +261,19 @@ func (s *Server) stream(w http.ResponseWriter, r *http.Request, ch config.Channe
 }
 
 // fail answers an upstream error: 504 for timeouts, else 502 (spec 3.4).
-// Errors from route never contain query strings (spec 8).
-func (s *Server) fail(w http.ResponseWriter, r *http.Request, ch config.Channel, err error) {
+// Errors from route never contain query strings (spec 8). count records
+// the error reason in the metrics; an error after the client went away
+// is not an upstream error and counts nothing.
+func (s *Server) fail(w http.ResponseWriter, r *http.Request, ch config.Channel, err error, count func(reason string)) {
 	if r.Context().Err() != nil {
 		s.log.Debug("client gone", "channel", ch.ID())
 		return
 	}
+	reason := route.Classify(err)
+	count(string(reason))
 	code := route.ErrorStatus(err)
 	s.log.Warn("upstream request failed", "channel", ch.ID(), "route", ch.Route(),
-		"reason", route.Classify(err), "status", code, "error", err)
+		"reason", reason, "status", code, "error", err)
 	http.Error(w, http.StatusText(code), code)
 }
 
@@ -254,5 +301,19 @@ func (f flushWriter) Write(p []byte) (int, error) {
 	return n, nil
 }
 
-// readerOnly hides all methods of a reader but Read.
-type readerOnly struct{ io.Reader }
+// upstreamReader records the read error of the upstream body other than
+// io.EOF, so a failed stream can tell an upstream error from a client
+// write error. It also hides all methods of the reader but Read:
+// bufio.Reader.WriteTo would copy in SniffLen-sized chunks.
+type upstreamReader struct {
+	r   io.Reader
+	err error
+}
+
+func (u *upstreamReader) Read(p []byte) (int, error) {
+	n, err := u.r.Read(p)
+	if err != nil && !errors.Is(err, io.EOF) {
+		u.err = err
+	}
+	return n, err
+}

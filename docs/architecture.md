@@ -446,7 +446,7 @@ flowchart TD
     tunnel["internal/tunnel<br/>wireguard-go + netstack"]:::wip
     config["internal/config<br/>Resolve, Load"]:::done
     wgquick["internal/config/wgquick<br/>Parse, UAPIConfig"]:::done
-    metrics["internal/metrics<br/>Prometheus"]:::todo
+    metrics["internal/metrics<br/>Prometheus"]:::done
     importer["internal/importer<br/>M3U import"]:::done
     epg["internal/epg<br/>epg ids, epg match"]:::todo
 
@@ -475,9 +475,9 @@ in v0.1. All of them are part of v0.1.
 | `internal/hls` | Type detection (`Detect`), playlist rewriter (`Rewrite`), signed `/r/` URLs (`Signer`), signing key (`LoadSigningKey`); pure functions, no I/O | exists |
 | `internal/tunnel` | One `wireguard-go` device + gVisor netstack per tunnel, DNS inside the tunnel, lazy start ([#11](https://github.com/KingOfKalk/wg-stream-proxy/issues/11)); idle close and drain ([#16](https://github.com/KingOfKalk/wg-stream-proxy/issues/16)) | being built |
 | `internal/route` | One route per tunnel plus `direct`, `http.Transport` settings, guard, upstream header rules, timeouts, status mapping ([#12](https://github.com/KingOfKalk/wg-stream-proxy/issues/12)); raw and ICY ([#15](https://github.com/KingOfKalk/wg-stream-proxy/issues/15)). Defines the `Network` interface (resolve + dial a resolved `IP:port`) that tunnels and `direct` implement | being built |
-| `internal/server` | `/playlist.m3u8`, `/c/`, `/r/`, `/healthz`, absolute URL base, graceful shutdown (`Run`) ([#14](https://github.com/KingOfKalk/wg-stream-proxy/issues/14)); `/logos/`, `healthcheck` ([#19](https://github.com/KingOfKalk/wg-stream-proxy/issues/19)) | being built |
+| `internal/server` | `/playlist.m3u8`, `/c/`, `/r/`, `/healthz`, absolute URL base, graceful shutdown (`Run`) ([#14](https://github.com/KingOfKalk/wg-stream-proxy/issues/14)); `/logos/`, `healthcheck` ([#19](https://github.com/KingOfKalk/wg-stream-proxy/issues/19)); `/metrics` ([#18](https://github.com/KingOfKalk/wg-stream-proxy/issues/18)) | being built |
 | `internal/playlist` | Renders the channel list (spec 6) | exists |
-| `internal/metrics` | `/metrics` with the `wsp_` metrics (spec 7.3) | v0.1 |
+| `internal/metrics` | Private Prometheus registry with the `wsp_` metrics (spec 7.3) and the Go and process metrics; tunnel gauges read at scrape time ([#18](https://github.com/KingOfKalk/wg-stream-proxy/issues/18)) | exists |
 | `internal/importer` | `import` of an existing M3U file (spec 7.2), without `--match-epg` ([#21](https://github.com/KingOfKalk/wg-stream-proxy/issues/21)); pure function, no I/O | exists |
 | `internal/epg` | `epg ids`, `epg match`, `import --match-epg` (spec 7.2) | v0.1 |
 
