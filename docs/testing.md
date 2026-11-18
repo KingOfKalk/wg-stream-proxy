@@ -33,11 +33,11 @@ Test every rule of SPEC 3.1-3.5, 4, 5 and 6, table-driven, with golden files in 
 - Signing: tampered signature, URL or channel, wrong key, short key rejected.
 - Guard: each blocked range incl. IPv4-mapped IPv6, per-route allowlist.
 - Importer: the user's real M3U (anonymised) as golden fixture: header conversions, pipe syntax, `extra` mapping, `[defaults.*]` extraction, commented-out entries.
-- `epg match`: ranking on a small XMLTV fixture.
+- EPG: XMLTV fixture with made-up channels (Greek display names), plain and gzip; `epg match` ranking table; `epg ids`, `epg match` and `import --match-epg` against an `httptest` EPG server (guard allowlist for loopback only in tests).
 
 ## L2 Fuzz
 
-Targets: HLS rewriter, M3U importer, wg-quick parser, `/r/` URL decoding, ICY status line wrapper.
+Targets: HLS rewriter, M3U importer, XMLTV channel parser, wg-quick parser, `/r/` URL decoding, ICY status line wrapper.
 
 Invariants:
 - No panic.

@@ -20,6 +20,7 @@ import (
 	"golang.org/x/net/http/httpguts"
 
 	"github.com/KingOfKalk/wg-stream-proxy/internal/config"
+	"github.com/KingOfKalk/wg-stream-proxy/internal/epg"
 )
 
 // maxURLLen is the maximum upstream URL length (spec 3.4).
@@ -31,6 +32,9 @@ type Options struct {
 	// "direct". Without it the route follows spec 5.2 (a tunnel named
 	// like the channel file stem).
 	Tunnel string
+	// EPG, if set, turns on --match-epg: a tvg_id is kept only if the EPG
+	// has it; otherwise the best suggestion is written as a comment.
+	EPG *epg.Index
 }
 
 // Warning is a line that was dropped or only partly converted.
@@ -62,6 +66,10 @@ func Import(data []byte, opts Options) (Result, error) {
 		return Result{Warnings: warns}, ErrNoChannels
 	}
 	assignIDs(doc.channels)
+	if opts.EPG != nil {
+		warns = append(warns, matchEPG(doc.channels, opts.EPG)...)
+		slices.SortStableFunc(warns, func(a, b Warning) int { return cmp.Compare(a.Line, b.Line) })
+	}
 	return Result{TOML: render(doc, opts), Warnings: warns}, nil
 }
 
@@ -83,6 +91,7 @@ type channel struct {
 	group   string
 	enabled bool
 	tvgID   string
+	tvgHint string // comment line suggesting a tvg_id (--match-epg)
 	logo    string
 	headers map[string]string // canonical names
 	attrs   map[string]string

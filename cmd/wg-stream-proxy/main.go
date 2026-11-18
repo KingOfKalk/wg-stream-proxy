@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/netip"
 	"os"
 	"strings"
 	"time"
@@ -47,6 +48,9 @@ type cli struct {
 	listening func(net.Addr)
 	// healthTimeout bounds the healthcheck request; 0 means the default.
 	healthTimeout time.Duration
+	// epgAllowPrivate adds private-range guard exceptions per route name
+	// for the EPG download (tests allow the loopback range).
+	epgAllowPrivate map[string][]netip.Prefix
 }
 
 // run dispatches the subcommand in args and returns the process exit code.
@@ -80,8 +84,7 @@ func (c *cli) run(args []string) int {
 	case "import":
 		return c.importM3U(args)
 	case "epg":
-		_, _ = fmt.Fprintf(c.stderr, "wg-stream-proxy: %s: not implemented yet\n", cmd)
-		return 1
+		return c.epgCmd(args)
 	default:
 		_, _ = fmt.Fprintf(c.stderr, "wg-stream-proxy: unknown command %q\n\n%s", cmd, usage)
 		return 2

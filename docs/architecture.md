@@ -120,7 +120,9 @@ flowchart LR
 - **direct**: the host network, same HTTP settings, same guard. Used only
   where a channel says `tunnel = "direct"`.
 - **EPG**: in v0.1 the channel list only *links* the EPG URL
-  (`x-tvg-url`); the player downloads it itself (spec 6).
+  (`x-tvg-url`); the player downloads it itself (spec 6). Only the CLI
+  (`epg ids`, `epg match`, `import --match-epg`) downloads it, over `direct`
+  (spec 7.2).
 
 ## 3. Control plane and data plane
 
@@ -448,9 +450,9 @@ flowchart TD
     wgquick["internal/config/wgquick<br/>Parse, UAPIConfig"]:::done
     metrics["internal/metrics<br/>Prometheus"]:::todo
     importer["internal/importer<br/>M3U import"]:::done
-    epg["internal/epg<br/>epg ids, epg match"]:::todo
+    epg["internal/epg<br/>epg ids, epg match"]:::done
 
-    main --> server & config & importer & epg
+    main --> server & config & importer & epg & route
     server --> playlist & hls & route & tunnel & metrics
     playlist --> config
     route --> config
@@ -458,6 +460,7 @@ flowchart TD
     tunnel --> wgquick
     config --> wgquick
     importer --> config & epg
+    epg --> config & route
 
     classDef done fill:#2a8a68,stroke:#1a5e46,color:#ffffff
     classDef wip fill:#a86a1a,stroke:#6e4511,color:#ffffff
@@ -469,7 +472,7 @@ in v0.1. All of them are part of v0.1.
 
 | Package | Role | Status |
 |---|---|---|
-| `cmd/wg-stream-proxy` | Subcommand dispatch; `serve`, `check`, `import`, `healthcheck` and `version` work, `epg` follows with its package | exists |
+| `cmd/wg-stream-proxy` | Subcommand dispatch; `serve`, `check`, `import`, `healthcheck`, `epg` and `version` work | exists |
 | `internal/config` | Config dir resolution (`Resolve`), loading and validation of `config.toml` and channel files (`Load`), slugs (`Slug`), route resolution | exists |
 | `internal/config/wgquick` | Tunnel file parser (`Parse`), UAPI conversion (`UAPIConfig`), `AllowedIPs` check (`Allows`) | exists |
 | `internal/hls` | Type detection (`Detect`), playlist rewriter (`Rewrite`), signed `/r/` URLs (`Signer`), signing key (`LoadSigningKey`); pure functions, no I/O | exists |
@@ -478,8 +481,8 @@ in v0.1. All of them are part of v0.1.
 | `internal/server` | `/playlist.m3u8`, `/c/`, `/r/`, `/healthz`, absolute URL base, graceful shutdown (`Run`) ([#14](https://github.com/KingOfKalk/wg-stream-proxy/issues/14)); `/logos/`, `healthcheck` ([#19](https://github.com/KingOfKalk/wg-stream-proxy/issues/19)) | being built |
 | `internal/playlist` | Renders the channel list (spec 6) | exists |
 | `internal/metrics` | `/metrics` with the `wsp_` metrics (spec 7.3) | v0.1 |
-| `internal/importer` | `import` of an existing M3U file (spec 7.2), without `--match-epg` ([#21](https://github.com/KingOfKalk/wg-stream-proxy/issues/21)); pure function, no I/O | exists |
-| `internal/epg` | `epg ids`, `epg match`, `import --match-epg` (spec 7.2) | v0.1 |
+| `internal/importer` | `import` of an existing M3U file (spec 7.2), `--match-epg` with an `epg.Index`; pure function, no I/O | exists |
+| `internal/epg` | Downloads `epg.url` over the direct route, streams the XMLTV channel list (plain or gzip), ranks EPG names for `epg match` and `import --match-epg` (spec 7.2, [#21](https://github.com/KingOfKalk/wg-stream-proxy/issues/21)) | exists |
 
 ## 8. Versions
 
