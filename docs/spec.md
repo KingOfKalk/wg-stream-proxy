@@ -301,7 +301,7 @@ Of `X-Forwarded-Proto` / `X-Forwarded-Host` only the first comma-separated value
 
 #### Debug endpoints
 
-Served only on their own listener `debug.listen` (5.3), off by default and never on `listen`; no authentication (8). Unsafe methods from a browser page of another origin (`Sec-Fetch-Site`, `Origin`) are rejected with `403`.
+Served only on their own listener `debug.listen` (5.3), off by default and never on `listen`; no authentication (8). Unsafe methods from a browser page of another origin (`Sec-Fetch-Site`, `Origin`) are rejected with `403`. So are requests whose `Host` is not an IP address or `localhost` (`403`, against DNS rebinding): address the listener by IP, not by host name.
 
 | Path | Description |
 |---|---|
@@ -384,7 +384,7 @@ Only `/c/` and `/r/` requests of enabled channels count; `channel` is the channe
 - Intended for LAN use; exposure to the internet needs an authenticating reverse proxy.
 - WireGuard keys only in tunnel files and never logged; upstream URLs (in log lines and in error messages) are logged as scheme, host and file name only, e.g. `https://cdn.example.com/…/7.m3u8`: no user info, query string, fragment or other path segment, because CDNs put session ids and tokens there. The file name is reduced like `{name}` (spec 4); a URL without path shows scheme and host only.
 - Debug log (`log_level = "debug"`): one `request` line per `/c/` and `/r/` request when it ends, with request id, channel, route, kind, client status and bytes, client disconnect, upstream status and error reason, and where the time went: `tunnel_start` (only if the request waited for a tunnel start), `dns`, `connect` (Happy-Eyeballs fallback included), `tls`, `ttfb` (first upstream byte), `total`; drain waits and retired tunnels; wireguard-go's own events (handshakes, keepalives, retries) with the peer shown by tunnel name. Tunnel start (with handshake), start failure and close lines carry their durations at every level. The log never contains keys, key fragments, query strings or upstream paths beyond the file name. Above debug the debug lines cost only a level check; the timing behind them is collected at every level for the timing metrics (7.3).
-- Debug endpoints (7.1): off by default, on their own listener, without authentication. Bind them to loopback (e.g. `127.0.0.1:2350`, used through `docker exec … tunnel`) or at most the LAN, never beyond: the profiler exposes process internals (memory, goroutine stacks, command line), and whoever reaches the port can cool tunnels down. `/debug/requests` holds no keys, tokens, query strings or upstream paths beyond the file name (the same reduction as the log).
+- Debug endpoints (7.1): off by default, on their own listener, without authentication. They answer only requests addressed by IP or `localhost`, so a web page cannot reach them by rebinding its own name to the debug address. Bind them to loopback (e.g. `127.0.0.1:2350`, used through `docker exec … tunnel`) or at most the LAN, never beyond: the profiler exposes process internals (memory, goroutine stacks, command line), and whoever reaches the port can cool tunnels down. `/debug/requests` holds no keys, tokens, query strings or upstream paths beyond the file name (the same reduction as the log).
 - Container: non-root, read-only root filesystem, all capabilities dropped, single replica. Details: [deploy.md](deploy.md).
 
 ## 9. Engineering rules

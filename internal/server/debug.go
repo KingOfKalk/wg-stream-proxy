@@ -10,6 +10,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/pprof"
+	"net/netip"
+	"strings"
 	"sync"
 	"time"
 
@@ -147,9 +149,12 @@ type debugHandler struct {
 	drainTimeout time.Duration
 }
 
-// newDebugHandler returns the handler of the debug listener. Unsafe
-// methods from a browser on another origin are rejected (403), so a web
-// page cannot trigger a cool-down through a player's browser.
+// newDebugHandler returns the handler of the debug listener. Requests
+// whose Host is not an IP address or localhost are rejected (403), which
+// stops DNS rebinding: a web page whose own name was rebound to the debug
+// address can neither read the endpoints nor trigger a cool-down (its
+// requests look same-origin to the browser). Unsafe methods from a
+// browser on another origin are rejected as well (403).
 func newDebugHandler(d *debugHandler) http.Handler {
 	mux := http.NewServeMux()
 	// The profiler on this mux only; its package also registers itself
@@ -162,7 +167,35 @@ func newDebugHandler(d *debugHandler) http.Handler {
 	mux.HandleFunc("GET /debug/requests", d.handleRequests)
 	mux.HandleFunc("GET /debug/tunnels", d.handleTunnels)
 	mux.HandleFunc("POST /debug/tunnels/{name}/stop", d.handleStop)
-	return http.NewCrossOriginProtection().Handler(mux)
+	return debugHostGuard(http.NewCrossOriginProtection().Handler(mux))
+}
+
+// debugHostGuard rejects requests whose Host debugHostAllowed refuses.
+func debugHostGuard(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !debugHostAllowed(r.Host) {
+			http.Error(w, "host not allowed: use an IP address or localhost", http.StatusForbidden)
+			return
+		}
+		h.ServeHTTP(w, r)
+	})
+}
+
+// debugHostAllowed reports whether hostport, a request's Host with or
+// without port, names the debug listener by an IP address (IPv6 zones
+// included) or as localhost. Any other name could have been rebound.
+func debugHostAllowed(hostport string) bool {
+	host := hostport
+	if h, _, err := net.SplitHostPort(hostport); err == nil {
+		host = h
+	} else if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
+		host = host[1 : len(host)-1]
+	}
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	_, err := netip.ParseAddr(host)
+	return err == nil
 }
 
 // handleRequests lists the latest finished requests, newest first.
