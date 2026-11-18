@@ -60,6 +60,9 @@ type Request struct {
 	// (spec 3.3). HTTP responses pass unchanged; only the connection pool
 	// differs.
 	ICY bool
+	// Trace, if set, records where the time of the request goes (debug
+	// log, spec 8); nil records nothing.
+	Trace *Trace
 }
 
 // Error is an upstream request error. Its URL has no query string,
@@ -95,6 +98,9 @@ func (r *Route) Fetch(ctx context.Context, req Request) (*http.Response, error) 
 	}
 
 	end := r.begin()
+	if req.Trace != nil {
+		ctx = req.Trace.begin(ctx)
+	}
 	ctx, cancel := context.WithCancelCause(ctx)
 	headerTimer := r.clock.AfterFunc(r.upstream.HeaderTimeout, func() { cancel(ErrHeaderTimeout) })
 	t := r.transport
@@ -102,6 +108,7 @@ func (r *Route) Fetch(ctx context.Context, req Request) (*http.Response, error) 
 		t = r.icyTransport
 	}
 	resp, u, err := r.follow(ctx, t, u, req)
+	req.Trace.setURL(u)
 	if !headerTimer.Stop() && err == nil {
 		// The timer fired while the headers arrived.
 		_ = resp.Body.Close()
@@ -151,6 +158,7 @@ func (r *Route) follow(ctx context.Context, t http.RoundTripper, u *url.URL, req
 		case len(next.String()) > MaxURLLen:
 			return nil, u, ErrURLTooLong
 		}
+		req.Trace.redirected()
 		u = next
 	}
 }

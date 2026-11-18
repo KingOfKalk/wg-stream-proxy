@@ -351,6 +351,7 @@ Only `/c/` and `/r/` requests of enabled channels count; `channel` is the channe
 
 - Intended for LAN use; exposure to the internet needs an authenticating reverse proxy.
 - WireGuard keys only in tunnel files and never logged; upstream URLs logged without query strings (and without fragment and user info).
+- Debug log (`log_level = "debug"`): one `request` line per `/c/` and `/r/` request when it ends, with request id, channel, route, kind, client status and bytes, client disconnect, upstream status and error reason, and where the time went: `tunnel_start` (only if the request waited for a tunnel start), `dns`, `connect` (Happy-Eyeballs fallback included), `tls`, `ttfb` (first upstream byte), `total`; drain waits and retired tunnels; wireguard-go's own events (handshakes, keepalives, retries) with the peer shown by tunnel name. Tunnel start (with handshake), start failure and close lines carry their durations at every level. The log never contains keys, key fragments or query strings. Above debug the debug lines cost only a level check.
 - Container: non-root, read-only root filesystem, all capabilities dropped, single replica. Details: [deploy.md](deploy.md).
 
 ## 9. Engineering rules

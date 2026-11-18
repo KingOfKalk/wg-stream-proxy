@@ -696,8 +696,9 @@ flowchart LR
   dropped instead of sent on a closed channel, which crashed the process
   ([#47](https://github.com/KingOfKalk/wg-stream-proxy/issues/47), spec
   9). It is updated together with wireguard-go.
-- Keys stay inside: the UAPI text and wireguard-go's own log output are
-  never logged (spec 8).
+- Keys stay inside: the UAPI text is never logged; wireguard-go's own log
+  output reaches the debug log only with the peer shown by tunnel name and
+  anything key-like redacted (spec 8).
 
 ### 7.4 A segment request through the layers
 

@@ -64,11 +64,14 @@ func (r *Route) dialAddr(ctx context.Context, network, address string) (net.Conn
 	timer := r.clock.AfterFunc(r.upstream.ConnectTimeout, func() { cancel(ErrConnectTimeout) })
 	defer timer.Stop()
 
+	tr := traceFrom(ctx)
 	var ips []netip.Addr
 	if ip, err := netip.ParseAddr(host); err == nil {
 		ips = []netip.Addr{ip}
 	} else {
+		m := tr.mark()
 		ips, err = r.network.LookupNetIP(ctx, host)
+		tr.lookupDone(m)
 		if err != nil {
 			return nil, timeoutCause(ctx, err)
 		}
@@ -96,7 +99,9 @@ func (r *Route) dialAddr(ctx context.Context, network, address string) (net.Conn
 		return nil, fmt.Errorf("%w %s: %s", errNoAddress, network, host)
 	}
 
-	c, err := r.dialParallel(ctx, interleaveAddrPorts(candidates))
+	m := tr.mark()
+	c, attempts, err := r.dialParallel(ctx, interleaveAddrPorts(candidates))
+	tr.connectDone(m, attempts)
 	if err != nil {
 		return nil, timeoutCause(ctx, err)
 	}
@@ -115,8 +120,9 @@ func timeoutCause(ctx context.Context, err error) error {
 // dialParallel connects to the first reachable candidate (RFC 8305,
 // simplified): the next attempt starts after fallbackDelay or as soon as
 // the previous one failed; the first success wins, the other attempts
-// are cancelled and connections that still succeed are closed.
-func (r *Route) dialParallel(ctx context.Context, cands []netip.AddrPort) (net.Conn, error) {
+// are cancelled and connections that still succeed are closed. It also
+// returns the number of addresses tried.
+func (r *Route) dialParallel(ctx context.Context, cands []netip.AddrPort) (net.Conn, int, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -180,7 +186,7 @@ func (r *Route) dialParallel(ctx context.Context, cands []netip.AddrPort) (net.C
 		case res := <-results:
 			finished++
 			if res.err == nil {
-				return res.c, nil
+				return res.c, started, nil
 			}
 			if firstErr == nil {
 				firstErr = res.err
@@ -189,10 +195,10 @@ func (r *Route) dialParallel(ctx context.Context, cands []netip.AddrPort) (net.C
 			case started < len(cands):
 				startNext()
 			case finished == started:
-				return nil, firstErr
+				return nil, started, firstErr
 			}
 		case <-ctx.Done():
-			return nil, context.Cause(ctx)
+			return nil, started, context.Cause(ctx)
 		}
 	}
 }
