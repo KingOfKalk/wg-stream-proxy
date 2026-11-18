@@ -39,7 +39,12 @@ func (s *Server) handleChannel(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
-	s.proxy(w, r, ch, ch.URL(), typ)
+	// Raw and auto channels may be Shoutcast v1 radios: fetch them through
+	// the route's ICY transport (spec 3.3). The type of an auto channel is
+	// known only from the response, and the ICY wrapper leaves HTTP
+	// responses unchanged, so an auto channel that turns out to be HLS
+	// works too.
+	s.proxy(w, r, ch, ch.URL(), typ, typ != hls.HLS)
 }
 
 // handleResource serves /r/{channel}/{sig}/{b64url}/{name} (spec 4).
@@ -55,7 +60,8 @@ func (s *Server) handleResource(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	s.proxy(w, r, ch, upstream, hls.Auto)
+	// Resources (segments, keys, sub-playlists) are HTTP: normal pool.
+	s.proxy(w, r, ch, upstream, hls.Auto, false)
 }
 
 // channel returns the enabled channel with the given id.
@@ -69,10 +75,10 @@ func (s *Server) channel(id string) (config.Channel, bool) {
 
 // proxy fetches upstream through the channel's route and answers with a
 // rewritten playlist or the piped body (spec 3.1-3.4). configured is the
-// channel's upstream type for /c/ and Auto for /r/. The request context
-// is the upstream context: a client disconnect cancels the upstream
-// request.
-func (s *Server) proxy(w http.ResponseWriter, r *http.Request, ch config.Channel, upstream string, configured hls.Type) {
+// channel's upstream type for /c/ and Auto for /r/; icy selects the
+// route's ICY transport (route.Request.ICY). The request context is the
+// upstream context: a client disconnect cancels the upstream request.
+func (s *Server) proxy(w http.ResponseWriter, r *http.Request, ch config.Channel, upstream string, configured hls.Type, icy bool) {
 	rt, ok := s.routes.Route(ch.Route())
 	if !ok {
 		// The config only has channels with existing routes; fail closed.
@@ -82,7 +88,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request, ch config.Channel
 	}
 	client := r.Header
 	for refetch := false; ; refetch = true {
-		resp, err := rt.Fetch(r.Context(), route.Request{URL: upstream, Header: ch.Header(), Client: client})
+		resp, err := rt.Fetch(r.Context(), route.Request{URL: upstream, Header: ch.Header(), Client: client, ICY: icy})
 		if err != nil {
 			s.fail(w, r, ch, err)
 			return
@@ -188,8 +194,9 @@ func (s *Server) rewrite(w http.ResponseWriter, r *http.Request, ch config.Chann
 // upstream status, and the body piped with io.Copy and a flush after
 // every chunk, without size or time limit (spec 3.3). HEAD sends no body.
 //
-// Raw channels (radio, MPEG-TS) take this path too; #15 adds the ICY
-// status line rewrite in the route and Icy-MetaData handling here.
+// Raw channels (radio, MPEG-TS) take this path too: the route forwarded
+// Icy-MetaData and turned an ICY status line into HTTP/1.0; icy-*
+// headers are copied back, metadata in the body passes unchanged.
 func (s *Server) stream(w http.ResponseWriter, r *http.Request, ch config.Channel, resp *http.Response, body io.Reader) {
 	route.CopyResponseHeader(w.Header(), resp, false)
 	w.WriteHeader(resp.StatusCode)

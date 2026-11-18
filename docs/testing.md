@@ -37,12 +37,13 @@ Test every rule of SPEC 3.1-3.5, 4, 5 and 6, table-driven, with golden files in 
 
 ## L2 Fuzz
 
-Targets: HLS rewriter, M3U importer, wg-quick parser, `/r/` URL decoding.
+Targets: HLS rewriter, M3U importer, wg-quick parser, `/r/` URL decoding, ICY status line wrapper.
 
 Invariants:
 - No panic.
 - Rewriter output parses again.
 - Every URI line and every `URI="http..."` attribute in the output points to `/r/`; no other line changes.
+- ICY wrapper: a leading `ICY ` becomes `HTTP/1.0 `, every other input passes byte for byte, for any split into reads.
 
 ## L3 Integration
 

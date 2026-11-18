@@ -76,26 +76,30 @@ func TestRouteTransportSettings(t *testing.T) {
 	}
 	for _, name := range []string{"direct", "gr"} {
 		r, _ := s.Route(name)
-		tr := r.transport
-		if tr.Proxy != nil {
-			t.Errorf("%s: Proxy set, environment proxies would bypass the route", name)
+		for kind, tr := range map[string]*http.Transport{"normal": r.transport, "icy": r.icyTransport} {
+			if tr.Proxy != nil {
+				t.Errorf("%s %s: Proxy set, environment proxies would bypass the route", name, kind)
+			}
+			if !tr.ForceAttemptHTTP2 {
+				t.Errorf("%s %s: ForceAttemptHTTP2 = false", name, kind)
+			}
+			if tr.MaxIdleConnsPerHost != 16 {
+				t.Errorf("%s %s: MaxIdleConnsPerHost = %d, want 16", name, kind, tr.MaxIdleConnsPerHost)
+			}
+			if tr.DisableKeepAlives {
+				t.Errorf("%s %s: keep-alive disabled", name, kind)
+			}
+			if tr.DialContext == nil {
+				t.Errorf("%s %s: no DialContext", name, kind)
+			}
 		}
-		if !tr.ForceAttemptHTTP2 {
-			t.Errorf("%s: ForceAttemptHTTP2 = false", name)
-		}
-		if tr.MaxIdleConnsPerHost != 16 {
-			t.Errorf("%s: MaxIdleConnsPerHost = %d, want 16", name, tr.MaxIdleConnsPerHost)
-		}
-		if tr.DisableKeepAlives {
-			t.Errorf("%s: keep-alive disabled", name)
-		}
-		if tr.DialContext == nil {
-			t.Errorf("%s: no DialContext", name)
+		if r.transport == r.icyTransport {
+			t.Errorf("%s: normal and ICY requests share one transport", name)
 		}
 	}
 	d, _ := s.Route("direct")
 	g, _ := s.Route("gr")
-	if d.transport == g.transport {
+	if d.transport == g.transport || d.icyTransport == g.icyTransport {
 		t.Errorf("routes share one transport")
 	}
 }
