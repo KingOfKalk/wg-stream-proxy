@@ -81,6 +81,9 @@ type RunOptions struct {
 // While serving, opts.Reloader reloads the configuration (spec 5.6).
 func Run(ctx context.Context, opts RunOptions) (err error) {
 	if opts.Listener == nil {
+		if opts.DebugListener != nil {
+			_ = opts.DebugListener.Close()
+		}
 		return errors.New("server: no listener")
 	}
 	defer func() {
@@ -170,7 +173,8 @@ func Run(ctx context.Context, opts RunOptions) (err error) {
 	var dbg *debugServer
 	if opts.DebugListener != nil {
 		dbg = startDebug(opts.DebugListener, &debugHandler{srv: srv, mgr: mgr, drainTimeout: tunnelDrainTimeout}, log)
-		// Before the tunnels close: a cool-down in progress has returned.
+		// Runs before the deferred mgr.Close: waits for the debug handlers;
+		// a cool-down ends within its drain timeout.
 		defer dbg.stop()
 	}
 

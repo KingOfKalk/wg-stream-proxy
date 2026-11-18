@@ -323,6 +323,8 @@ func TestRunErrors(t *testing.T) {
 		{"no listener", RunOptions{Config: cfg, Signer: signer}, "listener"},
 		{"invalid tunnel file", RunOptions{Config: badTunnel, Signer: signer, Listener: listen()}, "PostUp"},
 		{"closed listener", RunOptions{Config: cfg, Signer: signer, Listener: closed}, "closed"},
+		{"no listener with a debug listener", RunOptions{Config: cfg, Signer: signer, DebugListener: listen()}, "listener"},
+		{"invalid tunnel file with a debug listener", RunOptions{Config: badTunnel, Signer: signer, Listener: listen(), DebugListener: listen()}, "PostUp"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -333,6 +335,11 @@ func TestRunErrors(t *testing.T) {
 			if ln := tt.opts.Listener; ln != nil {
 				if _, err := ln.Accept(); !errors.Is(err, net.ErrClosed) {
 					t.Errorf("listener not closed: Accept() = %v", err)
+				}
+			}
+			if ln := tt.opts.DebugListener; ln != nil {
+				if _, err := ln.Accept(); !errors.Is(err, net.ErrClosed) {
+					t.Errorf("debug listener not closed: Accept() = %v", err)
 				}
 			}
 		})
