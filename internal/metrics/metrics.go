@@ -30,6 +30,26 @@ const (
 	KindRaw Kind = "raw"
 )
 
+// Phase is the phase label of wsp_upstream_phase_seconds (spec 7.3).
+type Phase string
+
+// Phases.
+const (
+	// PhaseDNS: host lookups of the request.
+	PhaseDNS Phase = "dns"
+	// PhaseConnect: connection setup, Happy-Eyeballs fallback included.
+	PhaseConnect Phase = "connect"
+	// PhaseTLS: TLS handshakes.
+	PhaseTLS Phase = "tls"
+	// PhaseFirstByte: from the start of the upstream request to the first
+	// byte of the response.
+	PhaseFirstByte Phase = "first_byte"
+)
+
+// TimingBuckets are the bucket bounds, in seconds, of the timing
+// histograms: 10ms up to the default connect timeout.
+var TimingBuckets = []float64{0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 15}
+
 // CodeError is the code label of an upstream request without a response.
 const CodeError = "error"
 
@@ -54,10 +74,12 @@ type Options struct {
 // Metrics is a private registry with the wsp_ metrics. Its methods are
 // safe for concurrent use.
 type Metrics struct {
-	reg      *prometheus.Registry
-	active   *prometheus.GaugeVec
-	requests *prometheus.CounterVec
-	errors   *prometheus.CounterVec
+	reg         *prometheus.Registry
+	active      *prometheus.GaugeVec
+	requests    *prometheus.CounterVec
+	errors      *prometheus.CounterVec
+	tunnelStart *prometheus.HistogramVec
+	phases      *prometheus.HistogramVec
 }
 
 // New returns Metrics with a new registry.
@@ -76,9 +98,19 @@ func New(opts Options) *Metrics {
 			Name: "wsp_upstream_errors_total",
 			Help: "Upstream request failures by reason.",
 		}, []string{"channel", "reason"}),
+		tunnelStart: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Name:    "wsp_tunnel_start_seconds",
+			Help:    "Time of a successful tunnel start: device up including the first handshake.",
+			Buckets: TimingBuckets,
+		}, []string{"tunnel"}),
+		phases: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Name:    "wsp_upstream_phase_seconds",
+			Help:    "Time of the phases of upstream requests by route: DNS lookup, connect, TLS handshake, first response byte.",
+			Buckets: TimingBuckets,
+		}, []string{"route", "phase"}),
 	}
 	m.reg.MustRegister(
-		m.active, m.requests, m.errors,
+		m.active, m.requests, m.errors, m.tunnelStart, m.phases,
 		tunnelCollector{tunnels: opts.Tunnels},
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
@@ -93,6 +125,19 @@ func (m *Metrics) Handler() http.Handler {
 
 // Gatherer returns the registry.
 func (m *Metrics) Gatherer() prometheus.Gatherer { return m.reg }
+
+// ObserveTunnelStart records the duration of one successful start of
+// tunnel.
+func (m *Metrics) ObserveTunnelStart(tunnel string, d time.Duration) {
+	m.tunnelStart.WithLabelValues(tunnel).Observe(d.Seconds())
+}
+
+// ObserveUpstreamPhase records the duration of one phase of an upstream
+// request of the route (the direct route or a tunnel name, never a
+// channel or URL).
+func (m *Metrics) ObserveUpstreamPhase(route string, phase Phase, d time.Duration) {
+	m.phases.WithLabelValues(route, string(phase)).Observe(d.Seconds())
+}
 
 // Begin counts a request of channel as active with kind until End. The
 // returned Request is used by one goroutine.

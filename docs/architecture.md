@@ -541,9 +541,14 @@ Requests go down the layers, responses travel back up.
   pools), and the new generation is swapped in for new requests. Running
   requests finish on the old one. An invalid config changes nothing.
 - **Observability plane**: `metrics.Metrics` is a private Prometheus
-  registry. `Server.proxy` writes the request counters; the tunnel gauges
-  are read from the tunnels at scrape time, so nothing polls the devices.
-  `/healthz` only says that the process serves.
+  registry. `Server.proxy` writes the request counters and records every
+  `/c/` and `/r/` request (status, bytes, `route.Trace` of its upstream
+  requests); when the request ends, `Server.requestFinished` hands the
+  finished request to its consumers: the timing histograms
+  (`wsp_upstream_phase_seconds`) and the debug line. The tunnel manager
+  reports each successful start (`wsp_tunnel_start_seconds`); the tunnel
+  gauges are read from the tunnels at scrape time, so nothing polls the
+  devices. `/healthz` only says that the process serves.
 
 ### 7.2 Channels, routes and tunnels
 
