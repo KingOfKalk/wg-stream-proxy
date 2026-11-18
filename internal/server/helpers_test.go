@@ -80,12 +80,42 @@ func loadConfig(t *testing.T, files map[string]string) *config.Config {
 type syncBuffer struct {
 	mu sync.Mutex
 	b  bytes.Buffer
+	// changed is closed by the next Write; nil until waitFor needs it.
+	changed chan struct{}
 }
 
 func (s *syncBuffer) Write(p []byte) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.changed != nil {
+		close(s.changed)
+		s.changed = nil
+	}
 	return s.b.Write(p)
+}
+
+// waitFor blocks until the output contains substr n times. It fails tb
+// after 10s.
+func (s *syncBuffer) waitFor(tb testing.TB, substr string, n int) {
+	tb.Helper()
+	giveUp := time.After(10 * time.Second)
+	for {
+		s.mu.Lock()
+		found := strings.Count(s.b.String(), substr) >= n
+		if s.changed == nil {
+			s.changed = make(chan struct{})
+		}
+		ch := s.changed
+		s.mu.Unlock()
+		if found {
+			return
+		}
+		select {
+		case <-ch:
+		case <-giveUp:
+			tb.Fatalf("log lacks %d x %q after 10s:\n%s", n, substr, s.String())
+		}
+	}
 }
 
 func (s *syncBuffer) String() string {

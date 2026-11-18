@@ -4,6 +4,8 @@ package tunnel
 
 import (
 	"fmt"
+	"maps"
+	"slices"
 	"sync"
 	"time"
 )
@@ -66,14 +68,14 @@ func (t *Tunnel) OnStop(f func()) {
 
 // armIdle starts the idle timer for the full idle timeout. t.mu is held.
 func (t *Tunnel) armIdle() {
-	t.armIdleIn(t.m.opts.IdleTimeout)
+	t.armIdleIn(t.m.idle())
 }
 
 // armIdleIn starts the idle timer for d, replacing an armed one, if idle
 // close is enabled and the device runs. t.mu is held.
 func (t *Tunnel) armIdleIn(d time.Duration) {
 	t.disarmIdle()
-	if t.m.opts.IdleTimeout == 0 || t.run.Load() == nil || isClosed(t.m.closing) {
+	if t.m.idle() == 0 || t.run.Load() == nil || isClosed(t.m.closing) {
 		return
 	}
 	gen := t.idleGen
@@ -99,7 +101,7 @@ func (t *Tunnel) idleFired(gen uint64) {
 		return
 	}
 	t.idle = nil
-	if rest := t.m.opts.IdleTimeout - t.m.opts.Clock.Now().Sub(t.LastActivity()); rest > 0 {
+	if rest := t.m.idle() - t.m.opts.Clock.Now().Sub(t.LastActivity()); rest > 0 {
 		t.armIdleIn(rest)
 		t.mu.Unlock()
 		return
@@ -142,7 +144,7 @@ func (t *Tunnel) finishStop(r *running, hook func(), reason string) {
 // by Options.Clock), then closes the device; connections still open
 // break. The tunnel stays usable: a later request starts it again.
 func (m *Manager) Drain(name string, timeout time.Duration) error {
-	t, ok := m.tunnels[name]
+	t, ok := m.Tunnel(name)
 	if !ok {
 		return fmt.Errorf("tunnel %q: no such tunnel", name)
 	}
@@ -151,15 +153,20 @@ func (m *Manager) Drain(name string, timeout time.Duration) error {
 	return nil
 }
 
-// Shutdown drains every tunnel with one shared timeout, like Drain, then
-// closes the manager like Close (spec 2.1, shutdown).
+// Shutdown drains every tunnel, including tunnels still draining after a
+// reload, with one shared timeout, like Drain, then closes the manager
+// like Close (spec 2.1, shutdown).
 func (m *Manager) Shutdown(timeout time.Duration) error {
-	m.wait(m.sorted, timeout)
+	m.mu.Lock()
+	tunnels := slices.Concat(m.sorted, slices.Collect(maps.Keys(m.draining)))
+	m.mu.Unlock()
+	m.wait(tunnels, timeout)
 	return m.Close()
 }
 
-// wait blocks until no request on tunnels is in flight or timeout has
-// passed since the call. It logs the tunnels whose requests are cut.
+// wait blocks until no request on tunnels is in flight, timeout has
+// passed since the call or the manager is closed. It logs the tunnels
+// whose requests are cut by the timeout.
 func (m *Manager) wait(tunnels []*Tunnel, timeout time.Duration) {
 	var (
 		expired chan struct{}
@@ -187,6 +194,7 @@ func (m *Manager) wait(tunnels []*Tunnel, timeout time.Duration) {
 		case <-expired:
 			m.opts.Logger.Warn("drain timeout: closing tunnel with requests in flight",
 				"tunnel", t.cfg.Name, "requests", t.inFlight())
+		case <-m.closing:
 		}
 	}
 	if timer != nil {

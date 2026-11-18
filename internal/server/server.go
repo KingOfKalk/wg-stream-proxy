@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/KingOfKalk/wg-stream-proxy/internal/config"
 	"github.com/KingOfKalk/wg-stream-proxy/internal/hls"
@@ -42,8 +43,8 @@ type Options struct {
 
 // Server serves the player-facing HTTP interface. It is an http.Handler.
 type Server struct {
-	cfg     *config.Config
-	routes  *route.Set
+	// gen is the active generation; a reload swaps it (spec 5.6).
+	gen     atomic.Pointer[generation]
 	signer  *hls.Signer
 	log     *slog.Logger
 	version string
@@ -67,13 +68,12 @@ func New(opts Options) (*Server, error) {
 		return nil, errors.New("server: no signer")
 	}
 	s := &Server{
-		cfg:     opts.Config,
-		routes:  opts.Routes,
 		signer:  opts.Signer,
 		log:     opts.Logger,
 		version: opts.Version,
 		mux:     http.NewServeMux(),
 	}
+	s.swap(opts.Config, opts.Routes)
 	if s.log == nil {
 		s.log = slog.New(slog.DiscardHandler)
 	}
@@ -85,6 +85,22 @@ func New(opts Options) (*Server, error) {
 	s.mux.HandleFunc("GET /logos/{file}", s.handleLogo)
 	return s, nil
 }
+
+// generation is one configuration with the routes built for it. It is
+// immutable: a request uses the generation it started with to its end,
+// while a reload swaps in the next one for new requests (spec 5.6).
+type generation struct {
+	cfg    *config.Config
+	routes *route.Set
+}
+
+// swap makes cfg and routes the active generation.
+func (s *Server) swap(cfg *config.Config, routes *route.Set) {
+	s.gen.Store(&generation{cfg: cfg, routes: routes})
+}
+
+// active returns the active generation.
+func (s *Server) active() *generation { return s.gen.Load() }
 
 // ServeHTTP implements http.Handler.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -116,9 +132,10 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 
 // handlePlaylist serves the channel list (spec 6).
 func (s *Server) handlePlaylist(w http.ResponseWriter, r *http.Request) {
-	body := playlist.Render(s.cfg.Channels(), playlist.Options{
-		BaseURL: baseURL(s.cfg.PublicBaseURL(), r),
-		EPGURL:  s.cfg.EPGURL(),
+	cfg := s.active().cfg
+	body := playlist.Render(cfg.Channels(), playlist.Options{
+		BaseURL: baseURL(cfg.PublicBaseURL(), r),
+		EPGURL:  cfg.EPGURL(),
 		Group:   r.URL.Query().Get("group"),
 	})
 	w.Header().Set("Content-Type", playlist.ContentType)

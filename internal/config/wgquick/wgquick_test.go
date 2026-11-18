@@ -521,3 +521,47 @@ func TestParseReadError(t *testing.T) {
 		t.Fatalf("err = %v, want read error", err)
 	}
 }
+
+func TestEqual(t *testing.T) {
+	base := conf(baseIface, basePeer)
+	tests := []struct {
+		name  string
+		name2 string
+		text  string
+		want  bool
+	}{
+		{"same text", "t", base, true},
+		{"comments, case, spacing and CRLF", "t", "# reloaded\r\n[interface]\r\nprivatekey=" + testPrivA + " # key\r\naddress = 192.0.2.2\r\ndns=192.0.2.53\r\n\r\n[PEER]\r\npublickey = " + testPubSrv + "\r\nendpoint = vpn.example.com:51820\r\nallowedips = 0.0.0.0/0\r\n", true},
+		{"other name", "u", base, false},
+		{"private key", "t", conf("PrivateKey = "+testPrivB+"\nAddress = 192.0.2.2/32\nDNS = 192.0.2.53", basePeer), false},
+		{"address", "t", conf("PrivateKey = "+testPrivA+"\nAddress = 192.0.2.3/32\nDNS = 192.0.2.53", basePeer), false},
+		{"extra address", "t", conf(baseIface+"\nAddress = 2001:db8::2/128", basePeer), false},
+		{"DNS", "t", conf("PrivateKey = "+testPrivA+"\nAddress = 192.0.2.2/32\nDNS = 192.0.2.54", basePeer), false},
+		{"MTU", "t", conf(baseIface+"\nMTU = 1280", basePeer), false},
+		{"preshared key", "t", conf(baseIface, basePeer+"\nPresharedKey = "+testPSK), false},
+		{"endpoint", "t", conf(baseIface, "PublicKey = "+testPubSrv+"\nEndpoint = vpn.example.com:51821\nAllowedIPs = 0.0.0.0/0"), false},
+		{"allowed IPs", "t", conf(baseIface, "PublicKey = "+testPubSrv+"\nEndpoint = vpn.example.com:51820\nAllowedIPs = 0.0.0.0/0, ::/0"), false},
+		{"keepalive", "t", conf(baseIface, basePeer+"\nPersistentKeepalive = 25"), false},
+	}
+	a, _, err := Parse("t", strings.NewReader(base))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b, _, err := Parse(tt.name2, strings.NewReader(tt.text))
+			if err != nil {
+				t.Fatalf("Parse: %v", err)
+			}
+			if got := a.Equal(b); got != tt.want {
+				t.Errorf("Equal = %v, want %v", got, tt.want)
+			}
+			if got := b.Equal(a); got != tt.want {
+				t.Errorf("reverse Equal = %v, want %v", got, tt.want)
+			}
+		})
+	}
+	if a.Equal(nil) {
+		t.Error("Equal(nil) = true")
+	}
+}

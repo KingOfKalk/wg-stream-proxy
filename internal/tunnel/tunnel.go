@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net"
 	"net/netip"
 	"os"
@@ -117,24 +118,43 @@ type Options struct {
 	HostResolver HostResolver
 }
 
-// Manager owns the tunnels of one configuration, keyed by name.
+// Manager owns the tunnels of one configuration, keyed by name. Apply
+// replaces them on a reload.
 type Manager struct {
-	opts    Options
-	tunnels map[string]*Tunnel
-	sorted  []*Tunnel
+	opts Options
+	// connectTimeout and idleTimeout hold the current values of the
+	// Options fields; SetTimeouts changes them.
+	connectTimeout atomic.Int64
+	idleTimeout    atomic.Int64
 
-	// mu guards closed and the start state of every tunnel.
+	// mu guards closed, the tunnel set and the start and retire state of
+	// every tunnel.
 	mu      sync.Mutex
 	closed  bool
 	closing chan struct{}
-	starts  sync.WaitGroup
+	tunnels map[string]*Tunnel
+	sorted  []*Tunnel
+	// draining are the tunnels a reload retired whose drain has not
+	// finished yet.
+	draining map[*Tunnel]struct{}
+	starts   sync.WaitGroup
+	drains   sync.WaitGroup
 }
 
-// Load reads and parses the tunnel files of a configuration (spec 5.5):
-// it logs parse warnings and the world-readable warning, and rejects
-// invalid files and shared private keys. No tunnel is started.
+// Load reads and parses the tunnel files of a configuration with Parse
+// and returns a manager for them. No tunnel is started.
 func Load(files []config.Tunnel, opts Options) (*Manager, error) {
-	logger := opts.Logger
+	tunnels, err := Parse(files, opts.Logger)
+	if err != nil {
+		return nil, err
+	}
+	return New(tunnels, opts)
+}
+
+// Parse reads and parses tunnel files (spec 5.5): it logs parse warnings
+// and the world-readable warning, and rejects invalid files and shared
+// private keys, with all errors joined. logger may be nil.
+func Parse(files []config.Tunnel, logger *slog.Logger) ([]*wgquick.Tunnel, error) {
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
@@ -154,7 +174,10 @@ func Load(files []config.Tunnel, opts Options) (*Manager, error) {
 	if err := errors.Join(errs...); err != nil {
 		return nil, err
 	}
-	return New(tunnels, opts)
+	if err := wgquick.CheckUniquePrivateKeys(tunnels); err != nil {
+		return nil, err
+	}
+	return tunnels, nil
 }
 
 func loadFile(f config.Tunnel) (*wgquick.Tunnel, []wgquick.Warning, error) {
@@ -180,17 +203,14 @@ func loadFile(f config.Tunnel) (*wgquick.Tunnel, []wgquick.Warning, error) {
 // New returns a manager for already parsed tunnels. Names must be unique;
 // private keys too (spec 5.5). No tunnel is started.
 func New(tunnels []*wgquick.Tunnel, opts Options) (*Manager, error) {
-	if opts.ConnectTimeout <= 0 {
-		return nil, errors.New("tunnel: connect timeout must be positive")
+	if err := checkTimeouts(opts.ConnectTimeout, opts.IdleTimeout); err != nil {
+		return nil, err
 	}
 	switch {
 	case opts.IPv6ConnectTimeout < 0:
 		return nil, errors.New("tunnel: IPv6 connect timeout must not be negative")
 	case opts.IPv6ConnectTimeout == 0:
 		opts.IPv6ConnectTimeout = DefaultIPv6ConnectTimeout
-	}
-	if opts.IdleTimeout < 0 {
-		return nil, errors.New("tunnel: idle timeout must not be negative")
 	}
 	if opts.Logger == nil {
 		opts.Logger = slog.New(slog.DiscardHandler)
@@ -201,40 +221,78 @@ func New(tunnels []*wgquick.Tunnel, opts Options) (*Manager, error) {
 	if opts.HostResolver == nil {
 		opts.HostResolver = net.DefaultResolver
 	}
-	if slices.Contains(tunnels, nil) {
-		return nil, errors.New("tunnel: nil tunnel")
-	}
-	if err := wgquick.CheckUniquePrivateKeys(tunnels); err != nil {
+	if err := checkTunnels(tunnels); err != nil {
 		return nil, err
 	}
-	m := &Manager{opts: opts, tunnels: make(map[string]*Tunnel, len(tunnels)), closing: make(chan struct{})}
+	m := &Manager{opts: opts, closing: make(chan struct{}), draining: map[*Tunnel]struct{}{}}
+	m.connectTimeout.Store(int64(opts.ConnectTimeout))
+	m.idleTimeout.Store(int64(opts.IdleTimeout))
+	set := make(map[string]*Tunnel, len(tunnels))
 	for _, cfg := range tunnels {
-		if _, dup := m.tunnels[cfg.Name]; dup {
-			return nil, fmt.Errorf("tunnel %q: duplicate name", cfg.Name)
-		}
-		t := newTunnel(m, cfg)
-		m.tunnels[cfg.Name] = t
-		m.sorted = append(m.sorted, t)
+		set[cfg.Name] = newTunnel(m, cfg)
 	}
-	slices.SortFunc(m.sorted, func(a, b *Tunnel) int { return strings.Compare(a.cfg.Name, b.cfg.Name) })
+	m.setTunnels(set)
 	return m, nil
 }
 
+// checkTimeouts validates the connect and idle timeouts.
+func checkTimeouts(connect, idle time.Duration) error {
+	if connect <= 0 {
+		return errors.New("tunnel: connect timeout must be positive")
+	}
+	if idle < 0 {
+		return errors.New("tunnel: idle timeout must not be negative")
+	}
+	return nil
+}
+
+// checkTunnels validates a tunnel set: no nil, unique names and unique
+// private keys (spec 5.5).
+func checkTunnels(tunnels []*wgquick.Tunnel) error {
+	if slices.Contains(tunnels, nil) {
+		return errors.New("tunnel: nil tunnel")
+	}
+	names := make(map[string]bool, len(tunnels))
+	for _, cfg := range tunnels {
+		if names[cfg.Name] {
+			return fmt.Errorf("tunnel %q: duplicate name", cfg.Name)
+		}
+		names[cfg.Name] = true
+	}
+	return wgquick.CheckUniquePrivateKeys(tunnels)
+}
+
+// setTunnels makes tunnels the current set. m.mu is held, or m is new.
+func (m *Manager) setTunnels(tunnels map[string]*Tunnel) {
+	m.tunnels = tunnels
+	m.sorted = slices.SortedFunc(maps.Values(tunnels), func(a, b *Tunnel) int { return strings.Compare(a.cfg.Name, b.cfg.Name) })
+}
+
+// connect returns the current connect timeout.
+func (m *Manager) connect() time.Duration { return time.Duration(m.connectTimeout.Load()) }
+
+// idle returns the current idle timeout; 0 disables idle close.
+func (m *Manager) idle() time.Duration { return time.Duration(m.idleTimeout.Load()) }
+
 // Tunnel returns the tunnel with the given name.
 func (m *Manager) Tunnel(name string) (*Tunnel, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	t, ok := m.tunnels[name]
 	return t, ok
 }
 
 // Tunnels returns all tunnels, sorted by name.
 func (m *Manager) Tunnels() []*Tunnel {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	return slices.Clone(m.sorted)
 }
 
-// Close aborts pending starts and closes every running device at once.
-// Open connections through the tunnels break; Shutdown drains them
-// first. Later calls on the tunnels return ErrClosed. Close is
-// idempotent.
+// Close aborts pending starts and closes every running device at once,
+// including tunnels still draining after a reload. Open connections
+// through the tunnels break; Shutdown drains them first. Later calls on
+// the tunnels return ErrClosed. Close is idempotent.
 func (m *Manager) Close() error {
 	m.mu.Lock()
 	if m.closed {
@@ -246,7 +304,9 @@ func (m *Manager) Close() error {
 	m.mu.Unlock()
 
 	m.starts.Wait()
-	for _, t := range m.sorted {
+	// Reload drains end at once when closing is closed.
+	m.drains.Wait()
+	for _, t := range m.Tunnels() {
 		t.stop("shutdown")
 	}
 	return nil
@@ -264,6 +324,11 @@ type Tunnel struct {
 
 	run   atomic.Pointer[running]
 	start *startCall // guarded by m.mu
+	// retired: a reload changed or removed the tunnel (Manager.Apply). It
+	// never starts again; retiring is closed then, which cancels a start
+	// in progress. Guarded by m.mu.
+	retired  bool
+	retiring chan struct{}
 
 	// mu guards the activity state below. It is never held while m.mu
 	// is taken.
@@ -303,7 +368,7 @@ type startCall struct {
 }
 
 func newTunnel(m *Manager, cfg *wgquick.Tunnel) *Tunnel {
-	t := &Tunnel{m: m, cfg: cfg}
+	t := &Tunnel{m: m, cfg: cfg, retiring: make(chan struct{})}
 	for _, p := range cfg.Addresses {
 		if p.Addr().Is4() {
 			t.has4 = true
@@ -489,6 +554,10 @@ func (t *Tunnel) ensure(ctx context.Context) (*running, error) {
 		m.mu.Unlock()
 		return r, nil
 	}
+	if t.retired {
+		m.mu.Unlock()
+		return nil, errRetired(t.cfg.Name)
+	}
 	c := t.start
 	if c == nil {
 		c = &startCall{done: make(chan struct{})}
@@ -517,9 +586,13 @@ func (t *Tunnel) doStart(c *startCall) {
 	m := t.m
 	m.mu.Lock()
 	t.start = nil
-	if err == nil && m.closed {
+	switch {
+	case err == nil && m.closed:
 		r.close()
 		r, err = nil, fmt.Errorf("tunnel %q: %w", t.cfg.Name, ErrClosed)
+	case err == nil && t.retired:
+		r.close()
+		r, err = nil, errRetired(t.cfg.Name)
 	}
 	if err == nil {
 		t.run.Store(r)
@@ -550,11 +623,14 @@ func (t *Tunnel) startDevice() (*running, error) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	timer := m.opts.Clock.AfterFunc(m.opts.ConnectTimeout, cancel)
+	timeout := m.connect()
+	timer := m.opts.Clock.AfterFunc(timeout, cancel)
 	defer timer.Stop()
 	go func() {
 		select {
 		case <-m.closing:
+			cancel()
+		case <-t.retiring:
 			cancel()
 		case <-ctx.Done():
 		}
@@ -600,10 +676,13 @@ func (t *Tunnel) startDevice() (*running, error) {
 	}
 	if err := waitHandshake(ctx, r.dev); err != nil {
 		r.close()
-		if isClosed(m.closing) {
+		switch {
+		case isClosed(m.closing):
 			return nil, fmt.Errorf("tunnel %q: %w", t.cfg.Name, ErrClosed)
+		case isClosed(t.retiring):
+			return nil, errRetired(t.cfg.Name)
 		}
-		return nil, unavailable("no handshake within %s", m.opts.ConnectTimeout)
+		return nil, unavailable("no handshake within %s", timeout)
 	}
 	return r, nil
 }

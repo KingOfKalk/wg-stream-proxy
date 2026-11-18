@@ -21,6 +21,9 @@ const (
 	// requests get this long before their connections are closed (spec
 	// 2.1, drain on shutdown).
 	DefaultShutdownTimeout = 30 * time.Second
+	// reloadDrainTimeout bounds the drain of a tunnel a reload changed or
+	// removed (spec 2.1).
+	reloadDrainTimeout = 30 * time.Second
 	// readHeaderTimeout bounds reading a player's request headers. There
 	// is no write timeout: streams have no time limit (spec 9).
 	readHeaderTimeout = 10 * time.Second
@@ -44,6 +47,12 @@ type RunOptions struct {
 	// ShutdownTimeout bounds the graceful shutdown; 0 means
 	// DefaultShutdownTimeout.
 	ShutdownTimeout time.Duration
+	// Reloader, if set, reloads the configuration while Run serves
+	// (spec 5.6).
+	Reloader *Reloader
+	// LogLevel, if set, is the level of Logger; a reload sets it to the
+	// new log_level.
+	LogLevel *slog.LevelVar
 
 	// Direct is the network of the direct route; nil means route.Host().
 	// Tests inject a recording network (spec 9).
@@ -63,6 +72,8 @@ type RunOptions struct {
 // timeout for in-flight requests, closes the remaining connections, and
 // drains and closes the tunnels within the same timeout. It returns
 // startup and serve errors; a shutdown after ctx ended returns nil.
+//
+// While serving, opts.Reloader reloads the configuration (spec 5.6).
 func Run(ctx context.Context, opts RunOptions) (err error) {
 	if opts.Listener == nil {
 		return errors.New("server: no listener")
@@ -99,43 +110,31 @@ func Run(ctx context.Context, opts RunOptions) (err error) {
 	}
 	defer func() { _ = mgr.Close() }()
 
-	nets := map[string]route.Network{}
-	activity := map[string]route.Activity{}
-	for _, t := range mgr.Tunnels() {
-		var n route.Network = t
-		if opts.WrapTunnel != nil {
-			n = opts.WrapTunnel(t.Name(), n)
-		}
-		nets[t.Name()] = n
-		activity[t.Name()] = t
+	st := &runState{opts: opts, log: log, mgr: mgr, direct: opts.Direct}
+	if st.direct == nil {
+		st.direct = route.Host()
 	}
-	direct := opts.Direct
-	if direct == nil {
-		direct = route.Host()
-	}
-	routes, err := route.NewSet(direct, nets, route.Options{Upstream: cfg.Upstream(), AllowPrivate: cfg.AllowPrivate(), Activity: activity})
+	routes, _, err := st.buildRoutes(nil, cfg)
 	if err != nil {
 		return err
 	}
-	// A stopped tunnel (idle close, drain) takes the route's pooled
-	// connections with it.
-	for _, t := range mgr.Tunnels() {
-		if rt, ok := routes.Route(t.Name()); ok {
-			t.OnStop(rt.CloseIdleConnections)
-		}
-	}
-	// Runs before the tunnels close, after all handlers returned.
-	defer routes.CloseIdleConnections()
-
 	srv, err := New(Options{Config: cfg, Routes: routes, Signer: opts.Signer, Logger: log, Version: opts.Version})
 	if err != nil {
 		return err
 	}
+	st.srv = srv
+	// Runs before the tunnels close, after all handlers returned.
+	defer st.closeIdleConnections()
+
 	hs := &http.Server{
 		Handler:           srv,
 		ReadHeaderTimeout: readHeaderTimeout,
 		IdleTimeout:       idleTimeout,
 		ErrorLog:          slog.NewLogLogger(log.Handler(), slog.LevelWarn),
+	}
+	if opts.Reloader != nil {
+		// Before serving: a served request means reloads work.
+		opts.Reloader.attach(st.reload)
 	}
 	served := make(chan error, 1)
 	go func() { served <- hs.Serve(opts.Listener) }()
@@ -144,11 +143,18 @@ func Run(ctx context.Context, opts RunOptions) (err error) {
 	select {
 	case err := <-served:
 		// Serve failed before any shutdown; its listener is closed.
+		if opts.Reloader != nil {
+			opts.Reloader.attach(nil)
+		}
 		srv.drain()
 		return err
 	case <-ctx.Done():
 	}
 
+	// No reload runs during the shutdown; one in progress finishes first.
+	if opts.Reloader != nil {
+		opts.Reloader.attach(nil)
+	}
 	log.Info("shutting down", "timeout", timeout.String())
 	deadline := time.Now().Add(timeout)
 	sctx, cancel := context.WithDeadline(context.Background(), deadline)

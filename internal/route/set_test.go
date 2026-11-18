@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
 
@@ -255,5 +256,150 @@ func TestHostNetwork(t *testing.T) {
 		if body := readClose(t, mustFetch(t, r, Request{URL: target})); body != "ok" {
 			t.Errorf("Fetch(%s) body = %q", target, body)
 		}
+	}
+}
+
+func TestSetNext(t *testing.T) {
+	gr, uk, other := &fakeNet{}, &fakeNet{}, &fakeNet{}
+	act, otherAct := &countingActivity{}, &countingActivity{}
+	base := func() (map[string]Network, Options) {
+		return map[string]Network{"gr": gr, "uk": uk}, Options{
+			Upstream:     testUpstream,
+			AllowPrivate: map[string][]netip.Prefix{"gr": {netip.MustParsePrefix("10.8.0.0/24")}},
+			Activity:     map[string]Activity{"gr": act},
+		}
+	}
+	slower := testUpstream
+	slower.ReadTimeout *= 2
+	tests := []struct {
+		name   string
+		edit   func(direct *Network, tunnels map[string]Network, opts *Options)
+		routes []string // routes of the next set
+		kept   []string // routes kept with their pooled connections
+	}{
+		{"unchanged", func(*Network, map[string]Network, *Options) {}, []string{"direct", "gr", "uk"}, []string{"direct", "gr", "uk"}},
+		{
+			"tunnel network replaced", func(_ *Network, n map[string]Network, _ *Options) { n["gr"] = other },
+			[]string{"direct", "gr", "uk"},
+			[]string{"direct", "uk"},
+		},
+		{
+			"tunnel removed", func(_ *Network, n map[string]Network, _ *Options) { delete(n, "uk") },
+			[]string{"direct", "gr"},
+			[]string{"direct", "gr"},
+		},
+		{
+			"tunnel added", func(_ *Network, n map[string]Network, _ *Options) { n["de"] = other },
+			[]string{"de", "direct", "gr", "uk"},
+			[]string{"direct", "gr", "uk"},
+		},
+		{"guard exceptions changed", func(_ *Network, _ map[string]Network, o *Options) {
+			o.AllowPrivate = map[string][]netip.Prefix{"gr": {netip.MustParsePrefix("10.9.0.0/24")}}
+		}, []string{"direct", "gr", "uk"}, []string{"direct", "uk"}},
+		{"guard exceptions added", func(_ *Network, _ map[string]Network, o *Options) {
+			o.AllowPrivate["direct"] = []netip.Prefix{netip.MustParsePrefix("192.168.1.0/24")}
+		}, []string{"direct", "gr", "uk"}, []string{"gr", "uk"}},
+		{
+			"activity replaced", func(_ *Network, _ map[string]Network, o *Options) { o.Activity = map[string]Activity{"gr": otherAct} },
+			[]string{"direct", "gr", "uk"},
+			[]string{"direct", "uk"},
+		},
+		{
+			"upstream settings changed", func(_ *Network, _ map[string]Network, o *Options) { o.Upstream = slower },
+			[]string{"direct", "gr", "uk"},
+			nil,
+		},
+		{
+			"direct network replaced", func(d *Network, _ map[string]Network, _ *Options) { *d = other },
+			[]string{"direct", "gr", "uk"},
+			[]string{"gr", "uk"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tunnels, opts := base()
+			s, err := NewSet(Host(), tunnels, opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.CloseIdleConnections()
+			direct := Host()
+			tunnels, opts = base()
+			tt.edit(&direct, tunnels, &opts)
+			next, dropped, err := s.Next(direct, tunnels, opts)
+			if err != nil {
+				t.Fatalf("Next: %v", err)
+			}
+			defer next.CloseIdleConnections()
+			var wantDropped []string
+			for _, name := range []string{"direct", "gr", "uk"} {
+				if !slices.Contains(tt.kept, name) {
+					wantDropped = append(wantDropped, name)
+				}
+			}
+			var gotDropped []string
+			for _, r := range dropped {
+				gotDropped = append(gotDropped, r.Name())
+				if old, _ := s.Route(r.Name()); old != r {
+					t.Errorf("dropped route %s is not the old route", r.Name())
+				}
+			}
+			slices.Sort(gotDropped)
+			if !slices.Equal(gotDropped, wantDropped) {
+				t.Errorf("dropped = %v, want %v", gotDropped, wantDropped)
+			}
+			for _, name := range tt.routes {
+				r, ok := next.Route(name)
+				if !ok {
+					t.Fatalf("next set lacks route %s", name)
+				}
+				old, _ := s.Route(name)
+				if kept := slices.Contains(tt.kept, name); (r == old) != kept {
+					t.Errorf("route %s kept = %v, want %v", name, r == old, kept)
+				}
+			}
+			if _, ok := next.Route("uk"); ok != slices.Contains(tt.routes, "uk") {
+				t.Errorf("route uk present = %v", ok)
+			}
+		})
+	}
+}
+
+func TestSetNextErrors(t *testing.T) {
+	s, err := NewSet(Host(), map[string]Network{"gr": &fakeNet{}}, Options{Upstream: testUpstream})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.Next(Host(), map[string]Network{"Bad_Name": &fakeNet{}}, Options{Upstream: testUpstream}); err == nil {
+		t.Error("Next with an invalid tunnel name succeeded")
+	}
+	if _, _, err := s.Next(nil, nil, Options{Upstream: testUpstream}); err == nil {
+		t.Error("Next without direct network succeeded")
+	}
+}
+
+// uncomparableNet is a Network of a type that == cannot compare.
+type uncomparableNet struct {
+	*fakeNet
+	tags []string
+}
+
+func TestSetNextUncomparableNetwork(t *testing.T) {
+	n := uncomparableNet{fakeNet: &fakeNet{}, tags: []string{"a"}}
+	s, err := NewSet(Host(), map[string]Network{"gr": n}, Options{Upstream: testUpstream})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// No panic; the route cannot be proven unchanged, so it is new.
+	next, dropped, err := s.Next(Host(), map[string]Network{"gr": n}, Options{Upstream: testUpstream})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(dropped) != 1 || dropped[0].Name() != "gr" {
+		t.Errorf("dropped = %v, want gr", dropped)
+	}
+	old, _ := s.Route("gr")
+	if r, _ := next.Route("gr"); r == old {
+		t.Error("route over an uncomparable network kept")
 	}
 }

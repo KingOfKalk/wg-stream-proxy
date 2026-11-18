@@ -426,7 +426,8 @@ stateDiagram-v2
   stream.
 - **Drain**: on shutdown or when a reload changes or removes a tunnel,
   in-flight requests get up to 30s, then the tunnel closes. A changed
-  tunnel is recreated lazily: the new one starts in *Stopped*.
+  tunnel is recreated lazily: the new one starts in *Stopped*. Such a
+  reload cancels a start in progress; its requests get `502` (spec 5.6).
 - `wsp_tunnel_up{tunnel}` is `1` while the device runs and the last
   handshake is younger than 180s (spec 7.3).
 

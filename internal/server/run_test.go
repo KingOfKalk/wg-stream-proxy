@@ -25,13 +25,16 @@ import (
 // runEnv is the proxy started with Run on a loopback listener, with
 // recording networks for the direct route and every tunnel (spec 9).
 type runEnv struct {
-	url    string
-	client *http.Client
-	logs   *syncBuffer
-	direct *recorder
+	url      string
+	client   *http.Client
+	logs     *syncBuffer
+	direct   *recorder
+	reloader *Reloader
 
 	mu      sync.Mutex
 	tunnels map[string]*recorder
+	// wraps counts the WrapTunnel calls per tunnel name.
+	wraps map[string]int
 }
 
 func (e *runEnv) tunnel(name string) *recorder {
@@ -53,7 +56,10 @@ func loadDir(t *testing.T, dir string) *config.Config {
 // adjust the options.
 func startRun(t *testing.T, dir string, shutdown time.Duration, mods ...func(*RunOptions)) *runEnv {
 	t.Helper()
-	e := &runEnv{logs: &syncBuffer{}, direct: &recorder{n: route.Host()}, tunnels: map[string]*recorder{}}
+	e := &runEnv{logs: &syncBuffer{}, direct: &recorder{n: route.Host()}, tunnels: map[string]*recorder{}, wraps: map[string]int{}}
+	e.reloader = NewReloader(func() (*config.Config, error) {
+		return config.Load(config.Options{Paths: config.Paths{ConfigDir: dir, TunnelsDir: filepath.Join(dir, "tunnels")}})
+	})
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -69,11 +75,13 @@ func startRun(t *testing.T, dir string, shutdown time.Duration, mods ...func(*Ru
 		Version:         "test",
 		Listener:        ln,
 		ShutdownTimeout: shutdown,
+		Reloader:        e.reloader,
 		Direct:          e.direct,
 		WrapTunnel: func(name string, n route.Network) route.Network {
 			r := &recorder{n: n}
 			e.mu.Lock()
 			e.tunnels[name] = r
+			e.wraps[name]++
 			e.mu.Unlock()
 			return r
 		},
