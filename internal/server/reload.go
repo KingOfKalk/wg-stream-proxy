@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 
@@ -172,8 +173,15 @@ func (st *runState) reload(cfg *config.Config, err error) error {
 	if st.opts.LogLevel != nil {
 		st.opts.LogLevel.Set(cfg.LogLevel())
 	}
+	chAdded, chChanged, chRemoved := diffChannels(old.cfg.Channels(), cfg.Channels())
+	// One info line with counts; the channel ids are debug only, and no
+	// URLs ever (they may carry tokens).
 	st.log.Info("reloaded", "channels", len(cfg.Channels()), "tunnels", len(cfg.Tunnels()),
-		"added", changes.Added, "changed", changes.Changed, "removed", changes.Removed)
+		"channels_added", len(chAdded), "channels_changed", len(chChanged), "channels_removed", len(chRemoved),
+		"tunnels_added", changes.Added, "tunnels_changed", changes.Changed, "tunnels_removed", changes.Removed)
+	if len(chAdded)+len(chChanged)+len(chRemoved) > 0 {
+		st.log.Debug("reload: channel changes", "added", chAdded, "changed", chChanged, "removed", chRemoved)
+	}
 	return nil
 }
 
@@ -184,4 +192,34 @@ func (st *runState) closeIdleConnections() {
 	for _, r := range st.dropped {
 		r.CloseIdleConnections()
 	}
+}
+
+// diffChannels compares two generations of channels by id and returns the
+// ids of the added, changed (any difference of the merged model, see
+// config.Channel.Equal) and removed channels, each sorted and never nil.
+func diffChannels(old, next []config.Channel) (added, changed, removed []string) {
+	added, changed, removed = []string{}, []string{}, []string{}
+	prev := make(map[string]config.Channel, len(old))
+	for _, ch := range old {
+		prev[ch.ID()] = ch
+	}
+	seen := make(map[string]bool, len(next))
+	for _, ch := range next {
+		seen[ch.ID()] = true
+		switch p, ok := prev[ch.ID()]; {
+		case !ok:
+			added = append(added, ch.ID())
+		case !p.Equal(ch):
+			changed = append(changed, ch.ID())
+		}
+	}
+	for _, ch := range old {
+		if !seen[ch.ID()] {
+			removed = append(removed, ch.ID())
+		}
+	}
+	slices.Sort(added)
+	slices.Sort(changed)
+	slices.Sort(removed)
+	return added, changed, removed
 }

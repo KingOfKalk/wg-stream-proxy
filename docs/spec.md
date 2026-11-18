@@ -257,6 +257,7 @@ url = "https://daserste-live.ard-mcdn.de/daserste/live/hls/de/master.m3u8"
 - A route (`direct` or a tunnel) keeps its pooled upstream connections only if its network, its `allow_private` entries and the whole `[upstream]` block are unchanged; otherwise new requests use a new route and the old route's idle connections are closed, while an unchanged tunnel keeps running.
 - A reload that changes or removes a tunnel which is still starting cancels the start; requests waiting for it get `502`; the new tunnel starts lazily on the next request.
 - Restart required for: `listen`, `log_format`, signing key, tunnels dir location. A reload that changes one of them logs a warning and keeps the old value.
+- A successful reload logs one info line `reloaded` with the channel and tunnel counts, `channels_added`, `channels_changed` and `channels_removed` (counts; changed means any difference of the merged channel config, comments, formatting and order do not count) and `tunnels_added`, `tunnels_changed` and `tunnels_removed` (names); a reload that changes nothing logs the same line with zeros. At debug level a second line lists the ids of the added, changed and removed channels; no line contains URLs.
 
 ## 6. Channel list
 
