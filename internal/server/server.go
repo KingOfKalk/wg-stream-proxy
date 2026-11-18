@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 // Package server is the HTTP side of wg-stream-proxy (spec 7.1): the
-// channel list, channel entries under /c/, signed resources under /r/
-// and /healthz. Upstream requests go through the channel's route
+// channel list, channel entries under /c/, signed resources under /r/,
+// /healthz and /metrics. Upstream requests go through the channel's route
 // (internal/route); playlists are rewritten with internal/hls.
 package server
 
@@ -18,6 +18,7 @@ import (
 
 	"github.com/KingOfKalk/wg-stream-proxy/internal/config"
 	"github.com/KingOfKalk/wg-stream-proxy/internal/hls"
+	"github.com/KingOfKalk/wg-stream-proxy/internal/metrics"
 	"github.com/KingOfKalk/wg-stream-proxy/internal/playlist"
 	"github.com/KingOfKalk/wg-stream-proxy/internal/route"
 )
@@ -38,6 +39,9 @@ type Options struct {
 	Logger *slog.Logger
 	// Version is reported by /healthz.
 	Version string
+	// Metrics receives the request metrics and is served on /metrics;
+	// nil means a new registry without tunnel metrics.
+	Metrics *metrics.Metrics
 }
 
 // Server serves the player-facing HTTP interface. It is an http.Handler.
@@ -48,6 +52,7 @@ type Server struct {
 	log     *slog.Logger
 	version string
 	mux     *http.ServeMux
+	metrics *metrics.Metrics
 
 	// mu guards closed and the Add calls of handlers, so drain does not
 	// race with a request that is just starting.
@@ -73,6 +78,10 @@ func New(opts Options) (*Server, error) {
 		log:     opts.Logger,
 		version: opts.Version,
 		mux:     http.NewServeMux(),
+		metrics: opts.Metrics,
+	}
+	if s.metrics == nil {
+		s.metrics = metrics.New(metrics.Options{})
 	}
 	if s.log == nil {
 		s.log = slog.New(slog.DiscardHandler)
@@ -83,6 +92,8 @@ func New(opts Options) (*Server, error) {
 	s.mux.HandleFunc("GET /r/", s.handleResource)
 	s.mux.HandleFunc("GET /healthz", s.handleHealth)
 	s.mux.HandleFunc("GET /logos/{file}", s.handleLogo)
+	// No authentication, like the rest: LAN use (spec 8).
+	s.mux.Handle("GET /metrics", s.metrics.Handler())
 	return s, nil
 }
 

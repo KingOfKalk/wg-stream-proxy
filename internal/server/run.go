@@ -12,6 +12,7 @@ import (
 
 	"github.com/KingOfKalk/wg-stream-proxy/internal/config"
 	"github.com/KingOfKalk/wg-stream-proxy/internal/hls"
+	"github.com/KingOfKalk/wg-stream-proxy/internal/metrics"
 	"github.com/KingOfKalk/wg-stream-proxy/internal/route"
 	"github.com/KingOfKalk/wg-stream-proxy/internal/tunnel"
 )
@@ -127,7 +128,16 @@ func Run(ctx context.Context, opts RunOptions) (err error) {
 	// Runs before the tunnels close, after all handlers returned.
 	defer routes.CloseIdleConnections()
 
-	srv, err := New(Options{Config: cfg, Routes: routes, Signer: opts.Signer, Logger: log, Version: opts.Version})
+	// The tunnel gauges read the tunnels at scrape time.
+	met := metrics.New(metrics.Options{Tunnels: func() []metrics.Tunnel {
+		ts := mgr.Tunnels()
+		out := make([]metrics.Tunnel, len(ts))
+		for i, t := range ts {
+			out[i] = t
+		}
+		return out
+	}})
+	srv, err := New(Options{Config: cfg, Routes: routes, Signer: opts.Signer, Logger: log, Version: opts.Version, Metrics: met})
 	if err != nil {
 		return err
 	}

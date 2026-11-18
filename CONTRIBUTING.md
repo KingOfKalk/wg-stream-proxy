@@ -231,3 +231,26 @@ docker buildx build --platform linux/amd64,linux/arm64 \
 .github/scripts/container-smoke.sh wg-stream-proxy:dev
 docker compose -f deploy/compose/compose.yaml config --quiet
 ```
+
+### Nightly
+
+[`.github/workflows/nightly.yml`](.github/workflows/nightly.yml) runs the
+slow checks of [testing.md](docs/testing.md#ci-and-coverage) once a night
+(02:23 UTC) and on demand (`gh workflow run nightly.yml`). They are **not**
+required checks; a failure does not block merging.
+
+| Job | What | Summary on the run page |
+| --- | --- | --- |
+| `Fuzz targets` | lists every fuzz target (`go test -list '^Fuzz' ./...`) | the targets |
+| `Fuzz (long) (<pkg>.<target>)` | one job per target: 10 minutes, `-fuzzminimizetime 2s`; a failing input is uploaded as artifact `fuzz-failure-<id>` | last progress line, or the failing input and the output |
+| `Capacity` | `TestCapacity` with `-race` and `WSP_CAPACITY=5m`: 3 viewers through the proxy and in-process tunnels | latency, goroutines and heap over time |
+| `arm64` | `go test -race -cover ./...` on a native `ubuntu-26.04-arm` runner; fails if the runner is not arm64 (no QEMU fallback) | like `Test` |
+
+Locally:
+
+```sh
+run golang:1.27.4 go test -run '^$' -fuzz '^FuzzRewrite$' -fuzztime 10m \
+  -fuzzminimizetime 2s ./internal/hls
+run -e WSP_CAPACITY=5m golang:1.27.4 \
+  go test -race -run '^TestCapacity$' -v -timeout 20m ./internal/server/capacitytest
+```
