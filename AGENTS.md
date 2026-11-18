@@ -68,7 +68,8 @@ comment, is world-readable and permanent.
     at the authoritative source (forge releases API, Go proxy, registry),
     pin it exactly, and name version and source in the PR description.
 15. gVisor stays at the version in `wireguard-go`'s `go.mod` and is only
-    updated together with it (spec 9).
+    updated together with it (spec 9). The same holds for the patched
+    `tun/netstack` copy in `internal/tunnel/netstack`.
 16. Workflows: `permissions: {}` at the top and the minimum per job,
     actions pinned by full commit SHA with a `# vX.Y.Z` comment,
     `persist-credentials: false` on checkout unless the job pushes, no
