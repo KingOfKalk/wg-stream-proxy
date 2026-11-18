@@ -228,6 +228,20 @@ func (ch Channel) Attrs() []Attr { return slices.Clone(ch.attrs) }
 // Extra returns the extra lines sorted by directive, then key.
 func (ch Channel) Extra() []Extra { return slices.Clone(ch.extra) }
 
+// Equal reports whether ch and o have the same merged model: every
+// field a reload could change in what the proxy serves or lists (id,
+// name, URL, route, group, enabled, type, headers, tvg id, logo, attrs,
+// extra). The channel file does not count. Maps are compared by content
+// and attrs and extra are sorted, so the order in the files is
+// irrelevant.
+func (ch Channel) Equal(o Channel) bool {
+	return ch.id == o.id && ch.name == o.name && ch.url == o.url &&
+		ch.route == o.route && ch.group == o.group && ch.enabled == o.enabled &&
+		ch.typ == o.typ && ch.tvgID == o.tvgID && ch.logo == o.logo &&
+		maps.EqualFunc(ch.header, o.header, slices.Equal[[]string]) &&
+		slices.Equal(ch.attrs, o.attrs) && slices.Equal(ch.extra, o.extra)
+}
+
 // sortedAttrs converts an attribute map to a slice sorted by key.
 func sortedAttrs(m map[string]string) []Attr {
 	out := make([]Attr, 0, len(m))

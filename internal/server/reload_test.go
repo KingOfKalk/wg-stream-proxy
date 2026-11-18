@@ -5,6 +5,7 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -440,5 +441,126 @@ func TestReloaderNotServing(t *testing.T) {
 	}
 	if err := r.Reload(); !errors.Is(err, ErrNotServing) {
 		t.Errorf("Reload after Run: err = %v, want ErrNotServing", err)
+	}
+}
+
+// reloadLines returns the log lines of the reload with msg.
+func reloadLines(logs, msg string) []string {
+	var out []string
+	for line := range strings.SplitSeq(logs, "\n") {
+		if strings.Contains(line, "msg="+msg) {
+			out = append(out, line)
+		}
+	}
+	return out
+}
+
+// TestReloadLogsChannelChanges: the reloaded line reports channel and
+// tunnel changes separately; channel ids appear only at debug level.
+func TestReloadLogsChannelChanges(t *testing.T) {
+	oldPeer, _ := newPeer(t, "old")
+	nextPeer, _ := newPeer(t, "new")
+	news := func(extra string) string {
+		return "tunnel = \"direct\"\n[[channel]]\nname = \"News\"\nurl = \"http://news.example.com/a\"\n" + extra +
+			"[[channel]]\nname = \"Sport\"\nurl = \"http://sport.example.com/a\"\n"
+	}
+	film := "tunnel = \"direct\"\n[[channel]]\nname = \"Film\"\nurl = \"http://film.example.com/a\"\n"
+	e := startTunnels(t, map[string]string{
+		"tunnels/gr.conf":    oldPeer.ClientConfig(),
+		"channels.d/gr.toml": tunnelChannels("gr"),
+		"channels.d/tv.toml": news("playlist.extra = { KODIPROP = { a = \"1\", b = \"2\" } }\n"),
+	})
+
+	const (
+		zeroT = " tunnels_added=[] tunnels_changed=[] tunnels_removed=[]"
+		zeroC = " channels_added=0 channels_changed=0 channels_removed=0"
+	)
+	// Each step starts from the state the previous one left.
+	tests := []struct {
+		name     string
+		files    map[string]string
+		channels int
+		// want is the info line after "channels=N tunnels=1".
+		want string
+		// debug is the end of the debug line with the channel ids; ""
+		// if the reload changed no channel and logs none.
+		debug string
+	}{
+		{
+			name:     "only playlist.extra of one channel changes",
+			files:    map[string]string{"channels.d/tv.toml": news("playlist.extra = { KODIPROP = { a = \"1\", b = \"3\" } }\n")},
+			channels: 4,
+			want:     " channels_added=0 channels_changed=1 channels_removed=0" + zeroT,
+			debug:    "added=[] changed=[news] removed=[]",
+		},
+		{
+			name:     "same content in another order",
+			files:    map[string]string{"channels.d/tv.toml": news("playlist.extra = { KODIPROP = { b = \"3\", a = \"1\" } }\n")},
+			channels: 4,
+			want:     zeroC + zeroT,
+		},
+		{
+			name:     "channel file added",
+			files:    map[string]string{"channels.d/film.toml": film},
+			channels: 5,
+			want:     " channels_added=1 channels_changed=0 channels_removed=0" + zeroT,
+			debug:    "added=[film] changed=[] removed=[]",
+		},
+		{
+			name:     "channel file removed",
+			files:    map[string]string{"channels.d/film.toml": ""},
+			channels: 4,
+			want:     " channels_added=0 channels_changed=0 channels_removed=1" + zeroT,
+			debug:    "added=[] changed=[] removed=[film]",
+		},
+		{
+			name:     "tunnel file changed",
+			files:    map[string]string{"tunnels/gr.conf": nextPeer.ClientConfig()},
+			channels: 4,
+			want:     zeroC + " tunnels_added=[] tunnels_changed=[gr] tunnels_removed=[]",
+		},
+		{
+			name:     "nothing changed",
+			files:    map[string]string{},
+			channels: 4,
+			want:     zeroC + zeroT,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			infoBefore := len(reloadLines(e.logs.String(), "reloaded"))
+			dbgBefore := len(reloadLines(e.logs.String(), `"reload: channel changes"`))
+			writeFiles(t, e.dir, tt.files)
+			if err := e.reload(t); err != nil {
+				t.Fatalf("Reload: %v", err)
+			}
+			logs := e.logs.String()
+			lines := reloadLines(logs, "reloaded")
+			if len(lines) != infoBefore+1 {
+				t.Fatalf("reloaded lines = %d, want %d:\n%s", len(lines), infoBefore+1, logs)
+			}
+			got := lines[len(lines)-1]
+			want := fmt.Sprintf("channels=%d tunnels=1", tt.channels) + tt.want
+			if !strings.Contains(got, " level=INFO ") || !strings.HasSuffix(got, want) {
+				t.Errorf("reloaded line:\n%s\nwant it to end with\n%s", got, want)
+			}
+			if strings.Contains(got, "news") || strings.Contains(got, "film") || strings.Contains(got, "http") {
+				t.Errorf("info line lists ids or URLs: %s", got)
+			}
+			dbg := reloadLines(logs, `"reload: channel changes"`)
+			if tt.debug == "" {
+				if len(dbg) != dbgBefore {
+					t.Errorf("debug channel line for a reload without channel changes: %v", dbg[dbgBefore:])
+				}
+				return
+			}
+			if len(dbg) != dbgBefore+1 {
+				t.Fatalf("debug channel lines = %d, want %d:\n%s", len(dbg), dbgBefore+1, logs)
+			}
+			d := dbg[len(dbg)-1]
+			if !strings.Contains(d, " level=DEBUG ") || !strings.HasSuffix(d, tt.debug) || strings.Contains(d, "http") {
+				t.Errorf("debug line %q, want level DEBUG ending with %q and no URL", d, tt.debug)
+			}
+		})
 	}
 }
