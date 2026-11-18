@@ -473,7 +473,7 @@ flowchart TB
         reg["metrics.Metrics<br/>wsp_* registry"]:::obs
     end
     subgraph l4["4 · Routes"]
-        fetch["Route.Fetch<br/>http.Transport, 2 pools"]:::data
+        fetch["Route.Fetch<br/>http.Transport + ICY transport"]:::data
         guard{{"dial: lookup,<br/>Guard.Check, connect"}}:::guard
     end
     subgraph l5["5 · Tunnels"]
@@ -523,7 +523,7 @@ Requests go down the layers, responses travel back up.
 | 1 HTTP | Routing of the paths, absolute base URL, `/logos/` from disk, `/healthz`; graceful shutdown waits for running handlers | `internal/server`, `internal/playlist` | 6, 7.1 |
 | 2 Generation | The immutable `generation`: one `config.Config` plus the `route.Set` built for it, in an `atomic.Pointer`. Every request takes it once and keeps it to its end | `internal/server`, `internal/config` | 5.6 |
 | 3 Content | `Server.proxy`: fetch through the channel's route, then `hls.Detect`; playlists go through `hls.Rewrite` with `Signer.Path`, everything else through `stream` (`io.Copy` + flush). Status mapping, the `206` refetch | `internal/hls`, `internal/server` | 3.1-3.4, 4 |
-| 4 Routes | One `Route` per tunnel plus `direct`. `Fetch` applies the upstream header rules, redirects and timeouts; the route's `dial` resolves, runs `Guard.Check` and connects Happy-Eyeballs style. Two `http.Transport`s per route: the normal pool and the ICY pool | `internal/route` | 2.1, 3.3-3.5 |
+| 4 Routes | One `Route` per tunnel plus `direct`. `Fetch` applies the upstream header rules, redirects and timeouts; the route's `dial` resolves, runs `Guard.Check` and connects Happy-Eyeballs style. Two `http.Transport`s per route: the normal pool, and the ICY transport for `/c/` of raw and `auto` channels, which uses each connection for one request only | `internal/route` | 2.1, 3.3-3.5 |
 | 5 Tunnels | `tunnel.Manager` with one `Tunnel` per tunnel file: lazy start, idle close, drain, reload (`Apply`). `direct` is `route.Host()`: host resolver and dialer | `internal/tunnel`, `internal/tunnel/netstack`, `internal/config/wgquick` | 2.1, 5.5 |
 | 6 Host network | One UDP socket per running tunnel to its peer; plain TCP for `direct`. No TUN device, no routing table change | wireguard-go `conn` | 1.1, 2.1 |
 
