@@ -1,0 +1,8 @@
+#EXTM3U
+#EXTINF:-1 tvg-name="Radio" group-title="Radio" catchup="default" radio="true",Radio
+https://tv.example.org/c/radio
+#KODIPROP:inputstream=inputstream.adaptive
+#EXTINF:-1 tvg-name="News" group-title="TV" catchup="default",News
+https://tv.example.org/c/news.m3u8
+#EXTINF:-1 tvg-name="Plain" group-title="TV",Plain
+https://tv.example.org/c/plain.m3u8

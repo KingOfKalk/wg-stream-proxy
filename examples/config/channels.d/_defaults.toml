@@ -1,0 +1,8 @@
+# Global defaults for every channel file (spec 5.4): only
+# [defaults.upstream] and [defaults.playlist]; no tunnel, group or
+# channels. File defaults and channels override them key by key; an empty
+# value removes a key (see radio.toml).
+
+# Kodi plays HLS through the inputstream.adaptive add-on (docs/deploy.md).
+[defaults.playlist.extra.KODIPROP]
+"inputstream" = "inputstream.adaptive"

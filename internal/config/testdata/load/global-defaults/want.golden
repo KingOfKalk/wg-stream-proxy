@@ -1,0 +1,182 @@
+{
+  "Paths": {
+    "ConfigDir": "testdata/load/global-defaults/config",
+    "TunnelsDir": "testdata/load/global-defaults/config/tunnels"
+  },
+  "LogosDir": "testdata/load/global-defaults/config/assets/logos",
+  "Listen": ":2349",
+  "LogLevel": "INFO",
+  "LogFormat": "text",
+  "PublicBaseURL": "",
+  "UserAgent": "Base/1.0",
+  "Timeouts": {
+    "connect": "10s",
+    "header": "15s",
+    "idle": "1h0m0s",
+    "read": "30s"
+  },
+  "AllowPrivate": {},
+  "EPGURL": "",
+  "Tunnels": [
+    {
+      "Name": "gr",
+      "Path": "testdata/load/global-defaults/config/tunnels/gr.conf"
+    }
+  ],
+  "Channels": [
+    {
+      "File": "testdata/load/global-defaults/config/channels.d/gr.toml",
+      "ID": "eins",
+      "Name": "Eins",
+      "URL": "https://gr.example.com/eins/master.m3u8",
+      "Route": "gr",
+      "Group": "gr",
+      "Enabled": true,
+      "Type": "hls",
+      "Header": {
+        "Referer": [
+          "https://global.example.com/"
+        ],
+        "User-Agent": [
+          "Global/1.0"
+        ],
+        "X-Token": [
+          "g"
+        ]
+      },
+      "TVGID": "",
+      "Logo": "local:news.png",
+      "Attrs": [
+        {
+          "Key": "catchup",
+          "Value": "default"
+        },
+        {
+          "Key": "tvg-chno",
+          "Value": "0"
+        }
+      ],
+      "Extra": [
+        {
+          "Directive": "KODIPROP",
+          "Key": "inputstream",
+          "Value": "inputstream.adaptive"
+        },
+        {
+          "Directive": "KODIPROP",
+          "Key": "inputstream.adaptive.manifest_type",
+          "Value": "hls"
+        }
+      ]
+    },
+    {
+      "File": "testdata/load/global-defaults/config/channels.d/gr.toml",
+      "ID": "zwei",
+      "Name": "Zwei",
+      "URL": "https://gr.example.com/zwei",
+      "Route": "gr",
+      "Group": "gr",
+      "Enabled": true,
+      "Type": "auto",
+      "Header": {
+        "Referer": [
+          "https://zwei.example.com/"
+        ],
+        "User-Agent": [
+          "Global/1.0"
+        ]
+      },
+      "TVGID": "",
+      "Logo": "none:",
+      "Attrs": [
+        {
+          "Key": "tvg-chno",
+          "Value": "2"
+        }
+      ],
+      "Extra": [
+        {
+          "Directive": "KODIPROP",
+          "Key": "inputstream",
+          "Value": "inputstream.adaptive"
+        }
+      ]
+    },
+    {
+      "File": "testdata/load/global-defaults/config/channels.d/radio.toml",
+      "ID": "radio-eins",
+      "Name": "Radio Eins",
+      "URL": "http://radio.example.com:8000/eins",
+      "Route": "direct",
+      "Group": "Radio",
+      "Enabled": true,
+      "Type": "auto",
+      "Header": {
+        "User-Agent": [
+          ""
+        ],
+        "X-Token": [
+          "g"
+        ]
+      },
+      "TVGID": "",
+      "Logo": "local:news.png",
+      "Attrs": [
+        {
+          "Key": "catchup",
+          "Value": "default"
+        },
+        {
+          "Key": "radio",
+          "Value": "true"
+        },
+        {
+          "Key": "tvg-chno",
+          "Value": "0"
+        }
+      ],
+      "Extra": null
+    },
+    {
+      "File": "testdata/load/global-defaults/config/channels.d/radio.toml",
+      "ID": "radio-zwei",
+      "Name": "Radio Zwei",
+      "URL": "http://radio.example.com:8000/zwei",
+      "Route": "direct",
+      "Group": "Radio",
+      "Enabled": true,
+      "Type": "auto",
+      "Header": {
+        "User-Agent": [
+          "Radio/2"
+        ],
+        "X-Token": [
+          "g"
+        ]
+      },
+      "TVGID": "",
+      "Logo": "local:news.png",
+      "Attrs": [
+        {
+          "Key": "catchup",
+          "Value": "default"
+        },
+        {
+          "Key": "radio",
+          "Value": "true"
+        },
+        {
+          "Key": "tvg-chno",
+          "Value": "0"
+        }
+      ],
+      "Extra": [
+        {
+          "Directive": "KODIPROP",
+          "Key": "inputstream",
+          "Value": "inputstream.ffmpegdirect"
+        }
+      ]
+    }
+  ]
+}

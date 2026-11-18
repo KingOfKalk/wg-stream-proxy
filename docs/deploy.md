@@ -71,7 +71,7 @@ By default Kodi's IPTV Simple Client hands HLS to Kodi's internal FFmpeg. On a R
 "inputstream" = "inputstream.adaptive"
 ```
 
-For a whole channel file, set it once as a file default:
+For a whole channel file, set it once as a file default; for all channel files, set the same table once in `channels.d/_defaults.toml` (see [`examples/config/channels.d/_defaults.toml`](../examples/config/channels.d/_defaults.toml)):
 
 ```toml
 [defaults.playlist.extra.KODIPROP]
@@ -79,6 +79,15 @@ For a whole channel file, set it once as a file default:
 ```
 
 The playlist then has `#KODIPROP:inputstream=inputstream.adaptive` before the channel's `#EXTINF` line (see [spec 5.4 and 6](spec.md)). The add-on must be installed and enabled in Kodi (VideoPlayer InputStream, InputStream Adaptive); the proxy does not check this.
+
+Kodi cannot play MP3 radio streams through `inputstream.adaptive`. With the global default, remove it for radio channels with an empty value, in the radio file (as in [`examples/config/channels.d/radio.toml`](../examples/config/channels.d/radio.toml)) or on a single channel (`[channel.playlist.extra.KODIPROP]`):
+
+```toml
+[defaults.playlist.extra.KODIPROP]
+"inputstream" = ""
+```
+
+An empty value removes a key set by a lower layer for `headers`, `attrs` and `extra` (spec 5.4).
 
 ## systemd (v0.3)
 

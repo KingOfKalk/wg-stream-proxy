@@ -514,6 +514,29 @@ func TestReloadLogsChannelChanges(t *testing.T) {
 			debug:    "added=[] changed=[] removed=[film]",
 		},
 		{
+			name:     "global defaults added",
+			files:    map[string]string{"channels.d/_defaults.toml": "[defaults.playlist]\nattrs = { catchup = \"default\" }\n"},
+			channels: 4,
+			want:     " channels_added=0 channels_changed=4 channels_removed=0" + zeroT,
+			debug:    `added=[] changed="[gr-radio gr-seg news sport]" removed=[]`,
+		},
+		{
+			// News sets KODIPROP a itself, so its merged model stays.
+			name: "global defaults key a channel overrides",
+			files: map[string]string{"channels.d/_defaults.toml": "[defaults.playlist]\nattrs = { catchup = \"default\" }\n" +
+				"[defaults.playlist.extra.KODIPROP]\na = \"9\"\n"},
+			channels: 4,
+			want:     " channels_added=0 channels_changed=3 channels_removed=0" + zeroT,
+			debug:    `added=[] changed="[gr-radio gr-seg sport]" removed=[]`,
+		},
+		{
+			name:     "global defaults removed",
+			files:    map[string]string{"channels.d/_defaults.toml": ""},
+			channels: 4,
+			want:     " channels_added=0 channels_changed=4 channels_removed=0" + zeroT,
+			debug:    `added=[] changed="[gr-radio gr-seg news sport]" removed=[]`,
+		},
+		{
 			name:     "tunnel file changed",
 			files:    map[string]string{"tunnels/gr.conf": nextPeer.ClientConfig()},
 			channels: 4,

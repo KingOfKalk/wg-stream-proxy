@@ -8,6 +8,11 @@ tunnel = "direct"
 [defaults.playlist]
 attrs = { radio = "true" }
 
+# inputstream.adaptive cannot play MP3 streams: the empty value removes the
+# global KODIPROP from _defaults.toml for this file.
+[defaults.playlist.extra.KODIPROP]
+"inputstream" = ""
+
 [[channel]]
 name = "Example Radio"
 url = "https://radio.example.com/live/stream.mp3"

@@ -167,7 +167,8 @@ flowchart TB
 
 **Control plane**: decides *what* exists and *how* traffic may flow.
 
-- Config dir (spec 5.1): `config.toml`, `channels.d/*.toml`, tunnel files
+- Config dir (spec 5.1): `config.toml`, `channels.d/*.toml` (with the
+  global defaults `channels.d/_defaults.toml`), tunnel files
   in `tunnels/*.conf` (`wg-quick` format, converted to a WireGuard UAPI
   config internally).
 - Load and validate: everything is checked at once; all errors are
@@ -363,6 +364,8 @@ flowchart TD
 
 - First match wins (spec 5.2). The route is fixed when the config is
   loaded, not per request.
+- `channels.d/_defaults.toml` sets no route: a global `tunnel` is a
+  config error (spec 5.4).
 - `direct` is never a default: it is used only where it is written. A
   channel without a route is a config error, so it can never fall back to
   the host network.

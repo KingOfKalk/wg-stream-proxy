@@ -149,6 +149,101 @@ func TestPlaylistGolden(t *testing.T) {
 	}
 }
 
+// TestGlobalDefaults: channels.d/_defaults.toml applies to every channel
+// file; an empty value removes a key at file or channel level, for
+// User-Agent also [upstream] user_agent (spec 5.4).
+func TestGlobalDefaults(t *testing.T) {
+	e := newDirectEnvFiles(t, "[upstream]\nuser_agent = \"base-agent\"\n"+allowLoopback, map[string]string{
+		"channels.d/_defaults.toml": `
+[defaults.upstream]
+headers = { user-agent = "global-agent", Referer = "https://global.example/" }
+
+[defaults.playlist]
+attrs = { catchup = "default" }
+
+[defaults.playlist.extra.KODIPROP]
+"inputstream" = "inputstream.adaptive"
+`,
+		"channels.d/tv.toml": `
+tunnel = "direct"
+group = "TV"
+
+[[channel]]
+name = "News"
+url = "{UP}/live/master.m3u8"
+
+[[channel]]
+name = "Plain"
+url = "{UP}/plain/master.m3u8"
+
+[channel.upstream]
+headers = { REFERER = "" }
+
+[channel.playlist]
+attrs = { catchup = "" }
+
+[channel.playlist.extra.KODIPROP]
+"inputstream" = ""
+`,
+		"channels.d/radio.toml": `
+tunnel = "direct"
+group = "Radio"
+
+[defaults.upstream]
+headers = { USER-AGENT = "" }
+
+[defaults.playlist]
+attrs = { radio = "true" }
+
+[defaults.playlist.extra.KODIPROP]
+"inputstream" = ""
+
+[[channel]]
+name = "Radio"
+url = "{UP}/radio"
+`,
+	})
+	hlsFixture(e.up, e.upURL)
+	e.up.add("/plain/master.m3u8", file{ctype: "application/vnd.apple.mpegurl", body: "#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXTINF:6,\nseg.ts\n"})
+	e.up.add("/radio", file{ctype: "audio/mpeg", body: "mp3"})
+
+	h := http.Header{"X-Forwarded-Proto": {"https"}, "X-Forwarded-Host": {"tv.example.org"}}
+	resp, body := e.get(t, "/playlist.m3u8", h)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d", resp.StatusCode)
+	}
+	checkGolden(t, "playlist-global-defaults", body)
+
+	tests := []struct {
+		path, upstream, userAgent, referer string
+	}{
+		{"/c/news.m3u8", "/live/master.m3u8", "global-agent", "https://global.example/"},
+		{"/c/plain.m3u8", "/plain/master.m3u8", "global-agent", ""},
+		{"/c/radio", "/radio", "", "https://global.example/"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			if resp, _ := e.get(t, tt.path, nil); resp.StatusCode != http.StatusOK {
+				t.Fatalf("status %d", resp.StatusCode)
+			}
+			reqs := e.up.requestsFor(tt.upstream)
+			if len(reqs) == 0 {
+				t.Fatalf("no upstream request for %s", tt.upstream)
+			}
+			r := reqs[len(reqs)-1]
+			if r.UserAgent != tt.userAgent || r.Referer != tt.referer {
+				t.Errorf("upstream User-Agent %q, Referer %q; want %q, %q", r.UserAgent, r.Referer, tt.userAgent, tt.referer)
+			}
+			// Removed headers are not sent at all, not sent empty.
+			names := "," + r.Names + ","
+			if (tt.userAgent == "") != !strings.Contains(names, ",User-Agent,") ||
+				(tt.referer == "") != !strings.Contains(names, ",Referer,") {
+				t.Errorf("upstream header names %q: removed headers must be absent, others present", r.Names)
+			}
+		})
+	}
+}
+
 // checkGolden compares got with testdata/<name>.golden.
 func checkGolden(t *testing.T, name, got string) {
 	t.Helper()

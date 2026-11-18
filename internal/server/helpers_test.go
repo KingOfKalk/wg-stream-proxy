@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -144,6 +145,8 @@ type file struct {
 // seen is a request the fixture received.
 type seen struct {
 	Method, Path, Query, Range, UserAgent, Referer, Icy, Remote string
+	// Names lists the request header names sent, sorted, comma-separated.
+	Names string
 }
 
 // upstream is a fixture upstream server handler.
@@ -189,6 +192,7 @@ func (u *upstream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Method: r.Method, Path: r.URL.Path, Query: r.URL.RawQuery, Range: r.Header.Get("Range"),
 		UserAgent: r.Header.Get("User-Agent"), Referer: r.Header.Get("Referer"),
 		Icy: r.Header.Get("Icy-MetaData"), Remote: r.RemoteAddr,
+		Names: headerNames(r.Header),
 	})
 	f, ok := u.files[r.URL.Path]
 	u.mu.Unlock()
@@ -471,14 +475,22 @@ const allowLoopback = "\n[upstream.allow_private]\ndirect = [\"127.0.0.0/8\", \"
 // replaced with the upstream base URL.
 func newDirectEnv(t *testing.T, configTOML, channels string) *directEnv {
 	t.Helper()
+	return newDirectEnvFiles(t, configTOML, map[string]string{"channels.d/tv.toml": channels})
+}
+
+// newDirectEnvFiles is newDirectEnv with any channel files, by path
+// relative to the config dir; "{UP}" is replaced in each.
+func newDirectEnvFiles(t *testing.T, configTOML string, channelFiles map[string]string) *directEnv {
+	t.Helper()
 	e := &directEnv{up: newUpstream(), logs: &syncBuffer{}, signer: newSigner(t), metrics: metrics.New(metrics.Options{})}
 	upSrv := httptest.NewServer(e.up)
 	t.Cleanup(upSrv.Close)
 	e.upURL = upSrv.URL
-	e.cfg = loadConfig(t, map[string]string{
-		"config.toml":        strings.ReplaceAll(configTOML, "{UP}", upSrv.URL),
-		"channels.d/tv.toml": strings.ReplaceAll(channels, "{UP}", upSrv.URL),
-	})
+	files := map[string]string{"config.toml": strings.ReplaceAll(configTOML, "{UP}", upSrv.URL)}
+	for name, content := range channelFiles {
+		files[name] = strings.ReplaceAll(content, "{UP}", upSrv.URL)
+	}
+	e.cfg = loadConfig(t, files)
 	routes, err := route.NewSet(route.Host(), nil, route.Options{Upstream: e.cfg.Upstream(), AllowPrivate: e.cfg.AllowPrivate()})
 	if err != nil {
 		t.Fatal(err)
@@ -502,4 +514,14 @@ func (e *directEnv) get(t *testing.T, path string, h http.Header) (*http.Respons
 // resource returns the resource URL of an upstream URL for channel.
 func (e *directEnv) resource(channel, upstream string) string {
 	return e.proxy.URL + e.signer.Path(channel, upstream)
+}
+
+// headerNames returns the names in h, sorted and comma-separated.
+func headerNames(h http.Header) string {
+	names := make([]string, 0, len(h))
+	for k := range h {
+		names = append(names, k)
+	}
+	slices.Sort(names)
+	return strings.Join(names, ",")
 }

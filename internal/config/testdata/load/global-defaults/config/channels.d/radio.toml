@@ -1,0 +1,30 @@
+# File-level opt-outs: no User-Agent at all (neither global nor
+# config.toml), no Referer, no inputstream.adaptive.
+tunnel = "direct"
+group = "Radio"
+
+[defaults.upstream]
+type = "auto"
+headers = { USER-AGENT = "", referer = "" }
+
+[defaults.playlist]
+attrs = { radio = "true" }
+
+[defaults.playlist.extra.KODIPROP]
+"inputstream" = ""
+"inputstream.adaptive.manifest_type" = ""
+
+[[channel]]
+name = "Radio Eins"
+url = "http://radio.example.com:8000/eins"
+
+# A channel sets a key again that its file removed.
+[[channel]]
+name = "Radio Zwei"
+url = "http://radio.example.com:8000/zwei"
+
+[channel.upstream]
+headers = { User-Agent = "Radio/2" }
+
+[channel.playlist.extra.KODIPROP]
+"inputstream" = "inputstream.ffmpegdirect"
