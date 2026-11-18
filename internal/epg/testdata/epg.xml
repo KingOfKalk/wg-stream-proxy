@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Made-up channels for tests; not a real EPG. -->
+<tv generator-info-name="fixture">
+  <channel id="ert1.example">
+    <display-name lang="el">ΕΡΤ1</display-name>
+    <display-name lang="en">ERT1 HD</display-name>
+    <icon src="https://logos.example.org/ert1.png"/>
+  </channel>
+  <channel id="ertworld.example">
+    <display-name>ERT World</display-name>
+  </channel>
+  <channel id="ertworld-hd.example">
+    <display-name>ERT World HD</display-name>
+  </channel>
+  <channel id="skai.example">
+    <display-name lang="el">ΣΚΑΪ</display-name>
+  </channel>
+  <channel id="daserste.example">
+    <display-name lang="de">Das Erste</display-name>
+    <display-name lang="de">ARD   Das  Erste</display-name>
+  </channel>
+  <channel id="radio-one.example">
+    <display-name>Radio One</display-name>
+  </channel>
+  <programme start="20260101180000 +0000" stop="20260101190000 +0000" channel="ert1.example">
+    <title lang="el">Ειδήσεις</title>
+  </programme>
+  <programme start="20260101180000 +0000" stop="20260101190000 +0000" channel="skai.example">
+    <title lang="el">Ταινία</title>
+  </programme>
+</tv>

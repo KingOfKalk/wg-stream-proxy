@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 
+	"github.com/KingOfKalk/wg-stream-proxy/internal/config"
 	"github.com/KingOfKalk/wg-stream-proxy/internal/importer"
 )
 
@@ -19,9 +20,12 @@ func (c *cli) importM3U(args []string) int {
 	fset := flag.NewFlagSet("import", flag.ContinueOnError)
 	fset.SetOutput(c.stderr)
 	var opts importer.Options
-	var out string
+	var out, configDir string
+	var matchEPG bool
 	fset.StringVar(&opts.Tunnel, "tunnel", "", "tunnel name or direct, written at the top of the channel file")
 	fset.StringVar(&out, "out", "", "write to this new file instead of stdout (never overwritten)")
+	fset.BoolVar(&matchEPG, "match-epg", false, "keep tvg_id only if the EPG (epg.url in config.toml) has it, else suggest the best match in a comment")
+	fset.StringVar(&configDir, "config-dir", "", "config directory for --match-epg (env "+config.EnvConfigDir+")")
 	files, err := parseInterspersed(fset, args)
 	if err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -38,6 +42,22 @@ func (c *cli) importM3U(args []string) int {
 	if err != nil {
 		_, _ = fmt.Fprintf(c.stderr, "wg-stream-proxy: import: %v\n", err)
 		return 1
+	}
+	if matchEPG {
+		copts, err := config.Resolve(config.Flags{ConfigDir: configDir}, c.env)
+		if err != nil {
+			c.printErrors(err)
+			return 1
+		}
+		cfg, err := config.Load(copts)
+		if err != nil {
+			c.printErrors(err)
+			return 1
+		}
+		if opts.EPG, err = c.loadEPG(cfg); err != nil {
+			_, _ = fmt.Fprintf(c.stderr, "wg-stream-proxy: import: --match-epg: %v\n", err)
+			return 1
+		}
 	}
 	res, err := importer.Import(data, opts)
 	for _, w := range res.Warnings {

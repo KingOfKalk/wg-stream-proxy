@@ -62,3 +62,21 @@ func TestValidName(t *testing.T) {
 		}
 	}
 }
+
+func TestFold(t *testing.T) {
+	tests := []struct{ name, in, want string }{
+		{"ascii", "Das Erste", "das erste"},
+		{"greek accents and table", "Θεσσαλονίκη ΕΡΤ1", "thessaloniki ert1"},
+		{"latin accents", "Télé Ümlaut", "tele umlaut"},
+		{"nfkd", "ﬁlm ＴＶ２", "film tv2"},
+		{"punctuation and other scripts kept", "A+B 日本", "a+b 日本"},
+		{"empty", "", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := Fold(tt.in); got != tt.want {
+				t.Errorf("Fold(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}

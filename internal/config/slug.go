@@ -20,9 +20,11 @@ var greek = map[rune]string{
 	'φ': "f", 'χ': "ch", 'ψ': "ps", 'ω': "o",
 }
 
-// Slug returns the default channel id for a channel name (spec 5.2). The
-// result is empty if the name has no usable characters.
-func Slug(name string) string {
+// Fold applies steps 1 and 2 of the id slug (spec 5.2) to a name: accents
+// removed, Greek letters mapped to Latin, Unicode NFKD, combining marks
+// removed, lowercase. All other characters are kept. EPG matching
+// (spec 7.2) builds on it.
+func Fold(name string) string {
 	// Step 1: remove accents, then map Greek letters.
 	var b strings.Builder
 	for _, r := range stripMarks(norm.NFD.String(name)) {
@@ -35,10 +37,17 @@ func Slug(name string) string {
 	}
 
 	// Step 2: NFKD, combining marks removed, lowercase.
-	s := strings.ToLower(stripMarks(norm.NFKD.String(b.String())))
+	return strings.ToLower(stripMarks(norm.NFKD.String(b.String())))
+}
+
+// Slug returns the default channel id for a channel name (spec 5.2). The
+// result is empty if the name has no usable characters.
+func Slug(name string) string {
+	// Steps 1 and 2.
+	s := Fold(name)
 
 	// Step 3: runs outside [a-z0-9] become "-", trim, truncate, trim.
-	b.Reset()
+	var b strings.Builder
 	dash := false
 	for _, r := range s {
 		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
