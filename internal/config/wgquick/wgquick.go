@@ -11,6 +11,7 @@ import (
 	"io"
 	"net"
 	"net/netip"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode"
@@ -132,6 +133,20 @@ func (t *Tunnel) Allows(addr netip.Addr) bool {
 		}
 	}
 	return false
+}
+
+// Equal reports whether t and u are the same tunnel: same name and same
+// parsed values. Comments, formatting and key case of the files do not
+// count. A nil u is never equal.
+func (t *Tunnel) Equal(u *Tunnel) bool {
+	if t == nil || u == nil {
+		return t == u
+	}
+	return t.Name == u.Name && t.PrivateKey == u.PrivateKey && t.MTU == u.MTU &&
+		slices.Equal(t.Addresses, u.Addresses) && slices.Equal(t.DNS, u.DNS) &&
+		t.Peer.PublicKey == u.Peer.PublicKey && t.Peer.PresharedKey == u.Peer.PresharedKey &&
+		t.Peer.Endpoint == u.Peer.Endpoint && slices.Equal(t.Peer.AllowedIPs, u.Peer.AllowedIPs) &&
+		t.Peer.PersistentKeepalive == u.Peer.PersistentKeepalive
 }
 
 // section is the part of the file a line belongs to.

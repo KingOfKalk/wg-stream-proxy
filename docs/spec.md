@@ -250,9 +250,11 @@ url = "https://daserste-live.ard-mcdn.de/daserste/live/hls/de/master.m3u8"
 
 ### 5.6 Reload
 
-- `SIGHUP` reloads all files; the new config is validated completely, an invalid one is rejected and the old one keeps serving.
-- Unchanged tunnels keep running; changed or removed tunnels are drained (2.1) and recreated lazily.
-- Restart required for: `listen`, signing key, tunnels dir location.
+- `SIGHUP` reloads all files; the new config is validated completely (tunnel files included), an invalid one is rejected with all errors logged and the old one keeps serving. Reloads run one at a time.
+- Requests in flight finish with the config they started with; new requests use the new one.
+- Unchanged tunnels (same parsed content; comments and formatting do not count) keep running with their pooled connections; changed or removed tunnels are drained (2.1) and recreated lazily.
+- A reload that changes or removes a tunnel which is still starting cancels the start; requests waiting for it get `502`; the new tunnel starts lazily on the next request.
+- Restart required for: `listen`, `log_format`, signing key, tunnels dir location. A reload that changes one of them logs a warning and keeps the old value.
 
 ## 6. Channel list
 

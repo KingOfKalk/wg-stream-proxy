@@ -97,6 +97,10 @@ func TestLoadErrors(t *testing.T) {
 			if !strings.Contains(err.Error(), tt.want) {
 				t.Errorf("err = %v, want it to contain %q", err, tt.want)
 			}
+			// Parse alone (a reload) finds the same errors.
+			if _, err := Parse(tt.files, nil); err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("Parse: err = %v, want it to contain %q", err, tt.want)
+			}
 		})
 	}
 }

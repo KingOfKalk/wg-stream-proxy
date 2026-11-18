@@ -28,7 +28,8 @@ const copyBufferSize = 32 << 10
 // handleChannel serves /c/{id} and /c/{id}.m3u8 (spec 3.1): the channel
 // URL with the configured upstream type.
 func (s *Server) handleChannel(w http.ResponseWriter, r *http.Request) {
-	ch, ok := s.channel(strings.TrimSuffix(r.PathValue("id"), ".m3u8"))
+	g := s.active()
+	ch, ok := g.channel(strings.TrimSuffix(r.PathValue("id"), ".m3u8"))
 	if !ok {
 		http.NotFound(w, r)
 		return
@@ -45,7 +46,7 @@ func (s *Server) handleChannel(w http.ResponseWriter, r *http.Request) {
 	// known only from the response, and the ICY wrapper leaves HTTP
 	// responses unchanged, so an auto channel that turns out to be HLS
 	// works too.
-	s.proxy(w, r, ch, fetch{upstream: ch.URL(), configured: typ, icy: typ != hls.HLS, other: metrics.KindRaw})
+	s.proxy(w, r, g, ch, fetch{upstream: ch.URL(), configured: typ, icy: typ != hls.HLS, other: metrics.KindRaw})
 }
 
 // handleResource serves /r/{channel}/{sig}/{b64url}/{name} (spec 4).
@@ -56,18 +57,19 @@ func (s *Server) handleResource(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	ch, ok := s.channel(id)
+	g := s.active()
+	ch, ok := g.channel(id)
 	if !ok {
 		http.NotFound(w, r)
 		return
 	}
 	// Resources (segments, keys, sub-playlists) are HTTP: normal pool.
-	s.proxy(w, r, ch, fetch{upstream: upstream, configured: hls.Auto, other: metrics.KindSegment})
+	s.proxy(w, r, g, ch, fetch{upstream: upstream, configured: hls.Auto, other: metrics.KindSegment})
 }
 
 // channel returns the enabled channel with the given id.
-func (s *Server) channel(id string) (config.Channel, bool) {
-	ch, ok := s.cfg.Channel(id)
+func (g *generation) channel(id string) (config.Channel, bool) {
+	ch, ok := g.cfg.Channel(id)
 	if !ok || !ch.Enabled() {
 		return config.Channel{}, false
 	}
@@ -103,12 +105,12 @@ func (f fetch) kind() metrics.Kind {
 	return f.other
 }
 
-// proxy fetches upstream through the channel's route and answers with a
-// rewritten playlist or the piped body (spec 3.1-3.4). The request
-// context is the upstream context: a client disconnect cancels the
-// upstream request.
-func (s *Server) proxy(w http.ResponseWriter, r *http.Request, ch config.Channel, f fetch) {
-	rt, ok := s.routes.Route(ch.Route())
+// proxy fetches upstream through the channel's route in generation g and
+// answers with a rewritten playlist or the piped body (spec 3.1-3.4). The
+// request context is the upstream context: a client disconnect cancels
+// the upstream request.
+func (s *Server) proxy(w http.ResponseWriter, r *http.Request, g *generation, ch config.Channel, f fetch) {
+	rt, ok := g.routes.Route(ch.Route())
 	if !ok {
 		// The config only has channels with existing routes; fail closed.
 		s.log.Error("no route for channel", "channel", ch.ID(), "route", ch.Route())
@@ -125,7 +127,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request, ch config.Channel
 			s.fail(w, r, ch, err, rq.FetchError)
 			return
 		}
-		retry := s.respond(w, r, ch, rq, resp, f, refetch)
+		retry := s.respond(w, r, g, ch, rq, resp, f, refetch)
 		_ = resp.Body.Close()
 		if !retry {
 			return
@@ -140,7 +142,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request, ch config.Channel
 // respond answers the client from an upstream response. It returns true
 // if the response is a partial playlist that must be fetched again
 // without Range; refetch tells that this already happened.
-func (s *Server) respond(w http.ResponseWriter, r *http.Request, ch config.Channel, rq *metrics.Request, resp *http.Response, f fetch, refetch bool) bool {
+func (s *Server) respond(w http.ResponseWriter, r *http.Request, g *generation, ch config.Channel, rq *metrics.Request, resp *http.Response, f fetch, refetch bool) bool {
 	final := resp.Request.URL
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		rq.Response(resp.StatusCode)
@@ -186,13 +188,13 @@ func (s *Server) respond(w http.ResponseWriter, r *http.Request, ch config.Chann
 		}
 		return true
 	}
-	s.rewrite(w, r, ch, rq, resp, body)
+	s.rewrite(w, r, g, ch, rq, resp, body)
 	return false
 }
 
 // rewrite answers with the rewritten playlist (spec 3.2, 3.4): every URI
 // becomes an absolute resource URL of the channel.
-func (s *Server) rewrite(w http.ResponseWriter, r *http.Request, ch config.Channel, rq *metrics.Request, resp *http.Response, body io.Reader) {
+func (s *Server) rewrite(w http.ResponseWriter, r *http.Request, g *generation, ch config.Channel, rq *metrics.Request, resp *http.Response, body io.Reader) {
 	h := w.Header()
 	route.CopyResponseHeader(h, resp, true)
 	// The rewritten body is a new, whole representation.
@@ -212,7 +214,7 @@ func (s *Server) rewrite(w http.ResponseWriter, r *http.Request, ch config.Chann
 		s.fail(w, r, ch, err, rq.Error)
 		return
 	}
-	base := baseURL(s.cfg.PublicBaseURL(), r)
+	base := baseURL(g.cfg.PublicBaseURL(), r)
 	out, err := hls.Rewrite(data, final, func(abs *url.URL) string {
 		return base + s.signer.Path(ch.ID(), abs.String())
 	})

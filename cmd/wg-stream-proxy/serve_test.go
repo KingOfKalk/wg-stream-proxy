@@ -7,12 +7,14 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 
 	"github.com/KingOfKalk/wg-stream-proxy/internal/config"
@@ -232,4 +234,124 @@ func get(t *testing.T, c *http.Client, u string) string {
 		t.Errorf("GET %s: %v", u, err)
 	}
 	return string(b)
+}
+
+func TestServeReloadsOnSIGHUP(t *testing.T) {
+	channel := func(name string) string {
+		return "[[channel]]\nname = \"" + name + "\"\nurl = \"https://tv.example.com/" + name + ".m3u8\"\n"
+	}
+	dir := writeDir(t, map[string]string{"channels.d/tv.toml": "tunnel = \"direct\"\n" + channel("News")})
+	keyFile := filepath.Join(t.TempDir(), "key")
+	if err := os.WriteFile(keyFile, []byte(strings.Repeat("a", 32)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	c, _, errOut := testCLI(map[string]string{
+		"WG_STREAM_PROXY_LISTEN":           "127.0.0.1:0",
+		"WG_STREAM_PROXY_SIGNING_KEY_FILE": keyFile,
+	})
+	c.ctx = ctx
+	c.hangup = make(chan os.Signal)
+	reloaded := make(chan error)
+	c.reloaded = func(err error) { reloaded <- err }
+	client := &http.Client{Transport: &http.Transport{}}
+	defer client.CloseIdleConnections()
+	var before, after string
+	var results []error
+	c.listening = func(addr net.Addr) {
+		go func() {
+			defer cancel()
+			list := "http://" + addr.String() + "/playlist.m3u8"
+			before = get(t, client, list)
+			// A valid change with a new signing key: applied, the key kept.
+			if err := os.WriteFile(filepath.Join(dir, "channels.d", "tv.toml"), []byte("tunnel = \"direct\"\n"+channel("News")+channel("Sport")), 0o600); err != nil {
+				t.Error(err)
+				return
+			}
+			if err := os.WriteFile(keyFile, []byte(strings.Repeat("b", 32)), 0o600); err != nil {
+				t.Error(err)
+				return
+			}
+			c.hangup <- syscall.SIGHUP
+			results = append(results, <-reloaded)
+			// An invalid change: rejected.
+			if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte("bogus = 1\n"), 0o600); err != nil {
+				t.Error(err)
+				return
+			}
+			c.hangup <- syscall.SIGHUP
+			results = append(results, <-reloaded)
+			after = get(t, client, list)
+		}()
+	}
+	if code := c.run([]string{"--config-dir", dir}); code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr:\n%s", code, errOut)
+	}
+	if strings.Contains(before, "/c/sport") || !strings.Contains(after, "/c/sport") {
+		t.Errorf("channel list before reload:\n%s\nafter:\n%s", before, after)
+	}
+	if len(results) != 2 || results[0] != nil || results[1] == nil {
+		t.Errorf("reload results = %v, want [nil, error]", results)
+	}
+	for _, want := range []string{"signing key changed, restart required", "msg=reloaded", "bogus", "reload rejected"} {
+		if !strings.Contains(errOut.String(), want) {
+			t.Errorf("logs lack %q:\n%s", want, errOut)
+		}
+	}
+	if strings.Contains(errOut.String(), strings.Repeat("b", 32)) {
+		t.Errorf("logs contain the signing key:\n%s", errOut)
+	}
+}
+
+func TestReloadLoaderKeepsRestartSettings(t *testing.T) {
+	dir := writeDir(t, map[string]string{"config.toml": ""})
+	oldTunnels := filepath.Join(dir, "tunnels")
+	key := []byte(strings.Repeat("k", 32))
+	tests := []struct {
+		name      string
+		env       map[string]string
+		generated bool
+		want      []string
+	}{
+		{"nothing changed", map[string]string{"WG_STREAM_PROXY_SIGNING_KEY": string(key)}, false, nil},
+		{"random key stays random", nil, true, nil},
+		{
+			"tunnels dir moved",
+			map[string]string{"WG_STREAM_PROXY_TUNNELS_DIR": t.TempDir(), "WG_STREAM_PROXY_SIGNING_KEY": string(key)},
+			false,
+			[]string{"tunnels dir changed, restart required"},
+		},
+		{"key set", map[string]string{"WG_STREAM_PROXY_SIGNING_KEY": string(key)}, true, []string{"signing key changed"}},
+		{"key changed", map[string]string{"WG_STREAM_PROXY_SIGNING_KEY": strings.Repeat("n", 32)}, false, []string{"signing key changed"}},
+		{"key removed", nil, false, []string{"signing key changed"}},
+		{"key invalid", map[string]string{"WG_STREAM_PROXY_SIGNING_KEY": "short"}, false, []string{"signing key: restart required"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c, _, _ := testCLI(tt.env)
+			var logs syncBuffer
+			log := newLogger(&logs, config.LogFormatText, slog.LevelInfo)
+			first := config.Options{Paths: config.Paths{ConfigDir: dir, TunnelsDir: oldTunnels}}
+			cfg, err := c.reloadLoader(config.Flags{ConfigDir: dir}, first, log, key, tt.generated)()
+			if err != nil {
+				t.Fatalf("load: %v", err)
+			}
+			if got := cfg.Paths().TunnelsDir; got != oldTunnels {
+				t.Errorf("tunnels dir = %s, want the old %s", got, oldTunnels)
+			}
+			out := logs.String()
+			if len(tt.want) == 0 && out != "" {
+				t.Errorf("unexpected logs:\n%s", out)
+			}
+			for _, want := range tt.want {
+				if !strings.Contains(out, want) {
+					t.Errorf("logs lack %q:\n%s", want, out)
+				}
+			}
+			if strings.Contains(out, string(key)) || strings.Contains(out, strings.Repeat("n", 32)) {
+				t.Errorf("logs contain a signing key:\n%s", out)
+			}
+		})
+	}
 }
