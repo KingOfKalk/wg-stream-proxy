@@ -402,8 +402,9 @@ Only `/c/` and `/r/` requests of enabled channels count; `channel` is the channe
 
 ## 9. Engineering rules
 
-- Layout: `cmd/wg-stream-proxy/`, `internal/{config,tunnel,route,hls,playlist,server,importer,epg,metrics}`, `examples/config/`, `testdata/`, `deploy/`, `docs/`.
+- Layout: `cmd/wg-stream-proxy/`, `internal/{config,tunnel,route,hls,playlist,server,importer,epg,metrics,clips}`, `examples/config/`, `testdata/`, `deploy/`, `docs/`.
 - Dependencies: stdlib `net/http`, `log/slog`, `wireguard-go`, gVisor netstack, a TOML parser, Prometheus client. No web framework.
+- `internal/clips` embeds the built-in clip segments (design: [clips.md](clips.md)): six 0.96 s MPEG-TS files in `internal/clips/segments/`, rendered by `internal/clips/generate.sh` (pinned image, Inter 4.1 by version and checksum) and committed. Change a text by editing the script, rerunning it and committing the result. Only rendered pixels ship, not the font (SIL OFL 1.1).
 - gVisor stays at the version in `wireguard-go`'s `go.mod` and is only updated together with it (excluded from automatic bumps).
 - `internal/tunnel/netstack` is a trimmed copy of `wireguard-go`'s `tun/netstack` (MIT, licence kept) with one change: a packet gVisor sends after `Close` is dropped instead of sent on a closed channel, which would crash the process (#47). The copy names the upstream commit it was taken from and is updated together with `wireguard-go`: on every `wireguard-go` update, compare upstream `tun/netstack` with the copy and port relevant changes.
 - Injected for tests: `Dialer` per route, private-range guard allowlist, clock.

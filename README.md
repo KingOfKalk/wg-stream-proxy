@@ -41,6 +41,10 @@ Route each IPTV and internet radio channel through its own userspace WireGuard t
 - [Testing](docs/testing.md)
 - [Contributing](CONTRIBUTING.md) and [AGENTS.md](AGENTS.md)
 
+## Third-party material
+
+- The built-in clip segments in [`internal/clips/segments`](internal/clips/segments) show text set in [Inter](https://rsms.me/inter/) 4.1 by Rasmus Andersson and The Inter Project Authors, under the [SIL Open Font License 1.1](https://openfontlicense.org/). Only the rendered pixels ship, not the font; the font is fetched by [`generate.sh`](internal/clips/generate.sh) when the clips are rebuilt.
+
 ## License
 
 [AGPL-3.0-or-later](LICENSE)
