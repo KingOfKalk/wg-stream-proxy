@@ -62,15 +62,31 @@ func (c *Copy) Has(id string) bool {
 	return e != nil && e.channel != nil
 }
 
-// countReader counts the bytes read through it.
+// MaxToken bounds one token of a source (a tag with its attributes, a
+// text, comment, CDATA section or declaration): the parser holds a whole
+// token in memory, so without it a gzip of a few hundred KiB could make
+// it hold the whole 200 MiB at once. Real tokens are a few KiB.
+const MaxToken = 1 << 20
+
+// errTokenTooLarge: a token is larger than MaxToken.
+var errTokenTooLarge = fmt.Errorf("%w: a tag, text, comment or declaration larger than 1 MiB", ErrInvalid)
+
+// countReader counts the bytes read through it, and fails once more than
+// MaxToken bytes were read since the last token (since is reset after
+// each one; the decoder reads ahead at most its buffer of 4 KiB).
 type countReader struct {
-	r io.Reader
-	n int64
+	r     io.Reader
+	n     int64
+	since int64
 }
 
 func (c *countReader) Read(p []byte) (int, error) {
+	if c.since > MaxToken {
+		return 0, errTokenTooLarge
+	}
 	n, err := c.r.Read(p)
 	c.n += int64(n)
+	c.since += int64(n)
 	return n, err
 }
 
@@ -90,7 +106,8 @@ func (c *countReader) Read(p []byte) (int, error) {
 // The whole document must be well-formed XML 1.0 (strict, entities only
 // the predefined ones; a declared encoding other than UTF-8 is
 // converted) with the single root element tv and a nesting depth of at
-// most 32; otherwise Filter fails with ErrInvalid, and with ErrTooLarge
+// most 32, and no token (tag, text, comment, declaration) larger than
+// MaxToken; otherwise Filter fails with ErrInvalid, and with ErrTooLarge
 // when the input or the result is larger than MaxSize.
 func Filter(r io.Reader, ids map[string]bool, now time.Time) (*Copy, error) {
 	return filterLimit(r, ids, now, MaxSize)
@@ -101,6 +118,7 @@ func filterLimit(r io.Reader, ids map[string]bool, now time.Time, limit int64) (
 	cr := &countReader{r: r}
 	f := &filter{
 		d:     xml.NewDecoder(cr),
+		cr:    cr,
 		ids:   ids,
 		now:   now,
 		limit: limit,
@@ -118,6 +136,7 @@ func filterLimit(r io.Reader, ids map[string]bool, now time.Time, limit int64) (
 // filter is the state of one Filter run.
 type filter struct {
 	d     *xml.Decoder
+	cr    *countReader
 	ids   map[string]bool
 	now   time.Time
 	limit int64 // of the kept bytes
@@ -137,6 +156,7 @@ func (f *filter) run() error {
 	rootDone := false
 	for first := true; ; first = false {
 		t, err := f.d.RawToken()
+		f.cr.since = 0
 		if errors.Is(err, io.EOF) {
 			break
 		}

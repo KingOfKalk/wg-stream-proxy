@@ -263,3 +263,31 @@ func TestParseTime(t *testing.T) {
 		}
 	}
 }
+
+// TestFilterTokenLimit: no token, kept or not, may be larger than
+// MaxToken, so the parser never holds more than about that much at once.
+func TestFilterTokenLimit(t *testing.T) {
+	big := strings.Repeat("a", MaxToken+10000) // the decoder reads ahead up to 4 KiB
+	lt := strings.Repeat("<>", MaxToken/2+5000)
+	for name, doc := range map[string]string{
+		"text":      "<tv><x>" + big + "</x></tv>",
+		"kept text": `<tv><channel id="a"><display-name>` + big + "</display-name></channel></tv>",
+		"attribute": `<tv><x a="` + big + `"/></tv>`,
+		"comment":   "<tv><!--" + lt + "--></tv>",
+		"cdata":     "<tv><x><![CDATA[" + lt + "]]></x></tv>",
+		"doctype":   "<!DOCTYPE tv [" + strings.Repeat("<!-- x -->", MaxToken/10+1000) + "]><tv/>",
+	} {
+		if _, err := Filter(strings.NewReader(doc), map[string]bool{"a": true}, filterNow); !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "larger than 1 MiB") {
+			t.Errorf("%s: error %v", name, err)
+		}
+	}
+	// Many tokens of together more than MaxToken are fine.
+	ok := `<tv><channel id="a"><display-name>` + strings.Repeat("<x>"+strings.Repeat("a", 1000)+"</x>", MaxToken/1000+10) + "</display-name></channel></tv>"
+	if _, err := Filter(strings.NewReader(ok), map[string]bool{"a": true}, filterNow); err != nil {
+		t.Errorf("many tokens: %v", err)
+	}
+	near := `<tv><channel id="a"><display-name>` + strings.Repeat("a", MaxToken-8192) + "</display-name></channel></tv>"
+	if _, err := Filter(strings.NewReader(near), map[string]bool{"a": true}, filterNow); err != nil {
+		t.Errorf("token below the limit: %v", err)
+	}
+}
