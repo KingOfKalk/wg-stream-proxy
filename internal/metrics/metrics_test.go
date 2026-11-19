@@ -240,3 +240,23 @@ func TestTimingHistogramsEmpty(t *testing.T) {
 		t.Error(err)
 	}
 }
+
+// TestErrorClips: wsp_error_clips_total counts per clip; declared clips
+// start at 0.
+func TestErrorClips(t *testing.T) {
+	m := New(Options{})
+	m.DeclareErrorClips("channel-blocked", "tunnel-unreachable")
+	m.ErrorClip("tunnel-unreachable")
+	m.ErrorClip("tunnel-unreachable")
+	m.ErrorClip("channel-not-available")
+	want := `
+# HELP wsp_error_clips_total Error clips served instead of an HTTP error, per clip.
+# TYPE wsp_error_clips_total counter
+wsp_error_clips_total{clip="channel-blocked"} 0
+wsp_error_clips_total{clip="channel-not-available"} 1
+wsp_error_clips_total{clip="tunnel-unreachable"} 2
+`
+	if err := testutil.GatherAndCompare(m.Gatherer(), strings.NewReader(want), "wsp_error_clips_total"); err != nil {
+		t.Error(err)
+	}
+}

@@ -1169,8 +1169,8 @@
     {
       "id": 19,
       "type": "timeseries",
-      "title": "Errors by reason",
-      "description": "Upstream failures per second by reason: connect, timeout, guard, tls, redirects, size, unsupported, other (wsp_upstream_errors_total).",
+      "title": "Errors by reason and error clips",
+      "description": "Upstream failures per second by reason: connect, timeout, guard, tls, redirects, size, unsupported, other (wsp_upstream_errors_total); and error clips shown to viewers instead of an HTTP error, by clip (wsp_error_clips_total, all channels).",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -1190,6 +1190,17 @@
           "expr": "sum by (reason) (rate(wsp_upstream_errors_total{instance=~\"$instance\", channel=~\"$channel\"}[$__rate_interval]))",
           "legendFormat": "{{reason}}",
           "refId": "A",
+          "range": true,
+          "instant": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum by (clip) (rate(wsp_error_clips_total{instance=~\"$instance\"}[$__rate_interval]))",
+          "legendFormat": "clip {{clip}}",
+          "refId": "B",
           "range": true,
           "instant": false
         }

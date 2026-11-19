@@ -35,6 +35,7 @@ func registryTypes(t *testing.T) map[string]string {
 	r := m.Begin("ch", KindPlaylist)
 	r.Response(200)
 	r.FetchError("connect")
+	m.ErrorClip("channel-not-available")
 	mfs, err := m.Gatherer().Gather()
 	if err != nil {
 		t.Fatalf("gather: %v", err)

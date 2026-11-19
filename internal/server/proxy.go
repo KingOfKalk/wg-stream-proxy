@@ -48,7 +48,10 @@ func (s *Server) handleChannel(w http.ResponseWriter, r *http.Request) {
 	// known only from the response, and the ICY wrapper leaves HTTP
 	// responses unchanged, so an auto channel that turns out to be HLS
 	// works too.
-	s.proxy(w, r, g, ch, fetch{upstream: ch.URL(), configured: typ, icy: typ != hls.HLS, other: metrics.KindRaw})
+	s.proxy(w, r, g, ch, fetch{
+		upstream: ch.URL(), configured: typ, icy: typ != hls.HLS, other: metrics.KindRaw,
+		errorClips: errorClips(r, g.cfg, ch),
+	})
 }
 
 // handleResource serves /r/{channel}/{sig}/{b64url}/{name} (spec 4).
@@ -89,6 +92,9 @@ type fetch struct {
 	// other is the metrics kind of a response that is not a playlist:
 	// raw for /c/, segment for /r/.
 	other metrics.Kind
+	// errorClips: a failure is answered with an error clip instead of an
+	// HTTP error (spec 3.4).
+	errorClips bool
 }
 
 // kind returns the metrics kind of the request until the response type
@@ -133,7 +139,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request, g *generation, ch
 	for refetch := false; ; refetch = true {
 		resp, err := rt.Fetch(ctx, route.Request{URL: f.upstream, Header: ch.Header(), Client: client, ICY: f.icy, Trace: &rec.trace})
 		if err != nil {
-			s.fail(w, r, ch, err, rq.FetchError)
+			s.fail(w, r, g, ch, f, err, rq.FetchError)
 			return
 		}
 		retry := s.respond(w, r, g, ch, rq, resp, f, refetch)
@@ -156,10 +162,14 @@ func (s *Server) respond(w http.ResponseWriter, r *http.Request, g *generation, 
 	recordOf(w).upstream(resp.StatusCode)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		rq.Response(resp.StatusCode)
-		if code := route.ClientStatus(resp.StatusCode); code != resp.StatusCode {
-			s.log.Warn("upstream error status", "channel", ch.ID(), "route", ch.Route(),
-				"url", route.LogURL(final.String()), "upstream_status", resp.StatusCode, "status", code)
-			http.Error(w, http.StatusText(code), code)
+		code := route.ClientStatus(resp.StatusCode)
+		if clip := f.clip(nil); code != resp.StatusCode || clip != "" {
+			// A 4xx is relayed; with an error clip it is logged like a 5xx.
+			s.log.Warn("upstream error status", withClip([]any{
+				"channel", ch.ID(), "route", ch.Route(),
+				"url", route.LogURL(final.String()), "upstream_status", resp.StatusCode, "status", code,
+			}, clip)...)
+			s.answerFailure(w, r, g, code, clip)
 			return false
 		}
 		// 4xx: relayed like any other non-playlist response.
@@ -178,13 +188,13 @@ func (s *Server) respond(w http.ResponseWriter, r *http.Request, g *generation, 
 		prefix, err := body.Peek(hls.SniffLen)
 		if err != nil && !errors.Is(err, io.EOF) {
 			rq.Response(resp.StatusCode)
-			s.fail(w, r, ch, err, rq.Error)
+			s.fail(w, r, g, ch, f, err, rq.Error)
 			return false
 		}
 		typ = hls.Detect(ctype, prefix, f.configured)
 		if typ != hls.HLS {
 			if format := hls.Unsupported(ctype, prefix, f.configured); format != "" {
-				s.refuse(w, ch, rq, resp, format)
+				s.refuse(w, r, g, ch, f, rq, resp, format)
 				return false
 			}
 		}
@@ -199,35 +209,41 @@ func (s *Server) respond(w http.ResponseWriter, r *http.Request, g *generation, 
 	rq.Response(resp.StatusCode)
 	if resp.StatusCode == http.StatusPartialContent {
 		if refetch {
-			s.log.Warn("upstream answered a playlist with 206 without Range", "channel", ch.ID(),
-				"url", route.LogURL(final.String()))
+			clip := f.clip(nil)
+			s.log.Warn("upstream answered a playlist with 206 without Range", withClip([]any{
+				"channel", ch.ID(),
+				"url", route.LogURL(final.String()),
+			}, clip)...)
 			rq.Error(string(route.ReasonOther))
 			recordOf(w).failed(route.ReasonOther)
-			http.Error(w, http.StatusText(http.StatusBadGateway), http.StatusBadGateway)
+			s.answerFailure(w, r, g, http.StatusBadGateway, clip)
 			return false
 		}
 		return true
 	}
-	s.rewrite(w, r, g, ch, rq, resp, body)
+	s.rewrite(w, r, g, ch, f, rq, resp, body)
 	return false
 }
 
 // refuse answers a playlist in a format the proxy does not rewrite with
 // 502 (spec 3.3): piped, it would hand the player upstream URLs to fetch
 // past the channel's tunnel. Nothing of the body reaches the client.
-func (s *Server) refuse(w http.ResponseWriter, ch config.Channel, rq *metrics.Request, resp *http.Response, format string) {
+func (s *Server) refuse(w http.ResponseWriter, r *http.Request, g *generation, ch config.Channel, f fetch, rq *metrics.Request, resp *http.Response, format string) {
 	rq.SetKind(metrics.KindPlaylist)
 	rq.Response(resp.StatusCode)
-	s.log.Warn("unsupported playlist format refused", "channel", ch.ID(), "route", ch.Route(),
-		"url", route.LogURL(resp.Request.URL.String()), "format", format)
+	clip := f.clip(nil)
+	s.log.Warn("unsupported playlist format refused", withClip([]any{
+		"channel", ch.ID(), "route", ch.Route(),
+		"url", route.LogURL(resp.Request.URL.String()), "format", format,
+	}, clip)...)
 	rq.Error(string(route.ReasonUnsupported))
 	recordOf(w).failed(route.ReasonUnsupported)
-	http.Error(w, http.StatusText(http.StatusBadGateway), http.StatusBadGateway)
+	s.answerFailure(w, r, g, http.StatusBadGateway, clip)
 }
 
 // rewrite answers with the rewritten playlist (spec 3.2, 3.4): every URI
 // becomes an absolute resource URL of the channel.
-func (s *Server) rewrite(w http.ResponseWriter, r *http.Request, g *generation, ch config.Channel, rq *metrics.Request, resp *http.Response, body io.Reader) {
+func (s *Server) rewrite(w http.ResponseWriter, r *http.Request, g *generation, ch config.Channel, f fetch, rq *metrics.Request, resp *http.Response, body io.Reader) {
 	h := w.Header()
 	route.CopyResponseHeader(h, resp, true)
 	// The rewritten body is a new, whole representation.
@@ -244,7 +260,7 @@ func (s *Server) rewrite(w http.ResponseWriter, r *http.Request, g *generation, 
 	data, err := route.ReadPlaylist(body, g.cfg.Upstream().MaxPlaylistSize)
 	if err != nil {
 		clearHeader(h)
-		s.fail(w, r, ch, err, rq.Error)
+		s.fail(w, r, g, ch, f, err, rq.Error)
 		return
 	}
 	base := baseURL(g.cfg.PublicBaseURL(), r)
@@ -254,11 +270,11 @@ func (s *Server) rewrite(w http.ResponseWriter, r *http.Request, g *generation, 
 	})
 	if err != nil {
 		// hls errors never contain URIs from the playlist.
-		clearHeader(h)
-		s.log.Warn("playlist rejected", "channel", ch.ID(), "url", route.LogURL(final.String()), "error", err)
+		clip := f.clip(nil)
+		s.log.Warn("playlist rejected", withClip([]any{"channel", ch.ID(), "url", route.LogURL(final.String()), "error", err}, clip)...)
 		rq.Error(string(route.ReasonOther))
 		recordOf(w).failed(route.ReasonOther)
-		http.Error(w, http.StatusText(http.StatusBadGateway), http.StatusBadGateway)
+		s.answerFailure(w, r, g, http.StatusBadGateway, clip)
 		return
 	}
 	h.Set("Content-Length", strconv.Itoa(len(out)))
@@ -298,11 +314,12 @@ func (s *Server) stream(w http.ResponseWriter, r *http.Request, ch config.Channe
 	s.log.Debug("stream done", "channel", ch.ID(), "url", route.LogURL(resp.Request.URL.String()), "bytes", n)
 }
 
-// fail answers an upstream error: 504 for timeouts, else 502 (spec 3.4).
-// Errors from route never contain query strings (spec 8). count records
-// the error reason in the metrics; an error after the client went away
-// is not an upstream error and counts nothing.
-func (s *Server) fail(w http.ResponseWriter, r *http.Request, ch config.Channel, err error, count func(reason string)) {
+// fail answers an upstream error: 504 for timeouts, else 502, or an error
+// clip if f allows it (spec 3.4). Errors from route never contain query
+// strings (spec 8). count records the error reason in the metrics; an
+// error after the client went away is not an upstream error and counts
+// nothing.
+func (s *Server) fail(w http.ResponseWriter, r *http.Request, g *generation, ch config.Channel, f fetch, err error, count func(reason string)) {
 	if r.Context().Err() != nil {
 		s.log.Debug("client gone", "channel", ch.ID())
 		return
@@ -311,9 +328,12 @@ func (s *Server) fail(w http.ResponseWriter, r *http.Request, ch config.Channel,
 	count(string(reason))
 	recordOf(w).failed(reason)
 	code := route.ErrorStatus(err)
-	s.log.Warn("upstream request failed", "channel", ch.ID(), "route", ch.Route(),
-		"reason", reason, "status", code, "error", err)
-	http.Error(w, http.StatusText(code), code)
+	clip := f.clip(err)
+	s.log.Warn("upstream request failed", withClip([]any{
+		"channel", ch.ID(), "route", ch.Route(),
+		"reason", reason, "status", code, "error", err,
+	}, clip)...)
+	s.answerFailure(w, r, g, code, clip)
 }
 
 // clearHeader removes all headers set so far.

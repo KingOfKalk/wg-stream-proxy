@@ -27,6 +27,11 @@
     ]
   },
   "EPGURL": "",
+  "Clips": {
+    "Error": false,
+    "Inflight": true,
+    "Grace": "3s"
+  },
   "Tunnels": [
     {
       "Name": "de-1",

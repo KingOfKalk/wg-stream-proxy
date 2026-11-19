@@ -47,6 +47,9 @@ type playerCase struct {
 	// reloaded is a live media playlist the player must fetch more than
 	// once.
 	reloaded string
+	// errorClip: the upstream fails, so the player gets the error clip
+	// (spec 3.4): 5 segments of 0.96 s at 25 fps, then the end.
+	errorClip bool
 }
 
 var playerCases = []playerCase{
@@ -91,6 +94,10 @@ var playerCases = []playerCase{
 		fetched: []string{"/icecast/radio/tone.mp3"},
 	},
 	{
+		name: "error clip", id: "error-clip", upstream: "/vod/missing/master.m3u8", hls: true, seconds: 10, video: true,
+		fetched: []string{"/vod/missing/master.m3u8"}, errorClip: true,
+	},
+	{
 		name: "icy radio", id: "icy", upstream: "/shoutcast/radio/tone.mp3", seconds: 5,
 		fetched: []string{"/shoutcast/radio/tone.mp3"},
 	},
@@ -127,11 +134,20 @@ func TestPlayer(t *testing.T) {
 			}
 			// ffmpeg stops at -t; allow one second less for the end of
 			// the last packet.
-			if want := time.Duration(tc.seconds-1) * time.Second; p.outTime < want {
-				t.Errorf("decoded %v, want at least %v", p.outTime, want)
+			wantTime, wantFrames := time.Duration(tc.seconds-1)*time.Second, (tc.seconds-1)*25
+			if tc.errorClip {
+				// The clip ends first: 4.8 s, 120 frames; allow the
+				// last frame.
+				wantTime, wantFrames = 4600*time.Millisecond, 119
 			}
-			if tc.video && p.frames < (tc.seconds-1)*25 {
-				t.Errorf("decoded %d video frames, want at least %d (25 fps)", p.frames, (tc.seconds-1)*25)
+			if p.outTime < wantTime {
+				t.Errorf("decoded %v, want at least %v", p.outTime, wantTime)
+			}
+			if tc.video && p.frames < wantFrames {
+				t.Errorf("decoded %d video frames, want at least %d (25 fps)", p.frames, wantFrames)
+			}
+			if tc.errorClip && p.outTime > 5*time.Second {
+				t.Errorf("decoded %v of a 4.8 s error clip", p.outTime)
 			}
 			reqs := fx.Requests()
 			for _, prefix := range tc.fetched {

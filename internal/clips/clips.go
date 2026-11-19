@@ -73,3 +73,8 @@ func Segment(name string) ([]byte, bool) {
 	}
 	return b, true
 }
+
+// Errors returns the names of the error clips (docs/clips.md 3.2).
+func Errors() []string {
+	return []string{TunnelUnreachable, ChannelNotAvailable, ChannelBlocked}
+}

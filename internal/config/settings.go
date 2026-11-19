@@ -25,6 +25,7 @@ const (
 	defaultReadTimeout    = 30 * time.Second
 	defaultIdleTimeout    = 60 * time.Minute
 	defaultWatchInterval  = 2 * time.Second
+	defaultClipsGrace     = time.Second
 	defaultPlaylistSize   = 8 << 20
 )
 
@@ -117,6 +118,16 @@ func (c *Config) applySettings(raw rawConfig, src string, ov Overrides, routes m
 	c.upstream.HeaderTimeout = duration("upstream.header_timeout", up.HeaderTimeout, defaultHeaderTimeout)
 	c.upstream.ReadTimeout = duration("upstream.read_timeout", up.ReadTimeout, defaultReadTimeout)
 	c.idleTimeout = duration("tunnels.idle_timeout", raw.Tunnels.IdleTimeout, defaultIdleTimeout)
+
+	// [clips] (spec 5.3): inflight and grace are read and validated for
+	// the in-flight clips, which do not exist yet.
+	c.clips = Clips{Error: true, Grace: duration("clips.grace", raw.Clips.Grace, defaultClipsGrace)}
+	if v := raw.Clips.Error; v != nil {
+		c.clips.Error = *v
+	}
+	if v := raw.Clips.Inflight; v != nil {
+		c.clips.Inflight = *v
+	}
 
 	c.watchInterval = defaultWatchInterval
 	if v := raw.Reload.WatchInterval; v != nil {

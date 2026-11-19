@@ -33,17 +33,19 @@ Test every rule of SPEC 3.1-3.5, 4, 5 and 6, table-driven, with golden files in 
 - Signing: tampered signature, URL or channel, wrong key, short key rejected.
 - Guard: each blocked range incl. IPv4-mapped IPv6, per-route allowlist.
 - Importer: the user's real M3U (anonymised) as golden fixture: header conversions, pipe syntax, `extra` mapping, `[defaults.*]` extraction, commented-out entries.
+- Clips: the timestamp and continuity counter rewrite of the embedded segments (copies 0 to 63 concatenated parse as one continuous stream: PTS, DTS and PCR without gap or wrap, counters continuous per PID), only header fields change; malformed packets are errors.
 - EPG: XMLTV fixture with made-up channels (Greek display names), plain and gzip; `epg match` ranking table; `epg ids`, `epg match` and `import --match-epg` against an `httptest` EPG server (guard allowlist for loopback only in tests).
 
 ## L2 Fuzz
 
-Targets: HLS rewriter, M3U importer, XMLTV channel parser, wg-quick parser, `/r/` URL decoding, ICY status line wrapper, playlist format sniffer (spec 3.3).
+Targets: HLS rewriter, M3U importer, XMLTV channel parser, wg-quick parser, `/r/` URL decoding, ICY status line wrapper, playlist format sniffer (spec 3.3), clip segment rewrite (`FuzzShift`).
 
 Invariants:
 - No panic.
 - Rewriter output parses again.
 - Every URI line and every `URI="http..."` attribute in the output points to `/r/`; no other line changes.
 - ICY wrapper: a leading `ICY ` becomes `HTTP/1.0 `, every other input passes byte for byte, for any split into reads.
+- Clip segment rewrite: the input is untouched and keeps its length; shifting the output back by the inverse amounts gives the input byte for byte.
 
 ## L3 Integration
 
@@ -61,6 +63,7 @@ Proxy in-process with a test config dir, fixture upstreams as `httptest.Server`s
 - Tunnel lifecycle: concurrent first requests share one start, idle close, no handshake gives `502`, recovery, drain on shutdown.
 - Sharing: 5 channels on one tunnel use one WireGuard device; repeated segments to one host reuse pooled connections.
 - Reload: valid change applied, invalid change rejected while the old config keeps serving, removed tunnel drained, changed tunnel recreated, unchanged tunnel keeps running, reload during a tunnel start.
+- Error clips (spec 3.4): `GET /c/` of an HLS channel answers every failure class with its clip playlist (upstream `5xx` and `4xx`, timeout, refused connection, guard, rejected, refused and oversized playlists, a second `206`; through a tunnel: no handshake within `connect_timeout`, a name outside `AllowedIPs`); `HEAD`, `/r/`, raw channels and `error = false` keep the HTTP errors; `/clip/` serves the rewritten segments, `404` for anything else, and never asks an upstream; logs and metrics as in spec 7.3 and 8.
 - Security: unsigned or tampered `/r/` and disabled channel give `404`, logo path traversal rejected.
 - Capacity: 3 simulated viewers on different channels; 30s on push, 5 minutes nightly; no stalls, no goroutine or memory growth.
 - Observability (v0.2):
@@ -73,6 +76,7 @@ Proxy in-process with a test config dir, fixture upstreams as `httptest.Server`s
 - Media fixtures generated once with ffmpeg into `testdata/media/` (a few seconds each): TS, fMP4, AES-128, demuxed audio; served by a fixture server simulating a live window.
 - IPTV Simple Client plays HLS via Kodi's built-in ffmpeg by default, so ffmpeg stands in for Kodi: `ffmpeg -i http://127.0.0.1:PORT/c/{id}.m3u8 -t 10 -f null -` must exit 0 and decode frames, for every fixture, through a tunnel.
 - Raw: `ffmpeg -i http://127.0.0.1:PORT/c/{radio-id} -t 5 -f null -` against an Icecast-like and an `ICY` fixture.
+- Error clip: an HLS channel whose upstream playlist is missing plays the error clip through the proxy: ffmpeg decodes 4.8 s (120 frames) without errors and exits 0.
 - VLC is covered manually in L6 (`cvlc` exits 0 even when playback fails).
 - Code: `internal/server/playertest` (fixture server and `TestPlayer`); fixtures and their generator: `testdata/media/generate.sh`. The player tests run only with `WSP_PLAYER_TESTS=1` and ffmpeg in `PATH`, so `go test ./...` passes without ffmpeg; CI runs them in the `Player` job ([CONTRIBUTING.md](../CONTRIBUTING.md#checks)).
 

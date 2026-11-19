@@ -29,8 +29,14 @@ type dump struct {
 	MaxPlaylistSize int64
 	AllowPrivate    map[string][]netip.Prefix
 	EPGURL          string
+	Clips           dumpClips
 	Tunnels         []Tunnel
 	Channels        []dumpChannel
+}
+
+type dumpClips struct {
+	Error, Inflight bool
+	Grace           string
 }
 
 type dumpChannel struct {
@@ -69,6 +75,7 @@ func dumpConfig(c *Config) dump {
 		MaxPlaylistSize: u.MaxPlaylistSize,
 		AllowPrivate:    c.AllowPrivate(),
 		EPGURL:          c.EPGURL(),
+		Clips:           dumpClips{Error: c.Clips().Error, Inflight: c.Clips().Inflight, Grace: c.Clips().Grace.String()},
 		Tunnels:         c.Tunnels(),
 	}
 	for _, ch := range c.Channels() {
@@ -186,6 +193,10 @@ func TestLoadErrors(t *testing.T) {
 		{"debug listen on the listen port", map[string]string{"config.toml": "listen = \"192.0.2.1:8080\"\n[debug]\nlisten = \"127.0.0.1:8080\"\n"}, []string{"debug.listen: must not use the port of listen (8080)"}},
 		{"debug listen equal to listen", map[string]string{"config.toml": "listen = \"127.0.0.1:8080\"\n[debug]\nlisten = \"127.0.0.1:8080\"\n"}, []string{"debug.listen: must not use the port of listen (8080)"}},
 		{"unknown debug key", map[string]string{"config.toml": "[debug]\npprof = true\n"}, []string{"unknown key \"debug.pprof\""}},
+		{"clips grace", map[string]string{"config.toml": "[clips]\ngrace = \"soon\"\n"}, []string{"config.toml: clips.grace: invalid duration \"soon\""}},
+		{"clips grace zero", map[string]string{"config.toml": "[clips]\ngrace = \"0s\"\n"}, []string{"clips.grace: must be positive"}},
+		{"clips error type", map[string]string{"config.toml": "[clips]\nerror = \"yes\"\n"}, []string{"config.toml:2:9: key \"clips.error\""}},
+		{"unknown clips key", map[string]string{"config.toml": "[clips]\nradio = true\n"}, []string{"unknown key \"clips.radio\""}},
 		{"allow_private unknown route", map[string]string{"config.toml": "[upstream.allow_private]\nxx = [\"10.0.0.0/8\"]\n"}, []string{"upstream.allow_private.xx: unknown route \"xx\""}},
 		{"allow_private no prefix", map[string]string{"config.toml": "[upstream.allow_private]\ndirect = [\"10.0.0.1\"]\n"}, []string{"upstream.allow_private.direct: invalid prefix \"10.0.0.1\""}},
 		{"allow_private host bits", map[string]string{"config.toml": "[upstream.allow_private]\ndirect = [\"10.0.0.1/24\"]\n"}, []string{"upstream.allow_private.direct: \"10.0.0.1/24\" has host bits set, use \"10.0.0.0/24\""}},

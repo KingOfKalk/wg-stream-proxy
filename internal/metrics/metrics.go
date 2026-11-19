@@ -80,6 +80,7 @@ type Metrics struct {
 	errors      *prometheus.CounterVec
 	tunnelStart *prometheus.HistogramVec
 	phases      *prometheus.HistogramVec
+	errorClips  *prometheus.CounterVec
 }
 
 // New returns Metrics with a new registry.
@@ -108,9 +109,13 @@ func New(opts Options) *Metrics {
 			Help:    "Time of the phases of upstream requests by route: DNS lookup, connect, TLS handshake, first response byte.",
 			Buckets: TimingBuckets,
 		}, []string{"route", "phase"}),
+		errorClips: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "wsp_error_clips_total",
+			Help: "Error clips served instead of an HTTP error, per clip.",
+		}, []string{"clip"}),
 	}
 	m.reg.MustRegister(
-		m.active, m.requests, m.errors, m.tunnelStart, m.phases,
+		m.active, m.requests, m.errors, m.tunnelStart, m.phases, m.errorClips,
 		tunnelCollector{tunnels: opts.Tunnels},
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
@@ -137,6 +142,20 @@ func (m *Metrics) ObserveTunnelStart(tunnel string, d time.Duration) {
 // channel or URL).
 func (m *Metrics) ObserveUpstreamPhase(route string, phase Phase, d time.Duration) {
 	m.phases.WithLabelValues(route, string(phase)).Observe(d.Seconds())
+}
+
+// DeclareErrorClips creates the series of wsp_error_clips_total for the
+// clips at 0, so a rate sees their first increase.
+func (m *Metrics) DeclareErrorClips(clips ...string) {
+	for _, c := range clips {
+		m.errorClips.WithLabelValues(c)
+	}
+}
+
+// ErrorClip counts an error clip served instead of an HTTP error; clip is
+// the name of a built-in clip, never a channel or URL.
+func (m *Metrics) ErrorClip(clip string) {
+	m.errorClips.WithLabelValues(clip).Inc()
 }
 
 // Begin counts a request of channel as active with kind until End. The

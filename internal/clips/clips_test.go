@@ -43,6 +43,7 @@ type parsed struct {
 	video, audio               []pes
 	pids                       map[int]int // packets per PID
 	firstPCR                   int64       // 90 kHz ticks, -1 when none
+	pcrs                       []int64     // every PCR base on the video PID
 }
 
 func ptsAt(b []byte) int64 {
@@ -93,9 +94,12 @@ func parseTS(t *testing.T, data []byte) parsed {
 			if n > tsPacketSize-5 {
 				t.Fatalf("packet %d: adaptation field length %d", i/tsPacketSize, n)
 			}
-			if n > 0 && pkt[5]&0x10 != 0 && p.firstPCR < 0 && pid == p.videoPID {
+			if n > 0 && pkt[5]&0x10 != 0 && pid == p.videoPID {
 				base := int64(binary.BigEndian.Uint32(pkt[6:10]))<<1 | int64(pkt[10]>>7)
-				p.firstPCR = base
+				if p.firstPCR < 0 {
+					p.firstPCR = base
+				}
+				p.pcrs = append(p.pcrs, base)
 			}
 			payload = pkt[5+n:]
 		}
@@ -392,5 +396,11 @@ func TestSegments(t *testing.T) {
 				t.Errorf("first PCR leads the first DTS by %d ticks, want %d", lead, segmentTicks)
 			}
 		})
+	}
+}
+
+func TestErrors(t *testing.T) {
+	if got, want := Errors(), Names()[3:]; !slices.Equal(got, want) {
+		t.Fatalf("Errors() = %v, want %v", got, want)
 	}
 }

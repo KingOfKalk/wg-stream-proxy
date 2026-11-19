@@ -270,8 +270,9 @@ wsp_upstream_errors_total{channel="radio",reason="timeout"} 1
 			errs:     `wsp_upstream_errors_total{channel="news",reason="redirects"} 1`,
 		},
 		{
-			name:   "rejected playlists",
-			config: allowLoopback + "\n[upstream]\nmax_playlist_size = \"2MiB\"\n",
+			name: "rejected playlists",
+			// HTTP errors instead of error clips, as before (spec 3.4).
+			config: allowLoopback + "\n[upstream]\nmax_playlist_size = \"2MiB\"\n[clips]\nerror = false\n",
 			run: func(t *testing.T, e *directEnv) {
 				// Auto channel /c/radio turns out to be a playlist.
 				e.up.add("/radio", file{ctype: mpegurl, body: "#EXTM3U\n\x00\n"})
@@ -294,7 +295,7 @@ wsp_upstream_errors_total{channel="radio",reason="other"} 1
 		},
 		{
 			name:   "unsupported playlists",
-			config: allowLoopback,
+			config: allowLoopback + "\n[clips]\nerror = false\n",
 			run: func(t *testing.T, e *directEnv) {
 				// Spec 3.3: refused on an auto channel, a raw channel
 				// and a resource, before anything is streamed.

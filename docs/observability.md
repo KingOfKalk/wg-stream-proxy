@@ -7,7 +7,7 @@ Companion to [spec.md](spec.md) (7.3 metrics, 7.1 debug endpoints, 8 log) and [d
 | Where | What | Use |
 |---|---|---|
 | `GET /metrics` on the main listener (`listen`, default `:2349`) | The `wsp_` metrics ([spec 7.3](spec.md)) plus the standard `go_*` and `process_*` metrics | Trends over days: Prometheus and Grafana (this document) |
-| Log, `log_level = "debug"` | One `request` line per `/c/` and `/r/` request with its timings ([spec 8](spec.md)); tunnel start, failure and close lines carry durations at every level | Why one request was slow |
+| Log, `log_level = "debug"` | One `request` line per `/c/`, `/r/` and `/clip/` request with its timings ([spec 8](spec.md)); tunnel start, failure and close lines carry durations at every level; a failure answered with an error clip has `clip=<name>` on its `warn` line (every level) | Why one request was slow or failed |
 | Debug endpoints on `debug.listen` (off by default) | Profiles, the last 256 requests, tunnel state, cool-down ([spec 7.1](spec.md), [deploy.md](deploy.md#debug-endpoints)) | Looking at the running process now |
 
 `/metrics` has no authentication and sits on the player-facing port: keep the proxy on the LAN ([spec 8](spec.md)). Metrics hold channel ids and tunnel names from your config, never URLs or keys.
@@ -23,6 +23,7 @@ The metrics in short (definitions in [spec 7.3](spec.md)):
 | `wsp_active_requests` | gauge | `channel`, `kind` | What is being watched right now? |
 | `wsp_upstream_requests_total` | counter | `channel`, `kind`, `code` | Upstream status codes (`error`: no response) |
 | `wsp_upstream_errors_total` | counter | `channel`, `reason` | Why upstream requests fail |
+| `wsp_error_clips_total` | counter | `clip` | How often viewers saw an error clip instead of an HTTP error, and which one ([spec 3.4](spec.md)) |
 
 ## Prometheus
 
@@ -53,7 +54,7 @@ The dashboard expects the job name `wg-stream-proxy` (its `instance` variable li
 One scrape of a proxy with 6 channels (all `direct`), one configured tunnel and a few thousand requests returned 119 series: 75 `wsp_`, 35 `go_` and 9 `process_`. Each timing histogram series is 14 series (11 buckets, `+Inf`, sum, count), so the histograms dominate. At `15s` that is 5,760 samples per series and day, about 0.7 million samples or roughly 1 to 1.5 MB per day for 119 series (Prometheus needs [about 1 to 2 bytes per sample](https://prometheus.io/docs/prometheus/latest/storage/)); at `30s` half of it. Each further channel adds a handful of series (its `kind`, `code` and `reason` combinations), each further tunnel 16.
 
 - Retention: Prometheus keeps 15 days by default. For trends over months, start it with `--storage.tsdb.retention.time=180d`; the storage above stays small.
-- Cardinality is bounded by your config: `channel` by the channel ids, `tunnel` and `route` by the tunnel names plus `direct`; `kind`, `phase`, `reason` and `code` have a few fixed values.
+- Cardinality is bounded by your config: `channel` by the channel ids, `tunnel` and `route` by the tunnel names plus `direct`; `kind`, `phase`, `reason`, `code` and `clip` have a few fixed values.
 - Counters and histograms start from zero when the proxy restarts; `rate()` and `increase()` handle the reset. Gauges are recomputed. Tunnels are idle after a restart until the first request, so `wsp_tunnel_up` is `0` then.
 - Tunnels start on demand and stop after `tunnels.idle_timeout`, so `wsp_tunnel_up == 0` is normal while nothing plays.
 
@@ -95,6 +96,9 @@ sum by (channel) (rate(wsp_upstream_requests_total{code=~"error|5.."}[10m]))
 
 # Errors per second by reason
 sum by (reason) (rate(wsp_upstream_errors_total[10m]))
+
+# Error clips shown to viewers per hour, by clip
+sum by (clip) (increase(wsp_error_clips_total[1h]))
 
 # Upstream requests per second by status code
 sum by (code) (rate(wsp_upstream_requests_total[5m]))
@@ -191,7 +195,7 @@ Variables (all with "All"): `instance` (single select, the instances of job `wg-
 | Overview | Tunnels up, last handshake, active requests, upstream request rate, upstream error rate | Is it alive and busy right now? |
 | Tunnels | Up/down timeline, handshake age, tunnel start p50 / p95, tunnel starts | Do the tunnels connect, how fast, how often do they cold-start? |
 | Upstream timing | p50 and p95 per route and phase, heatmap of the first byte | Is a route slow, and in DNS, connect, TLS or the upstream's first byte? Tunnel or provider? |
-| Channels | Active requests by channel and kind, requests by status code, errors by reason, failed share by channel | Which channel is watched, which one fails and why? |
+| Channels | Active requests by channel and kind, requests by status code, errors by reason and error clips, failed share by channel | Which channel is watched, which one fails and why, and what did the viewer see? |
 | Process | Resident memory and heap, CPU, goroutines, GC pause time | Does the proxy fit the Raspberry Pi: growing memory or goroutines, CPU peaks? |
 
 Reading hints:
@@ -199,4 +203,5 @@ Reading hints:
 - The tunnel start p50 / p95 and starts panels have data only after a tunnel started; their lines connect the rare windows with a start.
 - First byte of a channel on a tunnel includes the round trip through the VPN; compare `direct` and tunnel routes to separate the provider's origin from the tunnel.
 - Tunnel start waits are not in `wsp_upstream_phase_seconds` (spec 7.3); they are `wsp_tunnel_start_seconds`.
+- Error clips (`clip ...` series in "Errors by reason and error clips") count what viewers saw, for all channels (the metric has no `channel` label): `channel-not-available`, `tunnel-unreachable`, `channel-blocked`. The failure behind each is also in the `reason` series or, for an upstream status, in "Upstream requests by code".
 - The dashboard is kept in sync with the metrics by a test (`internal/metrics`): every `wsp_`, `go_` and `process_` name in a query must exist.
