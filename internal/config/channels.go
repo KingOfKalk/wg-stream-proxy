@@ -268,7 +268,7 @@ func (l *channelLoader) layer(prefix string, up rawUpstream, pl rawPlaylist) lay
 		v := up.Headers[k]
 		ck := http.CanonicalHeaderKey(k)
 		switch {
-		case !validHeaderName(k):
+		case !ValidHeaderName(k):
 			fail("upstream.headers", "invalid header name %q", k)
 		case strings.ContainsAny(v, "\r\n\x00"):
 			fail("upstream.headers", "invalid value for header %q", ck)
@@ -348,8 +348,8 @@ func resolveLogo(configDir, v string) Logo {
 	return Logo{Kind: LogoRaw, Value: v}
 }
 
-// validHeaderName reports whether s is an HTTP token (RFC 9110 5.6.2).
-func validHeaderName(s string) bool {
+// ValidHeaderName reports whether s is an HTTP token (RFC 9110 5.6.2).
+func ValidHeaderName(s string) bool {
 	if s == "" {
 		return false
 	}

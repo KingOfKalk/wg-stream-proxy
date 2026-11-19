@@ -64,7 +64,7 @@ func (c *cli) loadEPG(cfg *config.Config) (*epg.Index, error) {
 		return nil, fmt.Errorf("no [epg] url in config.toml")
 	}
 	allow := cfg.AllowPrivate()
-	for name, prefixes := range c.epgAllowPrivate {
+	for name, prefixes := range c.allowPrivate {
 		allow[name] = append(allow[name], prefixes...)
 	}
 	set, err := route.NewSet(route.Host(), nil, route.Options{Upstream: cfg.Upstream(), AllowPrivate: allow})

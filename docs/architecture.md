@@ -829,8 +829,9 @@ flowchart TD
     importer["internal/importer<br/>M3U import"]:::done
     epg["internal/epg<br/>epg ids, epg match"]:::done
     clips["internal/clips<br/>clip segments, Repeat"]:::done
+    probe["internal/probe<br/>probe command"]:::done
 
-    main --> server & config & importer & epg & route & tunnel & hls
+    main --> server & config & importer & epg & probe & route & tunnel & hls
     server --> playlist & hls & route & tunnel & metrics & clips
     playlist --> config
     route --> config
@@ -838,6 +839,7 @@ flowchart TD
     tunnel --> config & wgquick & netstack
     importer --> config & epg
     epg --> config & route
+    probe --> hls & route & tunnel
 
     classDef done fill:#2a8a68,stroke:#1a5e46,color:#ffffff
 ```
@@ -847,7 +849,7 @@ run time.
 
 | Package | Role | Status |
 |---|---|---|
-| `cmd/wg-stream-proxy` | Subcommand dispatch; `serve`, `check`, `import`, `healthcheck`, `epg`, `tunnel` and `version` work | exists |
+| `cmd/wg-stream-proxy` | Subcommand dispatch; `serve`, `check`, `probe`, `import`, `healthcheck`, `epg`, `tunnel` and `version` work | exists |
 | `internal/config` | Config dir resolution (`Resolve`), loading and validation of `config.toml` and channel files (`Load`), slugs (`Slug`), route resolution | exists |
 | `internal/config/wgquick` | Tunnel file parser (`Parse`), UAPI conversion (`UAPIConfig`), `AllowedIPs` check (`Allows`) | exists |
 | `internal/hls` | Type detection (`Detect`), playlist rewriter (`Rewrite`), signed `/r/` URLs (`Signer`), signing key (`LoadSigningKey`); pure functions, no I/O | exists |
@@ -860,6 +862,7 @@ run time.
 | `internal/metrics` | Private Prometheus registry with the `wsp_` metrics (spec 7.3) and the Go and process metrics; tunnel gauges read at scrape time ([#18](https://github.com/KingOfKalk/wg-stream-proxy/issues/18)) | exists |
 | `internal/importer` | `import` of an existing M3U file (spec 7.2), `--match-epg` with an `epg.Index`; pure function, no I/O | exists |
 | `internal/epg` | Downloads `epg.url` over the direct route, streams the XMLTV channel list (plain or gzip), ranks EPG names for `epg match` and `import --match-epg` (spec 7.2, [#21](https://github.com/KingOfKalk/wg-stream-proxy/issues/21)) | exists |
+| `internal/probe` | `probe` command (spec 7.2): fetches a URL through a route with the rules of serving, detects the format (HLS master or media, raw or ICY, refused) with `hls.Detect` and `hls.Unsupported`, follows the first variant and segment, reports timing from `route.Trace` ([#122](https://github.com/KingOfKalk/wg-stream-proxy/issues/122)) | exists |
 
 ## 9. Versions
 
