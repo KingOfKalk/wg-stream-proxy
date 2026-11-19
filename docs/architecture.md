@@ -95,6 +95,7 @@ flowchart LR
     vpn --> cdn
     direct --> cdn
     kodi -. "EPG link mode" .-> epg
+    routes -. "EPG proxy mode" .-> epg
 
     classDef lan fill:#3b7fb0,stroke:#24577d,color:#ffffff
     classDef proxy fill:#6f5cc2,stroke:#46398a,color:#ffffff
@@ -122,10 +123,16 @@ flowchart LR
   `DNS` servers.
 - **direct**: the host network, same HTTP settings, same guard. Used only
   where a channel says `tunnel = "direct"`.
-- **EPG**: the channel list only *links* the EPG URL (`x-tvg-url`, link
-  mode; EPG proxy mode is planned for v0.4); the player downloads it itself
-  (spec 6). Only the CLI (`epg ids`, `epg match`, `import --match-epg`)
-  downloads it, over `direct` (spec 7.2).
+- **EPG**: in link mode (`[epg] url`) the channel list only *links* the
+  EPG URL (`x-tvg-url`) and the player downloads it itself (spec 6). In
+  proxy mode (`[[epg.source]]`, spec 6.1) the server's `epg.Guide` fetches
+  each source through its route like a channel (guard, timeouts, tunnel
+  start), streams it through a token filter that keeps only the configured
+  `tvg_id`s and the programmes that have not ended, merges the copies in
+  priority order and serves the guide from memory at `/epg.xml.gz`, which
+  the channel list then links. A failed source keeps its last good copy.
+  The CLI (`epg ids`, `epg match`, `import --match-epg`) downloads one
+  source, or `epg.url`, through its route (spec 7.2).
 
 ## 3. Control plane and data plane
 
@@ -887,12 +894,12 @@ flowchart TD
     wgquick["internal/config/wgquick<br/>Parse, UAPIConfig"]:::done
     metrics["internal/metrics<br/>Prometheus"]:::done
     importer["internal/importer<br/>M3U import"]:::done
-    epg["internal/epg<br/>epg ids, epg match"]:::done
+    epg["internal/epg<br/>epg ids, epg match,<br/>Guide: filter, merge"]:::done
     clips["internal/clips<br/>clip segments, Repeat"]:::done
     probe["internal/probe<br/>probe command"]:::done
 
     main --> server & config & importer & epg & probe & route & tunnel & hls
-    server --> playlist & hls & dash & route & tunnel & metrics & clips
+    server --> playlist & hls & dash & route & tunnel & metrics & clips & epg
     playlist --> config
     route --> config
     tunnel -. "implements route Network" .-> route
@@ -917,12 +924,12 @@ run time.
 | `internal/tunnel` | One `wireguard-go` device + gVisor netstack per tunnel, DNS inside the tunnel, lazy start ([#11](https://github.com/KingOfKalk/wg-stream-proxy/issues/11)); idle close and drain ([#16](https://github.com/KingOfKalk/wg-stream-proxy/issues/16)); reload (`Manager.Apply`); state snapshots and cool-down (`Manager.Cooldown`, [#68](https://github.com/KingOfKalk/wg-stream-proxy/issues/68)) | exists |
 | `internal/tunnel/netstack` | Trimmed copy of wireguard-go's `tun/netstack` (MIT) that drops packets sent after `Close` ([#47](https://github.com/KingOfKalk/wg-stream-proxy/issues/47), spec 9) | exists |
 | `internal/route` | One route per tunnel plus `direct`, `http.Transport` settings, guard, upstream header rules, timeouts, status mapping ([#12](https://github.com/KingOfKalk/wg-stream-proxy/issues/12)); raw and ICY ([#15](https://github.com/KingOfKalk/wg-stream-proxy/issues/15)). Defines the `Network` interface (resolve + dial a resolved `IP:port`) that tunnels and `direct` implement | exists |
-| `internal/server` | `/playlist.m3u8`, `/c/`, `/r/`, `/p/` and `/time` ([#86](https://github.com/KingOfKalk/wg-stream-proxy/issues/86)), `/healthz`, absolute URL base, graceful shutdown (`Run`) ([#14](https://github.com/KingOfKalk/wg-stream-proxy/issues/14)); `/logos/`, `healthcheck` ([#19](https://github.com/KingOfKalk/wg-stream-proxy/issues/19)); `/metrics` ([#18](https://github.com/KingOfKalk/wg-stream-proxy/issues/18)); `SIGHUP` reload (`Reloader`); debug endpoints on their own listener ([#68](https://github.com/KingOfKalk/wg-stream-proxy/issues/68)), incl. `POST /debug/probe` for the `probe` command ([#122](https://github.com/KingOfKalk/wg-stream-proxy/issues/122)) | exists |
+| `internal/server` | `/playlist.m3u8`, `/c/`, `/r/`, `/p/` and `/time` ([#86](https://github.com/KingOfKalk/wg-stream-proxy/issues/86)), `/healthz`, `/epg.xml.gz` and `/epg.xml` with the `epg.Guide` it runs and updates on reload ([#87](https://github.com/KingOfKalk/wg-stream-proxy/issues/87)), absolute URL base, graceful shutdown (`Run`) ([#14](https://github.com/KingOfKalk/wg-stream-proxy/issues/14)); `/logos/`, `healthcheck` ([#19](https://github.com/KingOfKalk/wg-stream-proxy/issues/19)); `/metrics` ([#18](https://github.com/KingOfKalk/wg-stream-proxy/issues/18)); `SIGHUP` reload (`Reloader`); debug endpoints on their own listener ([#68](https://github.com/KingOfKalk/wg-stream-proxy/issues/68)), incl. `POST /debug/probe` for the `probe` command ([#122](https://github.com/KingOfKalk/wg-stream-proxy/issues/122)) | exists |
 | `internal/playlist` | Renders the channel list (spec 6) | exists |
 | `internal/clips` | Built-in clip segments (`go:embed`, rendered by `generate.sh`), `Repeat` for a segment at a position in a stream of copies (timestamps, continuity counters); error clips on `/c/` ([#115](https://github.com/KingOfKalk/wg-stream-proxy/issues/115)) | exists |
 | `internal/metrics` | Private Prometheus registry with the `wsp_` metrics (spec 7.3) and the Go and process metrics; tunnel gauges read at scrape time ([#18](https://github.com/KingOfKalk/wg-stream-proxy/issues/18)) | exists |
 | `internal/importer` | `import` of an existing M3U file (spec 7.2), `--match-epg` with an `epg.Index`; pure function, no I/O | exists |
-| `internal/epg` | Downloads `epg.url` over the direct route, streams the XMLTV channel list (plain or gzip), ranks EPG names for `epg match` and `import --match-epg` (spec 7.2, [#21](https://github.com/KingOfKalk/wg-stream-proxy/issues/21)) | exists |
+| `internal/epg` | Downloads an EPG file through a route, streams the XMLTV channel list (plain or gzip), ranks EPG names for `epg match` and `import --match-epg` (spec 7.2, [#21](https://github.com/KingOfKalk/wg-stream-proxy/issues/21)); EPG proxy mode (spec 6.1, [#87](https://github.com/KingOfKalk/wg-stream-proxy/issues/87)): streaming XMLTV filter that writes the kept elements again from tokens (`Filter`), merge in source priority (`Merge`), refresh scheduling with last good copies (`Guide`) | exists |
 | `internal/probe` | `probe` command (spec 7.2): fetches a URL through a route with the rules of serving, detects the format (HLS master or media, raw or ICY, refused) with `hls.Detect` and `hls.Unsupported`, follows the first variant and segment, reports timing from `route.Trace`; run by the command or by `POST /debug/probe` of the server ([#122](https://github.com/KingOfKalk/wg-stream-proxy/issues/122)) | exists |
 
 ## 9. Versions

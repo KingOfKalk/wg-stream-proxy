@@ -37,6 +37,7 @@ Player (Kodi / VLC)
    | HTTP (LAN)
 wg-stream-proxy
    |-- /playlist.m3u8   channel list generator
+   |-- /epg.xml.gz      EPG guide: sources fetched through routes, filtered, merged
    |-- /c/{id}          channel entry: type detection, HLS or DASH rewrite or raw pipe
    |-- /r/...           signed resources (sub-playlists, segments, keys)
    |-- /p/...           prefix-signed resources (DASH segments)
@@ -241,13 +242,23 @@ watch_interval = "2s"                 # how often the config files are checked f
 error = true                          # error clips instead of 502/504 on GET /c/ of HLS channels (3.4)
 
 [epg]
-url = "https://epg.example.org/epg/epg.xml.gz"  # optional, no default
+# url = "https://epg.example.org/epg/epg.xml.gz"  # link mode (6): the player fetches it; optional, not together with [[epg.source]]
+refresh = "6h"                        # proxy mode: time between two fetches of a source, at least 1m
+
+[[epg.source]]                        # proxy mode (6.1): the proxy fetches, filters and merges
+name = "gr"                           # unique, [a-z0-9-]; used in logs, metrics and epg_source
+url = "https://epg.example.org/epg/epg.xml.gz"
+                                      # tunnel omitted: direct
+[[epg.source]]
+name = "de"
+url = "https://epg.example.net/guide.xml.gz"
+tunnel = "de"                         # any number of sources may share a tunnel
 
 [debug]
 listen = ""                           # off; e.g. "127.0.0.1:2350" (7.1)
 ```
 
-Unknown keys and wrong value types are config errors. Values are validated: `listen` is `[host]:port` with a numeric port; `debug.listen` is empty or of the same form, with a port other than the one of `listen` (as in effect after flag and environment); durations are positive (`reload.watch_interval` also accepts `"0"`, which turns watching off); `max_playlist_size` is a whole number directly followed by `B`, `KiB` or `MiB`, positive and at most `32MiB`; `public_base_url` and `epg.url` are empty or absolute `http(s)` URLs; `user_agent` has no line breaks; `allow_private` keys are `direct` or existing tunnel names, values are CIDR prefixes without host bits.
+Unknown keys and wrong value types are config errors. Values are validated: `listen` is `[host]:port` with a numeric port; `debug.listen` is empty or of the same form, with a port other than the one of `listen` (as in effect after flag and environment); durations are positive (`reload.watch_interval` also accepts `"0"`, which turns watching off; `epg.refresh` is at least `1m`); `max_playlist_size` is a whole number directly followed by `B`, `KiB` or `MiB`, positive and at most `32MiB`; `public_base_url` and `epg.url` are empty or absolute `http(s)` URLs; `user_agent` has no line breaks; `allow_private` keys are `direct` or existing tunnel names, values are CIDR prefixes without host bits. `[[epg.source]]`: `name` required, `[a-z0-9-]`, 1-48 characters, unique; `url` required, absolute `http(s)`, at most 4096 bytes; `tunnel` `direct` or an existing tunnel name. `epg.url` together with `[[epg.source]]` is a config error: link mode (the player fetches `epg.url`) or proxy mode (the proxy serves the guide, 6.1).
 
 ### 5.4 Channel files (`channels.d/*.toml`)
 
@@ -275,6 +286,7 @@ headers = { Referer = "https://www.example.org/" }
 
 [channel.playlist]
 tvg_id = "ertworld"
+epg_source = "gr"                     # optional: the guide of this channel only from this [[epg.source]] (6.1)
 logo = "EPTWORLD"
 attrs = { tvg-chno = "5" }
 
@@ -290,10 +302,11 @@ url = "https://live.example.net/daserste/live/hls/de/master.m3u8"
 - Sub-tables apply to the `[[channel]]` directly above.
 - Merge order: `config.toml`, `channels.d/_defaults.toml`, file `[defaults.*]`, channel. Maps (`headers`, `attrs`, `extra.<DIRECTIVE>`) merge key by key; the more specific layer wins (header names case-insensitively). Single values are overridden. `[defaults.upstream]` and `[defaults.playlist]` take the same keys as the channel. `[upstream] user_agent` is the `config.toml` layer of `headers` (as `User-Agent`).
 - Opt-out: an empty value in `headers`, `attrs` or `extra.<DIRECTIVE>` removes the key set by a lower layer (and is not set itself): the header is not sent (for `User-Agent` also not `[upstream] user_agent`), the attribute or extra line is not written. A more specific layer can set the key again. `logo = ""` gives no logo.
-- `channels.d/_defaults.toml` (optional): the global layer for all channel files, e.g. one `inputstream.adaptive` for every channel (deploy.md). It takes only `[defaults.upstream]` (`type`, `headers`) and `[defaults.playlist]` (`logo`, `attrs`, `extra.<DIRECTIVE>`), validated like file defaults. `tunnel` (a global route would bypass fail closed, 5.2), `group`, `[[channel]]` and `tvg_id` are config errors. It is not a channel file: no channels, no file-stem route. Other `channels.d/_*.toml` names are reserved (config error).
+- `channels.d/_defaults.toml` (optional): the global layer for all channel files, e.g. one `inputstream.adaptive` for every channel (deploy.md). It takes only `[defaults.upstream]` (`type`, `headers`) and `[defaults.playlist]` (`logo`, `epg_source`, `attrs`, `extra.<DIRECTIVE>`), validated like file defaults. `tunnel` (a global route would bypass fail closed, 5.2), `group`, `[[channel]]` and `tvg_id` are config errors. It is not a channel file: no channels, no file-stem route. Other `channels.d/_*.toml` names are reserved (config error).
 - Channel `url`: absolute `http(s)` URL, max 4096 bytes. `name`: required, not blank.
 - `upstream.headers`: names are HTTP tokens, values without CR, LF or NUL; two names in one layer that differ only in case are a config error.
 - No line breaks in `name`, `group`, `playlist.tvg_id`, `playlist.logo` and `attrs` values.
+- `playlist.epg_source`: the name of an `[[epg.source]]` (5.3), else a config error (also in link mode); the channel's guide comes only from that source (6.1). Empty: the first source that has the `tvg_id`, also over a lower layer's value. Two channels with the same `tvg_id` that name different sources are a config error (the guide has one `<channel>` element per id).
 - `playlist.attrs`: extra `#EXTINF` attributes. `tvg-id`, `tvg-name`, `tvg-logo`, `group-title` are reserved in any case (config error). Names must not be empty or contain whitespace, control characters, `"`, `=` or `,`.
 - `playlist.extra.<DIRECTIVE>`: rendered as `#<DIRECTIVE>:<key>=<value>`.
   - Directive written as configured, must match `[A-Z][A-Z0-9-]*`.
@@ -327,13 +340,14 @@ url = "https://live.example.net/daserste/live/hls/de/master.m3u8"
 - Unchanged tunnels (same parsed content; comments and formatting do not count) keep running; changed or removed tunnels are drained (2.1) and recreated lazily.
 - A route (`direct` or a tunnel) keeps its pooled upstream connections only if its network, its `allow_private` entries and the whole `[upstream]` block are unchanged; otherwise new requests use a new route and the old route's idle connections are closed, while an unchanged tunnel keeps running.
 - A reload that changes or removes a tunnel which is still starting cancels the start; requests waiting for it get `502`; the new tunnel starts lazily on the next request.
+- `[epg]` and `[[epg.source]]` apply on reload without a restart: a reload that changes the sources or the wanted ids fetches every source again at once (6.1).
 - Restart required for: `listen`, `debug.listen`, `log_format`, `reload.watch_interval`, signing key, tunnels dir location. A reload that changes one of them logs a warning and keeps the old value.
 - A successful reload logs one info line `reloaded` with the channel and tunnel counts, `channels_added`, `channels_changed` and `channels_removed` (counts; changed means any difference of the merged channel config, comments, formatting and order do not count) and `tunnels_added`, `tunnels_changed` and `tunnels_removed` (names); a reload that changes nothing logs the same line with zeros. At debug level a second line lists the ids of the added, changed and removed channels; no line contains URLs.
 
 ## 6. Channel list
 
 - `GET /playlist.m3u8`, `Content-Type: audio/x-mpegurl; charset=utf-8`, no BOM; disabled channels omitted; optional `?group=<name>` (exact match; empty lists all).
-- Header: `#EXTM3U x-tvg-url="<epg.url>" url-tvg="<epg.url>"` if `epg.url` is set (EPG link mode: the player fetches it).
+- Header: `#EXTM3U x-tvg-url="<epg>" url-tvg="<epg>"`: with `[[epg.source]]` the guide of the proxy, `<base>/epg.xml.gz` (proxy mode, 6.1, absolute like the channel URLs, 7.1); else `epg.url` if set (link mode: the player fetches it); else no attributes.
 - Per channel:
   1. `playlist.extra` lines, sorted by directive, then key; keys removed with an empty value (5.4) are not written.
   2. `#EXTINF:-1 tvg-id=".." tvg-name=".." tvg-logo=".." group-title=".."`, then `attrs` sorted by key, then `,<name>`. Empty values are omitted; `"` in values and names is replaced by `'`. Commas in names are fine (IPTV Simple Client takes the name after the last quoted attribute). Kodi lists a channel in its Radio section only with `radio="true"`, which comes from `attrs = { radio = "true" }` (no extra key).
@@ -347,6 +361,22 @@ url = "https://live.example.net/daserste/live/hls/de/master.m3u8"
 http://wsp.lan:2349/c/ert-world.m3u8
 ```
 
+### 6.1 EPG proxy mode
+
+With `[[epg.source]]` (5.3) the proxy fetches the EPG sources, keeps of each only the configured channels and serves them merged as one XMLTV guide: Kodi's IPTV Simple Client takes one EPG URL, and a real source (tens of MB of XML, hundreds of channels, days of programmes) is mostly channels nobody configured.
+
+- Fetch: each source through its route (`tunnel`, else `direct`), one after the other in config order, with the upstream rules of 3.4: private-range guard (3.5, with the route's `allow_private`), `[upstream]` timeouts and `User-Agent`, at most 10 redirects. A fetch, download and filter, takes at most 5 minutes in total, else it fails (`timeout`). A source on a tunnel starts the tunnel like a channel request does (2.1); it closes again after `idle_timeout`.
+- Body: status `200`; gzip (recognised by its magic bytes, not by name or header) or plain XML; at most 200 MiB after decompression, which also bounds a gzip bomb, else the fetch fails (`size`). The source is read as a stream and never held in memory.
+- When: at startup; then each source every `[epg] refresh` (default `6h`), counted from the start of its last fetch; a failed source again after 10 minutes (or `refresh` if shorter); every source at once after a reload (5.6) that changes the sources (names, URLs, tunnels, order) or the wanted ids (`tvg_id` and `epg_source` of the enabled channels). A changed `refresh` alone moves the next fetch times without a fetch.
+- Filter: the `<channel>` elements whose `id` is the `tvg_id` of an enabled channel (the first element per id) and the `<programme>` elements of these ids that have not ended at the time of the fetch: `stop` of the form `YYYYMMDDhhmm` or `YYYYMMDDhhmmss`, optionally followed by a zone `+hhmm` or `-hhmm` (no zone: UTC), at or before that time. Programmes without `stop` or with another form are kept. A source is filtered only for the ids it may provide (`epg_source`, 5.4). Ids compare exactly.
+- Fail closed: a source that is not well-formed XML 1.0 (strict: undefined entities, invalid UTF-8, mismatched end tags; a declared encoding other than UTF-8 is converted), whose root element is not `tv`, with text or elements outside the root, or nesting deeper than 32 elements fails (`invalid`). A doctype is accepted and ignored; its entities are never expanded.
+- Written again: the guide holds only what the source had for the kept channels, re-serialised from the parsed tokens, never copied: `<?xml version="1.0" encoding="UTF-8"?>`, `<tv>` without attributes, then the kept `<channel>` and `<programme>` elements with their content. Element and attribute names must be `[A-Za-z][A-Za-z0-9._-]*` without namespace prefix: other elements are dropped with their content, other attributes dropped, of repeated attributes only the first is kept; values in double quotes and text escaped; comments, processing instructions and doctype dropped, CDATA sections written as escaped text; an element without content as `<name/>`. So players with lighter XML parsers read the same guide.
+- Merge: per id, in the order of the channels (5.1), the `<channel>` element and all programmes come from one source: the one named by `epg_source`, else the first source in list order whose copy has a `<channel>` element with the id. Programmes of one channel are never mixed across sources; an id no source has is missing. All `<channel>` elements come first, then the programmes (XMLTV DTD order).
+- Failure: a failed source keeps serving its last good copy, the other sources still update; its channels are not handed over to another source. A removed source, and one whose URL or tunnel changed, loses its copy.
+- Memory: only the filtered copies and the guide (plain and gzip) are held.
+- Serving: `GET/HEAD /epg.xml.gz` (`application/gzip`) and `/epg.xml` (`application/xml; charset=utf-8`), with `ETag` (one per form), `Last-Modified` (when the guide last changed), `Cache-Control: no-cache`, conditional and range requests. `503` until a source was fetched once (sources not fetched yet are missing from the guide until they are); `404` without `[[epg.source]]` (also in link mode).
+- Log: per fetch an `info` line `epg source fetched` (`source`, `route`, `url` in the logged form of 8, `bytes`, `filtered_bytes`, `channels`, `programmes`, `duration`) or a `warn` line `epg source failed: keeping the last good copy` (`source`, `route`, `url`, `result`, `error`, `duration`, `serving_copy_age` or `none`); an `info` line `epg guide updated` (`channels`, `programmes`, `bytes`, `gzip_bytes`) when the guide changed. Metrics: 7.3.
+
 ## 7. Interfaces
 
 ### 7.1 HTTP
@@ -354,6 +384,7 @@ http://wsp.lan:2349/c/ert-world.m3u8
 | Path | Description |
 |---|---|
 | `GET/HEAD /playlist.m3u8` | Channel list |
+| `GET/HEAD /epg.xml.gz`, `/epg.xml` | EPG guide of the proxy, gzip and plain (proxy mode, 6.1); `404` without `[[epg.source]]`, `503` before the first fetch |
 | `GET/HEAD /c/{id}`, `/c/{id}.m3u8`, `/c/{id}.mpd` | Channel entry |
 | `GET/HEAD /r/{channel}/{sig}/{b64url}/{name}` | Signed resource |
 | `GET/HEAD /p/{channel}/{sig}/{mode}/{b64prefix}/{path}` | Prefix-signed resource (4.1) |
@@ -390,8 +421,8 @@ wg-stream-proxy serve                 # default
 wg-stream-proxy check                 # validate config, exit 0/1
 wg-stream-proxy probe [--route R] [--header K=V]... [--json] [--standalone] <url>   # fetch a URL through a route, report format and timing, exit 0/1/2
 wg-stream-proxy import <file.m3u> [--tunnel T] [--match-epg [--config-dir DIR]] [--out FILE]
-wg-stream-proxy epg ids               # list id and display-name from epg.url (config flags as for check)
-wg-stream-proxy epg match             # suggest tvg_id per channel, print TOML, write nothing
+wg-stream-proxy epg ids [--source S]  # list id and display-name of an EPG source (config flags as for check)
+wg-stream-proxy epg match [--source S]  # suggest tvg_id per channel, print TOML, write nothing
 wg-stream-proxy healthcheck           # GET /healthz on the listen address, exit 0/1
 wg-stream-proxy tunnel list           # tunnels and their state, from the debug endpoints (7.1)
 wg-stream-proxy tunnel stop <name>    # cool-down of a tunnel (7.1)
@@ -430,9 +461,9 @@ wg-stream-proxy help [command]        # description and command list, or the fla
 - `--tunnel` is written as the file-level `tunnel`; without it, the route follows 5.2.
 - `url-tvg` and `x-tvg-url` of `#EXTM3U` are written as a TOML comment for `[epg] url` in `config.toml`; other header attributes are dropped with a warning.
 - Output on stdout, or in `--out FILE`, which must not exist yet (never overwritten, exit 1). Warnings go to stderr with file and line.
-- `--match-epg`: keep `tvg_id` if it exists in the EPG; else drop it with a warning (if there was one) and add the best suggestion as a TOML comment in the channel's `[channel.playlist]` table (`# tvg_id = "<id>"  # EPG: <name>`; none if nothing matches). Needs `epg.url` in `config.toml` (read like `check`: `--config-dir`, `WG_STREAM_PROXY_CONFIG_DIR`); without `--match-epg`, `import` reads no config and makes no request.
+- `--match-epg`: keep `tvg_id` if it exists in the EPG; else drop it with a warning (if there was one) and add the best suggestion as a TOML comment in the channel's `[channel.playlist]` table (`# tvg_id = "<id>"  # EPG: <name>`; none if nothing matches). Needs an EPG source in `config.toml`: the first `[[epg.source]]`, else `epg.url` (read like `check`: `--config-dir`, `WG_STREAM_PROXY_CONFIG_DIR`); without `--match-epg`, `import` reads no config and makes no request.
 
-The EPG commands (`epg ids`, `epg match`, `import --match-epg`) download `epg.url` over the `direct` route: the private-range guard (with `[upstream.allow_private] direct`) and the `[upstream]` timeouts apply, and there is no separate config key. The file is plain XMLTV or gzip (recognised by its magic bytes), read as a stream, at most 200 MiB after decompression (else error); only the `<channel>` elements before the first `<programme>` are read (XMLTV DTD order).
+The EPG commands (`epg ids`, `epg match`, `import --match-epg`) download one EPG file: the `[[epg.source]]` named by `--source` (`epg ids` and `epg match`), by default the first one, else `epg.url`; `--source` with a name that is not an `[[epg.source]]` exits 2. The file is fetched through the source's route (`epg.url`: `direct`): the private-range guard (with the route's `[upstream.allow_private]`) and the `[upstream]` timeouts apply. A source on a tunnel starts that tunnel in the command's process, with a note on stderr: like `probe --standalone`, a running proxy with the same tunnel key may stall until its next handshake. The file is plain XMLTV or gzip (recognised by its magic bytes), read as a stream, at most 200 MiB after decompression (else error); only the `<channel>` elements before the first `<programme>` are read (XMLTV DTD order).
 
 `epg ids`: one line per EPG channel, sorted by id: the id, then its display names, separated by tabs.
 
@@ -451,8 +482,13 @@ The EPG commands (`epg ids`, `epg match`, `import --match-epg`) download `epg.ur
 - `tunnel_start_seconds{tunnel}` (histogram): one observation per successful tunnel start, the time from the start request until the first handshake completed (device up included). Observed where the tunnel starts, once per start however many requests waited for it; a failed start is not observed (the start failure line, spec 8, logs it).
 - `upstream_phase_seconds{route,phase}` (histogram): where the time of the upstream requests of `/c/`, `/r/` and `/p/` goes, per route (`direct` or a tunnel name), `phase` = `dns` (host lookups), `connect` (connection setup, Happy-Eyeballs fallback included), `tls` (TLS handshakes), `first_byte` (start of the upstream request until the first response byte); the same definitions as the debug line (`dns`, `connect`, `tls`, `ttfb`, spec 8), without a tunnel start wait (that is `tunnel_start_seconds`).
 - Buckets of both histograms, in seconds: `0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 15` (classic histograms).
+- EPG proxy mode (6.1), per `[[epg.source]]` (`source` is its name, so the labels are bounded by the config; a removed source disappears):
+  - `epg_fetches_total{source,result}`: fetches by `result` = `ok`, `connect`, `timeout`, `guard`, `tls`, `redirects`, `size` (larger than 200 MiB), `status` (other than `200`), `invalid` (no gzip or XMLTV the filter accepts), `other`; every result is reported from 0.
+  - `epg_fetch_duration_seconds{source}`: time of the last fetch, download and filter.
+  - `epg_source_bytes{source}` and `epg_filtered_bytes{source}`: XML size of the copy in use before filtering (after decompression) and what the proxy keeps of it; `0` without a copy.
+  - `epg_last_success_timestamp_seconds{source}`: when the copy in use was fetched, `0` without one; `time()` minus it is the age of what the guide serves for the source.
 
-Only `/c/`, `/r/` and `/p/` requests of enabled channels count; `channel` is the channel id, never a URL. `/clip/` requests count in no metric.
+Only `/c/`, `/r/` and `/p/` requests of enabled channels count; `channel` is the channel id, never a URL. `/clip/` requests count in no metric; EPG fetches only in the `epg_` metrics.
 
 - `kind`: `playlist` if the response is detected as a playlist or DASH manifest (3.1) or refused as one (3.3), else `raw` for `/c/` and `segment` for `/r/` and `/p/`. Until the type is detected, and if it never is (error, non-`2xx` status), an `hls` or `dash` channel and, without a configured type, an upstream path ending in `.m3u8`, `.m3u` or `.mpd` count as `playlist`.
 - `upstream_requests_total` counts every upstream request, the refetch of a partial playlist (3.4) included.
@@ -470,6 +506,7 @@ Only `/c/`, `/r/` and `/p/` requests of enabled channels count; `channel` is the
 - Debug endpoints (7.1): off by default, on their own listener, without authentication. They answer only requests addressed by IP or `localhost`, so a web page cannot reach them by rebinding its own name to the debug address. Bind them to loopback (e.g. `127.0.0.1:2350`, used through `docker exec … tunnel`) or at most the LAN, never beyond: the profiler exposes process internals (memory, goroutine stacks, command line), and whoever reaches the port can cool tunnels down. `/debug/requests` holds no keys, tokens, query strings or upstream paths beyond the file name (the same reduction as the log).
 - Prefix-signed URLs (4.1): whoever has a valid `/p/` URL can fetch every URL below its prefix (same scheme, host and port, below the prefix directory) through the channel's route, with the channel's headers, and with a query only if the mode allows one; nothing outside the prefix (also not through an upstream redirect, which is followed only below the prefix), nothing for another channel, and nothing once the channel is removed or disabled. A response below a prefix that is itself a playlist or manifest is rewritten and signed again, as under `/r/`; the guard applies to every dial.
 - DASH manifests (3.6) reach the player only as the rewriter parsed them: written again token by token, names restricted to plain XML names, comments and processing instructions gone, so players' lighter XML parsers (which end comments early, skip leading non-letters in attribute names and let a later attribute win) read the same URLs. XML bodies that are not rewritten are refused, never piped (3.3), except a single complete TTML document within 64 KiB: a later top-level `MPD`, a prolog with `<` or `>`, a document longer than the window, HTML, other text that is no handled format and UTF-16 or UTF-32 text (with or without byte order mark) never reach the player.
+- EPG sources (6.1) are untrusted input: fetched like channel upstreams (guard, timeouts, redirect limit) plus a total time limit, read as a stream with a size limit after decompression (gzip bombs end at 200 MiB), parsed strictly (no entity expansion, depth limit), and the guide is written again from the parsed tokens with plain names only, so it is well-formed and holds nothing the source did not have for the configured channels. URLs inside the guide (icons, programme links) are data the player may fetch directly, past the tunnel, like logo URLs in the channel list; the proxy does not rewrite them.
 - Residual risk of the sniffing (3.1, 3.3): only the first 512 bytes of a body that does not start like XML text are read (64 KiB for XML). A malicious upstream that sends binary bytes longer than that window followed by an `MPD`, opened by a browser DASH player (dash.js, Shaka) that searches a whole response for an `MPD` element, cannot be detected without buffering whole streams. The same holds for a WebVTT body with an `MPD` after the first 64 KiB. Kodi, ffmpeg and VLC do not read such a body as a manifest. The proxy targets LAN players, and upstreams are configured by the owner. A prefix is the directory of a `BaseURL` or segment reference of a manifest the channel served, so a manifest whose `BaseURL` is a host root opens that whole host. Like `/r/` URLs they do not expire and reach the LAN players only (above).
 - Container: non-root, read-only root filesystem, all capabilities dropped, single replica. Details: [deploy.md](deploy.md).
 

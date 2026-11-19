@@ -53,7 +53,7 @@ func idsFor(source string, wants []Want) map[string]bool {
 // xmlHeader starts every served guide.
 const xmlHeader = `<?xml version="1.0" encoding="UTF-8"?>` + "\n<tv>\n"
 
-// Merge builds the served guide (spec 7.1): per want, the <channel>
+// Merge builds the served guide (spec 6.1): per want, the <channel>
 // element and all programmes of one source, the one it names or else
 // the first source in order whose copy has a <channel> element with the
 // id; programmes are never mixed across sources. Ids no source has are

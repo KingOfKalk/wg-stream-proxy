@@ -108,7 +108,7 @@ type SourceStatus struct {
 }
 
 // Guide fetches the EPG sources, filters and merges them and keeps the
-// served guide (spec 7.1, 7.2): each source is fetched one after the
+// served guide (spec 6.1): each source is fetched one after the
 // other, every [epg] refresh, a failed one again after RetryInterval;
 // a failed source keeps its last good copy. Update applies a reloaded
 // config; Run does the work.

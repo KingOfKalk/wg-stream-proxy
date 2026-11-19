@@ -29,7 +29,7 @@ func epgLink(cfg *config.Config, base string) string {
 	return cfg.EPGURL()
 }
 
-// handleEPG serves the merged guide (spec 7.1): 404 without
+// handleEPG serves the merged guide (spec 6.1, 7.1): 404 without
 // [[epg.source]], 503 until the first source was fetched.
 func (s *Server) handleEPG(w http.ResponseWriter, r *http.Request) {
 	if len(s.active().cfg.EPGSources()) == 0 {

@@ -19,7 +19,7 @@ import (
 const maxDepth = 32
 
 // ErrInvalid: the source is no well-formed XMLTV document the filter
-// accepts (spec 7.2).
+// accepts (spec 6.1).
 var ErrInvalid = errors.New("epg: invalid XMLTV")
 
 func invalid(reason string) error { return fmt.Errorf("%w: %s", ErrInvalid, reason) }
@@ -76,7 +76,7 @@ func (c *countReader) Read(p []byte) (int, error) {
 
 // Filter reads an XMLTV document (decompressed, see Open) as a stream and
 // keeps the <channel> elements whose id is in ids and the <programme>
-// elements of those ids that have not ended at now (spec 7.2): a
+// elements of those ids that have not ended at now (spec 6.1): a
 // programme ends at its stop attribute; one without a stop of the form
 // YYYYMMDDhhmm[ss] [+-hhmm] (no zone: UTC) is kept. Only the first
 // <channel> element of an id counts. Nothing but these elements and their
@@ -179,7 +179,7 @@ func (f *filter) run() error {
 				}
 				continue
 			}
-			if f.out != nil && f.skip == 0 {
+			if f.out != nil && f.skip == 0 && len(t) > 0 { // an empty CDATA section is no content
 				f.closeStart()
 				*f.out = appendText(*f.out, t)
 				if err := f.checkSize(); err != nil {
