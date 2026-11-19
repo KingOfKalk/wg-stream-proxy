@@ -20,7 +20,7 @@ const description = "Route each IPTV and internet radio channel through its own 
 var commands = []struct{ name, summary string }{
 	{"serve", "run the proxy (default)"},
 	{"check", "validate the config"},
-	{"import", "convert an M3U file to channel files"},
+	{"import", "convert an M3U file to one channel file"},
 	{"epg", "list or match EPG ids"},
 	{"healthcheck", "query /healthz on the listen address"},
 	{"tunnel", "list tunnels or stop one (needs [debug] listen)"},
