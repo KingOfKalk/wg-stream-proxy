@@ -86,8 +86,8 @@ func TestUnsupported(t *testing.T) {
 		{"unterminated declaration", "", "<?xml version=\"1.0\"", Auto, "unknown"},
 		{"unterminated comment", "", "<!-- <MPD>", Auto, "unknown"},
 		{"not XML after <", "text/plain", "<<<", Auto, "unknown"},
-		{"doctype with internal subset", "text/xml", `<?xml version="1.0"?><!DOCTYPE MPD [<!ENTITY a "b">]><MPD type="static">`, Raw, "dash"},
-		{"doctype with internal subset, asx", "", `<!DOCTYPE asx [<!ENTITY a ">">]><asx>`, Auto, "asx"},
+		{"doctype with internal subset", "text/xml", `<?xml version="1.0"?><!DOCTYPE MPD [<!ENTITY a "b">]><MPD type="static">`, Raw, "unknown"},
+		{"doctype with internal subset, asx", "", `<!DOCTYPE asx [<!ENTITY a ">">]><asx>`, Auto, "unknown"},
 		{"root after a long comment", "application/octet-stream", "<!--" + strings.Repeat("x", 1000) + "--><MPD>", Raw, "dash"},
 		{"root beyond the prefix", "application/octet-stream", "<!--" + strings.Repeat("x", 1000), Auto, "unknown"},
 		{"declared latin-1", "", `<?xml version="1.0" encoding="ISO-8859-1"?><playlist>`, Auto, "xspf"},
@@ -96,6 +96,19 @@ func TestUnsupported(t *testing.T) {
 		{"utf-32le", "", "\xff\xfe\x00\x00<\x00\x00\x00", Raw, "unknown"},
 		{"utf-32be", "", "\x00\x00\xfe\xff\x00\x00\x00<", Auto, "unknown"},
 		{"utf-16 m3u", "audio/mpeg", "\xff\xfeh\x00t\x00t\x00p\x00:\x00/\x00/\x00", Raw, "unknown"},
+		{"utf-16be without BOM", "text/xml", "\x00<\x00?\x00x\x00m\x00l", Auto, "unknown"},
+		{"utf-16le without BOM", "text/xml", "<\x00?\x00x\x00m\x00l\x00", Auto, "unknown"},
+		{"utf-16be without BOM after whitespace", "", "\x00\n\x00<\x00M\x00P\x00D", Raw, "unknown"},
+		{"utf-32be without BOM", "", "\x00\x00\x00<\x00\x00\x00M", Auto, "unknown"},
+		{"utf-32le without BOM", "", "<\x00\x00\x00M\x00\x00\x00", Auto, "unknown"},
+		{"fmp4 with a 60-byte ftyp", "video/mp4", "\x00\x00\x00<ftypiso6\x00\x00\x00\x00", Auto, ""},
+		{"comment hiding the root from other parsers", "text/xml", `<!---><MPD type="static"><BaseURL>http://a.example/</BaseURL></MPD>--><x/>`, Auto, "unknown"},
+		{"comment with a tag", "text/xml", `<!-- <MPD> --><x/>`, Auto, "unknown"},
+		{"processing instruction hiding the root", "text/xml", `<?p a><MPD><BaseURL>http://a.example/</BaseURL></MPD><q ?><x/>`, Auto, "unknown"},
+		{"declaration with >", "text/xml", `<?xml version="1.0" x=">"?><x/>`, Auto, "unknown"},
+		{"doctype subset hiding the root", "text/xml", `<!DOCTYPE x [<!ENTITY a "]><MPD><BaseURL>http://a.example/</BaseURL></MPD><!-- ">]><x/>`, Auto, "unknown"},
+		{"doctype with internal subset is not read", "text/xml", `<!DOCTYPE x [<!ENTITY a "b">]><x/>`, Auto, "unknown"},
+		{"plain prolog", "text/xml", "\ufeff<?xml version=\"1.0\"?>\n<!-- generated -->\n<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0//EN\" \"http://www.w3.org/TR/xhtml1.dtd\">\n<html>", Auto, ""},
 
 		// Media and other resources stream.
 		{"mpeg-ts", "video/mp2t", ts, Auto, ""},
@@ -141,6 +154,7 @@ func FuzzUnsupported(f *testing.F) {
 		"[playlist]\nFile1=http://a.example/\n", "http://a.example/\n", "#EXTM3U\n", "# c\n//a.example/x\n",
 		"<?xml version=\"1.0\"?><!-- c --><MPD>", "<!DOCTYPE asx><asx>", "\x47\x40\x00\x10", "ID3\x04", "",
 		"<!DOCTYPE MPD [<!ENTITY a \">\">]><MPD>", "\xff\xfe<\x00M\x00", "<!--" + strings.Repeat("x", 600),
+		"<!---><MPD></MPD>--><x/>", "<?p a><MPD></MPD><q ?><x/>", "\x00<\x00?\x00x", "<\x00?\x00x\x00",
 	} {
 		f.Add("", []byte(s), uint8(Auto))
 		f.Add("audio/x-scpls", []byte(s), uint8(Raw))

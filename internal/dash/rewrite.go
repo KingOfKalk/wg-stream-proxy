@@ -3,8 +3,9 @@
 // Package dash rewrites MPEG-DASH manifests (MPD) for the proxy (spec
 // 3.6): every URL a player would fetch from the manifest goes through a
 // prefix-signed proxy URL (spec 4.1), DRM manifests are refused, and
-// everything else but comments passes through byte for byte. It does no
-// I/O; fetching, size limits on reads and signing belong to the caller.
+// everything else is written again from what encoding/xml parsed, without
+// comments. It does no I/O; fetching, size limits on reads and signing
+// belong to the caller.
 package dash
 
 import (
@@ -155,10 +156,12 @@ var refAttrs = map[string][]string{
 //     those in keptEvents are removed; BaseURL attributes other than
 //     baseURLAttrs are dropped; UTCTiming elements other than direct
 //     ones point to TimeURL;
-//   - comments are dropped and the XML declaration is written as
-//     xmlDecl: players' parsers disagree with encoding/xml on where
-//     comments and processing instructions end;
-//   - all other bytes stay unchanged.
+//   - every tag and text is written again from the tokens encoding/xml
+//     read (names as read, attribute values escaped in double quotes,
+//     text escaped), comments are dropped and the XML declaration is
+//     written as xmlDecl: players' lighter parsers disagree with
+//     encoding/xml on where comments and processing instructions end and
+//     on attribute names, so the output holds only what was parsed.
 //
 // The output is at most maxOutput(len(mpd)) bytes, else ErrTooLarge.
 //
@@ -232,8 +235,13 @@ func (z *tokenizer) next() (xml.Token, []byte, int, error) {
 // scan is what Rewrite needs to know about the whole manifest before it
 // writes the first byte.
 type scan struct {
-	// rootBase: the MPD element has a BaseURL child.
-	rootBase bool
+	// bases holds the BaseURL texts of each element that has BaseURL
+	// children, by the start offset of the element: references resolve
+	// against the bases of their level wherever its BaseURL elements
+	// stand (in schema order, descriptors come first).
+	bases map[int][]string
+	// root is the start offset of the MPD element.
+	root int
 	// query: a plain segment reference has a query, so the BaseURL
 	// prefixes must allow one.
 	query bool
@@ -261,16 +269,21 @@ type scan struct {
 //   - a Representation id with whitespace, control or non-ASCII bytes,
 //     ':' or '\', or starting with '/': $RepresentationID$ must not turn
 //     a relative reference into an absolute one;
-//   - an EssentialProperty of MPD chaining or fallback.
+//   - an EssentialProperty of MPD chaining or fallback;
+//   - an element or attribute name (prefix or local part) that is not
+//     [A-Za-z][A-Za-z0-9._-]*: parsers that skip leading non-letters in
+//     names would read "_media" as a second media attribute.
 //
 // Scheme URIs compare case-insensitively.
 //
 // Element and attribute names match by local name, case-insensitively,
 // whatever their namespace: some players compare names that way.
 func checkManifest(in []byte) (scan, error) {
-	var sc scan
+	sc := scan{bases: map[int][]string{}}
 	z := newTokenizer(in)
 	var stack []xml.Name
+	var starts []int // start offsets of the open elements
+	var baseText []byte
 	rootDone := false
 	inBase := 0 // depth of the open BaseURL element, 0 if none
 	for n := 0; ; n++ {
@@ -306,29 +319,39 @@ func checkManifest(in []byte) (scan, error) {
 				return sc, invalid("empty MPD element")
 			case ln == "contentprotection":
 				return sc, ErrDRM
+			case !validName(t.Name):
+				return sc, invalid("element name that is not a plain XML name")
 			}
 			if err := checkAttrs(ln, t.Attr, &sc); err != nil {
 				return sc, err
 			}
 			if ln == "baseurl" {
 				inBase = depth
-				if depth == 2 {
-					sc.rootBase = true
-				}
+				baseText = baseText[:0]
+			}
+			if depth == 1 {
+				sc.root = start
 			}
 			stack = append(stack, t.Name)
+			starts = append(starts, start)
 		case xml.EndElement:
 			if len(stack) == 0 || stack[len(stack)-1] != t.Name {
 				return sc, invalid("mismatched end tag")
 			}
 			if inBase == len(stack) {
 				inBase = 0
+				parent := starts[len(starts)-2]
+				sc.bases[parent] = append(sc.bases[parent], string(baseText))
 			}
 			stack = stack[:len(stack)-1]
+			starts = starts[:len(starts)-1]
 			rootDone = len(stack) == 0
 		case xml.CharData:
 			if inBase == 0 && bytes.HasPrefix(raw, []byte("<![CDATA[")) {
 				return sc, invalid("CDATA section outside BaseURL")
+			}
+			if inBase > 0 {
+				baseText = append(baseText, t...)
 			}
 			text := []byte(t)
 			if start == 0 {
@@ -379,6 +402,9 @@ func checkAttrs(ln string, attrs []xml.Attr, sc *scan) error {
 	interp := interpreted(ln)
 	var seen []string // interpreted attributes so far, lower-case
 	for _, a := range attrs {
+		if !validName(a.Name) {
+			return invalid("attribute name that is not a plain XML name")
+		}
 		an := strings.ToLower(a.Name.Local)
 		if an == "href" || containsString(interp, an) {
 			if containsString(seen, an) {
@@ -417,6 +443,28 @@ func containsString(list []string, s string) bool {
 	}
 	return false
 }
+
+// validName reports whether a raw name has a prefix (if any) and a local
+// part of the form [A-Za-z][A-Za-z0-9._-]*. XML allows more, but parsers
+// that skip leading non-letters in names would read "_media" or ":media"
+// as media.
+func validName(n xml.Name) bool {
+	return (n.Space == "" || validNCName(n.Space)) && validNCName(n.Local)
+}
+
+func validNCName(s string) bool {
+	if s == "" || !isLetter(s[0]) {
+		return false
+	}
+	for i := 1; i < len(s); i++ {
+		if c := s[i]; !isLetter(c) && (c < '0' || c > '9') && c != '.' && c != '_' && c != '-' {
+			return false
+		}
+	}
+	return true
+}
+
+func isLetter(c byte) bool { return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' }
 
 // lowerTrim returns a scheme URI for comparison: trimmed and lower-case.
 func lowerTrim(v string) string { return strings.ToLower(strings.TrimSpace(v)) }
@@ -514,11 +562,12 @@ func plain(v string) bool {
 type frame struct {
 	name xml.Name
 	// inherited are the upstream bases of the parent; own the resolved
-	// BaseURL children so far.
+	// BaseURL children (all of them, known from checkManifest).
 	inherited, own []*url.URL
-	// used: a reference was resolved against the bases of this frame, so
-	// a later BaseURL child would change what it means.
-	used bool
+	// ownURLs are the rewritten values of the BaseURL children, in
+	// order; next is the index of the next BaseURL child.
+	ownURLs []string
+	next    int
 }
 
 // bases returns the bases the children of f resolve against.
@@ -533,7 +582,6 @@ func (f *frame) bases() []*url.URL {
 type baseURL struct {
 	name  xml.Name
 	attrs []xml.Attr
-	text  []byte
 }
 
 type rewriter struct {
@@ -554,7 +602,7 @@ func (rw *rewriter) run(in []byte) error {
 		if len(rw.out) > limit {
 			return fmt.Errorf("%w: rewritten manifest larger than %d bytes", ErrTooLarge, limit)
 		}
-		t, raw, _, err := z.next()
+		t, raw, start, err := z.next()
 		if err == io.EOF {
 			if len(rw.out) > limit {
 				return fmt.Errorf("%w: rewritten manifest larger than %d bytes", ErrTooLarge, limit)
@@ -573,26 +621,28 @@ func (rw *rewriter) run(in []byte) error {
 			}
 			continue
 		}
+		// Every token is written again from what encoding/xml parsed
+		// (names checked, values escaped, double quotes), so the output
+		// holds nothing a lighter parser could read differently.
 		switch t := t.(type) {
 		case xml.StartElement:
-			if err := rw.start(t, raw); err != nil {
+			if err := rw.start(t, raw, start); err != nil {
 				return err
 			}
 		case xml.EndElement:
 			if rw.base != nil {
-				if err := rw.endBase(); err != nil {
-					return err
-				}
+				rw.endBase()
 				continue
 			}
 			rw.stack = rw.stack[:len(rw.stack)-1]
-			rw.out = append(rw.out, raw...)
+			if len(raw) > 0 { // else written as part of "<x/>"
+				rw.out = append(appendName(append(rw.out, "</"...), t.Name), '>')
+			}
 		case xml.CharData:
 			if rw.base != nil {
-				rw.base.text = append(rw.base.text, t...)
-				continue
+				continue // the BaseURL is written from checkManifest's text
 			}
-			rw.out = append(rw.out, raw...)
+			rw.out = appendText(rw.out, t)
 		case xml.ProcInst:
 			// The declaration (checkManifest allows no other processing
 			// instruction), written again: its original bytes could
@@ -606,15 +656,15 @@ func (rw *rewriter) run(in []byte) error {
 }
 
 // maxOutput is the largest rewritten manifest for an input of n bytes:
-// 16 times the input, at least 1 MiB and at most 128 MiB. Every reference
+// 16 times the input, at least 1 MiB and at most 64 MiB. Every reference
 // that is not plain becomes a whole prefix URL, so without a limit a
 // small manifest could grow by orders of magnitude.
 func maxOutput(n int) int {
-	return min(max(16*n, 1<<20), 128<<20)
+	return min(max(16*n, 1<<20), 64<<20)
 }
 
 // start handles a start tag.
-func (rw *rewriter) start(t xml.StartElement, raw []byte) error {
+func (rw *rewriter) start(t xml.StartElement, raw []byte, start int) error {
 	ln := strings.ToLower(t.Name.Local)
 	if rw.removed(ln, t.Attr) {
 		rw.skip = 1
@@ -631,17 +681,23 @@ func (rw *rewriter) start(t xml.StartElement, raw []byte) error {
 	} else {
 		f.inherited = rw.stack[len(rw.stack)-1].bases()
 	}
-	attrs, changed, err := rw.rewriteAttrs(ln, t.Attr, f.inherited[0])
+	// The BaseURL children are resolved first: the attributes of this
+	// element and of all its descendants resolve against them.
+	for _, text := range rw.scan.bases[start] {
+		u, p, err := rw.baseURL(f.inherited[0], text)
+		if err != nil {
+			return err
+		}
+		f.own = append(f.own, u)
+		f.ownURLs = append(f.ownURLs, p)
+	}
+	attrs, _, err := rw.rewriteAttrs(ln, t.Attr, f.inherited[0])
 	if err != nil {
 		return err
 	}
-	if changed {
-		rw.out = appendStartTag(rw.out, t.Name, attrs, selfClosing(raw))
-	} else {
-		rw.out = append(rw.out, raw...)
-	}
+	rw.out = appendStartTag(rw.out, t.Name, attrs, selfClosing(raw))
 	rw.stack = append(rw.stack, f)
-	if root && !rw.scan.rootBase {
+	if root && len(f.own) == 0 {
 		// Without a BaseURL, players resolve against the proxy URL of
 		// the manifest; give them its upstream directory.
 		u, err := resolve(rw.opts.Final, "")
@@ -768,10 +824,7 @@ func (rw *rewriter) reference(v string, base *url.URL) (string, error) {
 			return "", invalid("reference without a fixed host and path")
 		}
 	}
-	// Mark the frames whose bases this reference used.
-	for _, f := range rw.stack {
-		f.used = true
-	}
+
 	u, err := resolve(base, head+"x")
 	if err != nil {
 		return "", err
@@ -802,33 +855,35 @@ func authorityStart(v string) int {
 	return -1
 }
 
-// endBase rewrites the BaseURL element that just ended.
-func (rw *rewriter) endBase() error {
+// endBase writes the BaseURL element that just ended, with the value its
+// parent resolved at its start.
+func (rw *rewriter) endBase() {
 	b := rw.base
 	rw.base = nil
 	parent := rw.stack[len(rw.stack)-1]
-	if parent.used {
-		return invalid("BaseURL after a reference that used the base above it")
-	}
-	for _, f := range rw.stack[:len(rw.stack)-1] {
-		f.used = true
-	}
-	v, err := cleanURL(string(b.text))
+	p := parent.ownURLs[parent.next]
+	parent.next++
+	rw.out = appendElement(rw.out, b.name, keptBaseURLAttrs(b.attrs), p)
+}
+
+// baseURL resolves the text of a BaseURL against base and returns the
+// upstream URL and its rewritten value: the prefix URL of its directory
+// plus its file name and query.
+func (rw *rewriter) baseURL(base *url.URL, text string) (*url.URL, string, error) {
+	v, err := cleanURL(text)
 	if err != nil {
-		return err
+		return nil, "", err
 	}
-	u, err := resolve(parent.inherited[0], v)
+	u, err := resolve(base, v)
 	if err != nil {
-		return err
+		return nil, "", err
 	}
 	prefix, file := splitURL(u)
 	p, err := rw.prefixURL(prefix, rw.scan.query || strings.IndexByte(file, '?') >= 0)
 	if err != nil {
-		return err
+		return nil, "", err
 	}
-	parent.own = append(parent.own, u)
-	rw.out = appendElement(rw.out, b.name, keptBaseURLAttrs(b.attrs), p+file)
-	return nil
+	return u, p + file, nil
 }
 
 // keptBaseURLAttrs returns the attributes of a BaseURL without those
@@ -1018,4 +1073,24 @@ func Count(mpd []byte) (periods, adaptationSets int) {
 			}
 		}
 	}
+}
+
+// appendText appends s escaped as XML text: '&', '<', '>' and CR (which
+// encoding/xml does not return, it normalizes line ends to LF).
+func appendText(dst []byte, s []byte) []byte {
+	for _, c := range s {
+		switch c {
+		case '&':
+			dst = append(dst, "&amp;"...)
+		case '<':
+			dst = append(dst, "&lt;"...)
+		case '>':
+			dst = append(dst, "&gt;"...)
+		case '\r':
+			dst = append(dst, "&#xD;"...)
+		default:
+			dst = append(dst, c)
+		}
+	}
+	return dst
 }

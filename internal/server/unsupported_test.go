@@ -186,6 +186,26 @@ func TestSniffGap(t *testing.T) {
 			want: [3]int{502, 502, 502},
 		},
 		{
+			name: "MPD hidden in a comment from encoding/xml", ctype: "text/xml",
+			body: `<!---><MPD><BaseURL>` + stream + `</BaseURL><Period/></MPD>--><x/>`,
+			want: [3]int{502, 502, 502},
+		},
+		{
+			name: "MPD hidden in a processing instruction", ctype: "text/xml",
+			body: `<?p a><MPD><BaseURL>` + stream + `</BaseURL><Period/></MPD><q ?><x/>`,
+			want: [3]int{502, 502, 502},
+		},
+		{
+			name: "MPD hidden in a doctype", ctype: "text/xml",
+			body: `<!DOCTYPE x [<!ENTITY a "]><MPD><BaseURL>` + stream + `</BaseURL><Period/></MPD><!-- ">]><x/>`,
+			want: [3]int{502, 502, 502},
+		},
+		{
+			name: "UTF-16BE MPD without BOM", ctype: "text/xml",
+			body: utf16be(`<?xml version="1.0"?><MPD><BaseURL>` + stream + `</BaseURL></MPD>`),
+			want: [3]int{502, 502, 502},
+		},
+		{
 			name: "UTF-16 MPD", ctype: "text/xml",
 			body: "\xff\xfe" + utf16le(`<MPD><BaseURL>`+stream+`</BaseURL></MPD>`),
 			want: [3]int{502, 502, 502},
@@ -200,12 +220,21 @@ func TestSniffGap(t *testing.T) {
 				if resp.StatusCode != tt.want[i] {
 					t.Errorf("GET %s: status %d, want %d", p, resp.StatusCode, tt.want[i])
 				}
-				if strings.Contains(body, secret) || strings.Contains(body, "radio.example") || strings.Contains(body, utf16le("radio")) {
+				if strings.Contains(body, secret) || strings.Contains(body, "radio.example") || strings.Contains(body, utf16le("radio")) || strings.Contains(body, utf16be("radio")) {
 					t.Errorf("GET %s: body leaks the upstream URL", p)
 				}
 			}
 		})
 	}
+}
+
+// utf16be encodes ASCII s as UTF-16BE.
+func utf16be(s string) string {
+	b := make([]byte, 0, 2*len(s))
+	for i := 0; i < len(s); i++ {
+		b = append(b, 0, s[i])
+	}
+	return string(b)
 }
 
 // utf16le encodes ASCII s as UTF-16LE.

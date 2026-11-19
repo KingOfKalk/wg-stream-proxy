@@ -178,7 +178,7 @@ func TestRewriteOutputLimit(t *testing.T) {
 	if got := maxOutput(len(in)); got != 1<<20 {
 		t.Errorf("maxOutput(%d) = %d, want the 1 MiB floor", len(in), got)
 	}
-	for n, want := range map[int]int{0: 1 << 20, 1 << 20: 16 << 20, 8 << 20: 128 << 20, MaxSize: 128 << 20} {
+	for n, want := range map[int]int{0: 1 << 20, 1 << 20: 16 << 20, 8 << 20: 64 << 20, MaxSize: 64 << 20} {
 		if got := maxOutput(n); got != want {
 			t.Errorf("maxOutput(%d) = %d, want %d", n, got, want)
 		}

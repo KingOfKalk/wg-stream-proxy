@@ -23,6 +23,7 @@ func checkRewritten(t *testing.T, out []byte) {
 	if _, err := checkManifest(out); err != nil {
 		t.Fatalf("output fails the check: %v\n%s", err, out)
 	}
+	checkLenient(t, out)
 	z := newTokenizer(out)
 	depth, rootBase := 0, false
 	var base *strings.Builder
@@ -119,6 +120,8 @@ func FuzzRewrite(f *testing.F) {
 		`<MPD><Period><EventStream schemeIdUri="urn:mpeg:dash:event:callback:2015"><Event messageData="https://e.example/"/></EventStream>` +
 			`<AdaptationSet><InbandEventStream schemeIdUri="urn:scte:scte35:2013:bin"/><SupplementalProperty schemeIdUri="urn:dvb:dash:fontdownload:2014" dvb:url="f.woff"/></AdaptationSet></Period></MPD>`,
 		`<MPD><BaseURL byteRange="$base$" serviceLocation="a">a/</BaseURL><Period/></MPD>`,
+		`<MPD><Period><SegmentTemplate media="s-$Number$.m4s" _media="https://e.example/$Number$.m4s"/><Representation id='v' :id="//e.example"/></Period></MPD>`,
+		`<MPD><Period><AdaptationSet><SupplementalProperty schemeIdUri="urn:dvb:dash:fontdownload:2014" dvb:url="f.woff"/><BaseURL>a/</BaseURL></AdaptationSet></Period></MPD>`,
 	} {
 		f.Add([]byte(s))
 	}

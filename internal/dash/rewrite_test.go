@@ -218,13 +218,13 @@ func TestRewrite(t *testing.T) {
 			want: mpdOpen + mpdBase + `<Period xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="urn:mpeg:dash:resolve-to-zero:2013" xlink:actuate="onLoad"/></MPD>`,
 		},
 		{
-			name: "unknown elements, namespaces, CRLF and BOM unchanged, comments dropped, declaration rewritten",
+			name: "unknown elements, namespaces and BOM kept, comments dropped, tags and declaration written again, CRLF read as LF",
 			in: "\ufeff<?xml version=\"1.0\"?>\r\n<!-- c -->\r\n" + `<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" xmlns:scte35="urn:scte:scte35:2014:xml+bin" type='static'>` + "\r\n" +
 				`<Period><EventStream schemeIdUri="urn:scte:scte35:2014:xml+bin"><Event id="1"><scte35:Signal><scte35:Binary>/DA=</scte35:Binary></scte35:Signal></Event></EventStream>` +
 				`<ProgramInformation moreInformationURL="https://info.example.com/"><Title>T &amp; &lt;x&gt;</Title></ProgramInformation><!-- d --></Period></MPD>` + "\r\n",
-			want: "\ufeff<?xml version=\"1.0\" encoding=\"UTF-8\"?>\r\n\r\n" + `<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" xmlns:scte35="urn:scte:scte35:2014:xml+bin" type='static'>` + mpdBase + "\r\n" +
+			want: "\ufeff<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\n" + `<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" xmlns:scte35="urn:scte:scte35:2014:xml+bin" type="static">` + mpdBase + "\n" +
 				`<Period><EventStream schemeIdUri="urn:scte:scte35:2014:xml+bin"><Event id="1"><scte35:Signal><scte35:Binary>/DA=</scte35:Binary></scte35:Signal></Event></EventStream>` +
-				`<ProgramInformation moreInformationURL="https://info.example.com/"><Title>T &amp; &lt;x&gt;</Title></ProgramInformation></Period></MPD>` + "\r\n",
+				`<ProgramInformation moreInformationURL="https://info.example.com/"><Title>T &amp; &lt;x&gt;</Title></ProgramInformation></Period></MPD>` + "\n",
 		},
 		{
 			name: "attributes of rewritten elements re-escaped",
@@ -289,8 +289,6 @@ func TestRewriteErrors(t *testing.T) {
 		{"representation id with backslash", mpdOpen + `<Period><Representation id="\evil.example"/></Period></MPD>`, ErrInvalidManifest},
 		{"representation id with space", mpdOpen + `<Period><Representation id="a b"/></Period></MPD>`, ErrInvalidManifest},
 		{"essential chaining", mpdOpen + `<EssentialProperty schemeIdUri="urn:mpeg:dash:chaining:2016" value="https://next.example/"/><Period/></MPD>`, ErrInvalidManifest},
-		{"base after use", mpdOpen + `<Period><SegmentTemplate media="../x/$Number$.m4s"/><BaseURL>https://other.example/</BaseURL></Period></MPD>`, ErrInvalidManifest},
-		{"MPD base after period base", mpdOpen + `<Period><BaseURL>dash/</BaseURL></Period><BaseURL>https://other.example/</BaseURL></MPD>`, ErrInvalidManifest},
 		{"latin-1", `<?xml version="1.0" encoding="ISO-8859-1"?><MPD><Period/></MPD>`, ErrInvalidManifest},
 		{"xml 1.1", `<?xml version="1.1"?><MPD><Period/></MPD>`, ErrInvalidManifest},
 		{"too deep", mpdOpen + strings.Repeat("<a>", maxDepth) + strings.Repeat("</a>", maxDepth) + `</MPD>`, ErrInvalidManifest},

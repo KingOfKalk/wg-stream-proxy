@@ -107,10 +107,14 @@ func hasPrefixFold(b []byte, prefix string) bool {
 
 // xmlRoot returns the local name of the root element of an XML document
 // that starts at b (after an optional UTF-8 BOM), as encoding/xml reads
-// it: after the XML declaration, processing instructions, comments and a
-// doctype with its internal subset. ok is false if no root element
-// starts within b or b is not XML up to it. The declared encoding is
-// ignored: element names are ASCII in every format concerned.
+// it. ok is false if no root element starts within b, if b is not XML up
+// to it, or if the prolog could hide another root element from players'
+// lighter parsers, which end comments, processing instructions and
+// declarations at other places: the prolog may hold only whitespace, the
+// XML declaration, comments and a doctype without internal subset, none
+// of them with '<' or '>' inside, and no comment starting with '-'. The
+// declared encoding is ignored: element names are ASCII in every format
+// concerned.
 func xmlRoot(b []byte) (name string, ok bool) {
 	d := xml.NewDecoder(bytes.NewReader(bytes.TrimPrefix(b, []byte(utf8BOM))))
 	d.Strict = false
@@ -120,9 +124,28 @@ func xmlRoot(b []byte) (name string, ok bool) {
 		if err != nil {
 			return "", false
 		}
-		if se, ok := t.(xml.StartElement); ok {
+		switch t := t.(type) {
+		case xml.StartElement:
 			// RawToken returns a start tag only when it is complete.
-			return se.Name.Local, true
+			return t.Name.Local, true
+		case xml.CharData:
+			if len(bytes.Trim(t, " \t\r\n")) > 0 {
+				return "", false
+			}
+		case xml.Comment:
+			if bytes.HasPrefix(t, []byte("-")) || bytes.ContainsAny(t, "<>") {
+				return "", false
+			}
+		case xml.ProcInst:
+			if t.Target != "xml" || bytes.ContainsAny(t.Inst, "<>") {
+				return "", false
+			}
+		case xml.Directive:
+			if bytes.ContainsAny(t, "<>[") {
+				return "", false
+			}
+		default:
+			return "", false
 		}
 	}
 }
@@ -132,8 +155,35 @@ func xmlRoot(b []byte) (name string, ok bool) {
 // of Detect and Unsupported would not see a playlist in them.
 func wideBOM(b []byte) bool {
 	return bytes.HasPrefix(b, []byte("\xfe\xff")) || bytes.HasPrefix(b, []byte("\xff\xfe")) ||
-		bytes.HasPrefix(b, []byte("\x00\x00\xfe\xff"))
+		bytes.HasPrefix(b, []byte("\x00\x00\xfe\xff")) || wideXML(b)
 }
+
+// wideXML reports whether b starts like XML in UTF-16 or UTF-32 without
+// a byte order mark: '<' as a 16- or 32-bit code unit followed by an
+// ASCII character, after UTF-16 whitespace. Media starts differ: an fMP4
+// box size such as 00 00 00 3C is followed by its type, not by zeros.
+func wideXML(b []byte) bool {
+	be, le := b, b
+	for len(be) >= 2 && be[0] == 0 && isXMLSpace(be[1]) {
+		be = be[2:]
+	}
+	for len(le) >= 2 && isXMLSpace(le[0]) && le[1] == 0 {
+		le = le[2:]
+	}
+	switch {
+	case len(be) >= 4 && be[0] == 0 && be[1] == '<' && be[2] == 0 && be[3] != 0 && be[3] < 0x80:
+		return true // UTF-16BE
+	case len(le) >= 4 && le[0] == '<' && le[1] == 0 && le[2] != 0 && le[2] < 0x80 && le[3] == 0:
+		return true // UTF-16LE
+	case len(b) >= 8 && bytes.HasPrefix(b, []byte("\x00\x00\x00<\x00\x00\x00")) && b[7] != 0:
+		return true // UTF-32BE
+	case len(b) >= 8 && bytes.HasPrefix(b, []byte("<\x00\x00\x00")) && b[4] != 0 && bytes.Equal(b[5:8], []byte{0, 0, 0}):
+		return true // UTF-32LE
+	}
+	return false
+}
+
+func isXMLSpace(c byte) bool { return c == ' ' || c == '\t' || c == '\r' || c == '\n' }
 
 // xmlStart reports whether the body starting with prefix begins like
 // XML: '<' after an optional UTF-8 BOM and whitespace.

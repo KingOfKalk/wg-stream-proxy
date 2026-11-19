@@ -100,11 +100,11 @@ func Rewrite(playlist []byte, final *url.URL, appendURL func(dst, abs []byte) []
 }
 
 // maxOutput is the largest rewritten playlist for an input of n bytes:
-// 16 times the input, at least 1 MiB and at most 128 MiB. A short URI can
+// 16 times the input, at least 1 MiB and at most 64 MiB. A short URI can
 // become a long resource URL, so without a limit a small playlist could
 // grow by orders of magnitude.
 func maxOutput(n int) int {
-	return min(max(16*n, 1<<20), 128<<20)
+	return min(max(16*n, 1<<20), 64<<20)
 }
 
 // outputCap is the initial capacity of the output for a playlist of n
