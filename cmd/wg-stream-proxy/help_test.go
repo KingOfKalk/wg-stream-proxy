@@ -9,7 +9,7 @@ import (
 
 const wantDescription = "Route each IPTV and internet radio channel through its own userspace WireGuard tunnel (or direct) and serve them as one M3U playlist for Kodi, VLC and other players."
 
-var allCommands = []string{"serve", "check", "import", "epg", "healthcheck", "tunnel", "version", "help"}
+var allCommands = []string{"serve", "check", "probe", "import", "epg", "healthcheck", "tunnel", "version", "help"}
 
 func TestTopLevelHelp(t *testing.T) {
 	tests := []struct {
@@ -63,6 +63,7 @@ func TestCommandHelp(t *testing.T) {
 	}{
 		{"serve", configFlags},
 		{"check", configFlags},
+		{"probe", append([]string{"-route", "-header", "-json", "-standalone", "<url>"}, configFlags...)},
 		{"healthcheck", configFlags},
 		{"import", []string{"-tunnel", "-out", "-match-epg", "-config-dir"}},
 		{"epg", []string{"epg ids", "epg match"}},

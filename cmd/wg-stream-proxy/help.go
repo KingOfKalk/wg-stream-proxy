@@ -20,6 +20,7 @@ const description = "Route each IPTV and internet radio channel through its own 
 var commands = []struct{ name, summary string }{
 	{"serve", "run the proxy (default)"},
 	{"check", "validate the config"},
+	{"probe", "test a URL through a route"},
 	{"import", "convert an M3U file to one channel file"},
 	{"epg", "list or match EPG ids"},
 	{"healthcheck", "query /healthz on the listen address"},
@@ -47,6 +48,13 @@ var topics = map[string]topic{
 		usage: "check [flags]",
 		desc:  "Validate config.toml, the channel files, the tunnel files and the signing key variables. Lists every error and starts nothing.",
 		flags: func() *flag.FlagSet { fs, _ := configFlagSet("check"); return fs },
+	},
+	"probe": {
+		usage: "probe [flags] <url>",
+		desc: "Test a URL through a route without adding a channel: fetch it like the proxy would (private-range guard, [upstream] timeouts and limits) and report the final URL (host and file name only), status, content type, the detected format (HLS master or media, raw or ICY, or a refused playlist format) and where the time went (tunnel start, DNS, connect, TLS, first byte). For an HLS playlist the first variant and the first segment are probed too. " +
+			"Exit code 0 if the proxy would serve the URL, 1 if not, 2 for usage errors. The URL may come before or after the flags.\n\n" +
+			"If the proxy runs and [debug] listen is set, the running proxy makes the requests through its running tunnel (a changed channel, tunnel or config file counts only after its reload). Without a debug listener, or if nothing listens there, probe runs standalone and starts the tunnel of the route itself, which can stall streams of a running proxy with the same tunnel key; --standalone forces this. The output says which mode ran.",
+		flags: func() *flag.FlagSet { return newProbeFlags().fset },
 	},
 	"import": {
 		usage: "import <file.m3u> [flags]",

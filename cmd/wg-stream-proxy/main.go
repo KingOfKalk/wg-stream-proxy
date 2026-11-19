@@ -53,9 +53,10 @@ type cli struct {
 	reloaded func(error)
 	// clock schedules the config file checks; nil means the system clock.
 	clock route.Clock
-	// epgAllowPrivate adds private-range guard exceptions per route name
-	// for the EPG download (tests allow the loopback range).
-	epgAllowPrivate map[string][]netip.Prefix
+	// allowPrivate adds private-range guard exceptions per route name
+	// for the EPG download and the probe command (tests allow the
+	// loopback range).
+	allowPrivate map[string][]netip.Prefix
 }
 
 // run dispatches the subcommand in args and returns the process exit code.
@@ -102,6 +103,8 @@ func (c *cli) run(args []string) int {
 		return c.tunnelCmd(args)
 	case "import":
 		return c.importM3U(args)
+	case "probe":
+		return c.probeCmd(args)
 	case "epg":
 		return c.epgCmd(args)
 	default:
