@@ -106,6 +106,34 @@ Kodi cannot play MP3 radio streams through `inputstream.adaptive`. With the glob
 
 An empty value removes a key set by a lower layer for `headers`, `attrs` and `extra` (spec 5.4).
 
+## DASH channels in Kodi
+
+Kodi plays MPEG-DASH through `inputstream.adaptive`. A channel is DASH if its URL path contains `.mpd` or it has `upstream.type = "dash"`; the channel list then points to `/c/<id>.mpd` (spec 6). A channel file for DASH channels:
+
+```toml
+# channels.d/dash.toml
+tunnel = "gr"
+
+[defaults.playlist.extra.KODIPROP]
+"inputstream" = "inputstream.adaptive"
+"mimetype" = "application/dash+xml"
+
+[[channel]]
+name = "Example News"
+url = "https://live.example.com/news/manifest.mpd"
+
+[[channel]]
+name = "Example Sport"
+url = "https://live.example.com/sport/play"   # no .mpd in the path
+
+[channel.upstream]
+type = "dash"
+```
+
+The playlist then has `#KODIPROP:inputstream=inputstream.adaptive` and `#KODIPROP:mimetype=application/dash+xml` before each channel's `#EXTINF` line. Kodi 20 and older also need `"inputstream.adaptive.manifest_type" = "mpd"` (deprecated since Kodi 21). With `inputstream.adaptive` set in `_defaults.toml` (above), only the DASH-specific keys go into this file.
+
+The proxy rewrites the manifest so that every segment, the time source (`UTCTiming`) and manifest reloads go through the proxy and the channel's tunnel (spec 3.6). DASH with DRM is not supported: a manifest with `ContentProtection` is refused with `502` and the log line `DRM manifest refused`. DASH channels get no error clip (below).
+
 ## When a channel fails
 
 An HLS channel (one listed with `.m3u8`) that fails to start plays a short error clip instead of Kodi's "Playback failed" dialog: about 5 s of a dark still with one line of text, then playback stops ([spec 3.4](spec.md)).

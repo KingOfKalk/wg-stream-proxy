@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Made-up live channel modelled on a broadcaster's origin packager -->
+<MPD xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns="urn:mpeg:dash:schema:mpd:2011" xsi:schemaLocation="urn:mpeg:dash:schema:mpd:2011 http://standards.iso.org/ittf/PubliclyAvailableStandards/MPEG-DASH_schema_files/DASH-MPD.xsd" type="dynamic" availabilityStartTime="1970-01-01T00:00:00Z" publishTime="2026-11-19T12:00:00Z" minimumUpdatePeriod="PT2S" timeShiftBufferDepth="PT1M1.440S" maxSegmentDuration="PT2S" minBufferTime="PT2S" profiles="urn:mpeg:dash:profile:isoff-live:2011,urn:com:dashif:dash264"><BaseURL>http://wsp.lan/p/n/{https://cdn.example.net/ch/}/</BaseURL>
+  <Period id="1" start="PT0S">
+    <BaseURL>http://wsp.lan/p/n/{https://cdn.example.net/ch/dash/}/</BaseURL>
+    <AdaptationSet id="1" group="1" contentType="audio" lang="en" segmentAlignment="true" audioSamplingRate="48000" mimeType="audio/mp4" codecs="mp4a.40.2" startWithSAP="1">
+      <AudioChannelConfiguration schemeIdUri="urn:mpeg:dash:23003:3:audio_channel_configuration:2011" value="2"/>
+      <Role schemeIdUri="urn:mpeg:dash:role:2011" value="main"/>
+      <SegmentTemplate timescale="48000" initialization="News-$RepresentationID$.dash" media="News-$RepresentationID$-$Time$.dash">
+        <!-- 2026-11-19T11:59:00Z - 2026-11-19T12:00:00Z -->
+        <SegmentTimeline>
+          <S t="86400000000000" d="92160" r="31"/>
+        </SegmentTimeline>
+      </SegmentTemplate>
+      <Representation id="audio_eng=128000" bandwidth="128000">
+      </Representation>
+    </AdaptationSet>
+    <AdaptationSet id="2" group="3" contentType="text" lang="en" mimeType="application/mp4" codecs="stpp.ttml.im1t" startWithSAP="1">
+      <Role schemeIdUri="urn:mpeg:dash:role:2011" value="subtitle"/>
+      <SegmentTemplate timescale="1000" initialization="News-$RepresentationID$.dash" media="News-$RepresentationID$-$Time$.dash">
+        <SegmentTimeline>
+          <S t="1800000000000" d="1920" r="31"/>
+        </SegmentTimeline>
+      </SegmentTemplate>
+      <Representation id="textstream_eng=8000" bandwidth="8000">
+      </Representation>
+    </AdaptationSet>
+    <AdaptationSet id="3" group="2" contentType="video" par="16:9" maxWidth="1920" maxHeight="1080" segmentAlignment="true" sar="1:1" frameRate="25" mimeType="video/mp4" startWithSAP="1">
+      <Role schemeIdUri="urn:mpeg:dash:role:2011" value="main"/>
+      <SegmentTemplate timescale="600" initialization="News-$RepresentationID$.dash" media="News-$RepresentationID$-$Time$.dash">
+        <SegmentTimeline>
+          <S t="1080000000000" d="1152" r="31"/>
+        </SegmentTimeline>
+      </SegmentTemplate>
+      <Representation id="video=1067600" bandwidth="1067600" width="640" height="360" codecs="avc1.64001E" scanType="progressive">
+      </Representation>
+      <Representation id="video=6176000" bandwidth="6176000" width="1920" height="1080" codecs="avc1.640028" scanType="progressive">
+      </Representation>
+    </AdaptationSet>
+    <AdaptationSet id="4" contentType="image" mimeType="image/jpeg">
+      <SegmentTemplate timescale="1" duration="10" media="thumbnails/News-$RepresentationID$-$Number$.jpeg"/>
+      <Representation bandwidth="10000" id="thumbnail" width="240" height="135">
+        <EssentialProperty schemeIdUri="http://dashif.org/guidelines/thumbnail_tile" value="1x1"/>
+      </Representation>
+    </AdaptationSet>
+  </Period>
+  <UTCTiming schemeIdUri="urn:mpeg:dash:utc:http-iso:2014" value="http://wsp.lan/time"/>
+</MPD>

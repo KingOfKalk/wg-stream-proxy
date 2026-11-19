@@ -140,6 +140,12 @@ func TestFetchRequestHeaders(t *testing.T) {
 			absent: []string{"Range"},
 		},
 		{
+			name:   "no range for mpd",
+			path:   "/live/manifest.MPD?t=1",
+			client: http.Header{"Range": {"bytes=0-"}},
+			absent: []string{"Range"},
+		},
+		{
 			name:   "query does not make a playlist",
 			path:   "/seg.ts?type=.m3u8",
 			client: http.Header{"Range": {"bytes=10-"}},

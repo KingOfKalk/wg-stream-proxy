@@ -1,10 +1,11 @@
 # wg-stream-proxy
 
-Route each IPTV and internet radio channel through its own userspace WireGuard tunnel (or direct) and serve them as one M3U playlist for Kodi, VLC and other players. Proxies HLS (TS, fMP4, AES-128) and raw/ICY audio streams; no root, no TUN device, fails closed.
+Route each IPTV and internet radio channel through its own userspace WireGuard tunnel (or direct) and serve them as one M3U playlist for Kodi, VLC and other players. Proxies HLS (TS, fMP4, AES-128), MPEG-DASH without DRM and raw/ICY audio streams; no root, no TUN device, fails closed.
 
 ## Features
 
 - HLS: playlists are rewritten so every playlist, segment and key is fetched through the channel's route; TS, fMP4 and AES-128 (keys are passed through, the player decrypts).
+- MPEG-DASH without DRM: manifests are rewritten so every segment, the time source and manifest reloads go through the channel's route; `SegmentTemplate`, `SegmentTimeline`, `SegmentList`, live and VOD. DRM manifests are refused.
 - Radio: raw and ICY (Icecast, Shoutcast) audio streams.
 - Per-channel routes: each channel uses a named WireGuard tunnel or `direct`; several tunnels run in one process. A channel never silently bypasses its tunnel, and a private-range guard blocks the LAN and the host.
 - One M3U channel list (`/playlist.m3u8`) with EPG link, logos and Kodi directives; `import` converts an existing M3U file.
@@ -25,7 +26,7 @@ Route each IPTV and internet radio channel through its own userspace WireGuard t
 
 - Decryption, DRM licenses or keys (permanent).
 - Transcoding, restreaming, web UI, Xtream Codes, multi-user.
-- DASH: not supported yet (DASH without DRM is planned for v0.4).
+- DASH with DRM (`ContentProtection`): refused.
 
 ## Security
 

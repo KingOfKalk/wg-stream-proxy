@@ -73,6 +73,7 @@ func TestUnsupported(t *testing.T) {
 		{"dash body with comment", "", "<?xml version=\"1.0\"?>\n<!-- generated -->\n<MPD>", Auto, "dash"},
 		{"dash body prefixed root", "", `<mpd:MPD xmlns:mpd="urn:mpeg:dash:schema:mpd:2011">`, Auto, "dash"},
 		{"dash body on a raw channel", "video/mp2t", "<MPD\n type=\"static\">", Raw, "dash"},
+		{"dash body on a dash channel", "application/dash+xml", "<MPD>", DASH, ""},
 		{"xspf body", "text/xml", `<?xml version="1.0" encoding="UTF-8"?><playlist version="1" xmlns="http://xspf.org/ns/0/">`, Auto, "xspf"},
 		{"asx body", "", "<ASX version=\"3.0\">\r\n<Entry><Ref href=\"http://radio.example/s\"/></Entry>", Auto, "asx"},
 		{"asx body lower case", "", "<asx version=\"3.0\">", Auto, "asx"},

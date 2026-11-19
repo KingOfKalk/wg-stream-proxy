@@ -218,7 +218,7 @@
       "id": 4,
       "type": "stat",
       "title": "Active requests",
-      "description": "Requests in flight under /c/ and /r/, open raw streams included (wsp_active_requests).",
+      "description": "Requests in flight under /c/, /r/ and /p/, open raw streams included (wsp_active_requests).",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -1170,7 +1170,7 @@
       "id": 19,
       "type": "timeseries",
       "title": "Errors by reason and error clips",
-      "description": "Upstream failures per second by reason: connect, timeout, guard, tls, redirects, size, unsupported, other (wsp_upstream_errors_total); and error clips shown to viewers instead of an HTTP error, by clip (wsp_error_clips_total, all channels).",
+      "description": "Upstream failures per second by reason: connect, timeout, guard, tls, redirects, size, unsupported, drm, other (wsp_upstream_errors_total); and error clips shown to viewers instead of an HTTP error, by clip (wsp_error_clips_total, all channels).",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"

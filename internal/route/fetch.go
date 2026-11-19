@@ -212,11 +212,11 @@ func requestHeader(u *url.URL, merged, client http.Header, userAgent string) htt
 	return h
 }
 
-// IsPlaylistPath reports whether path ends in .m3u8 or .m3u,
+// IsPlaylistPath reports whether path ends in .m3u8, .m3u or .mpd,
 // case-insensitively.
 func IsPlaylistPath(path string) bool {
 	p := strings.ToLower(path)
-	return strings.HasSuffix(p, ".m3u8") || strings.HasSuffix(p, ".m3u")
+	return strings.HasSuffix(p, ".m3u8") || strings.HasSuffix(p, ".m3u") || strings.HasSuffix(p, ".mpd")
 }
 
 // timedBody is a response body with the resettable read timer: the timer

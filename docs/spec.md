@@ -1,6 +1,6 @@
 # wg-stream-proxy - Specification
 
-> Route each IPTV and internet radio channel through its own userspace WireGuard tunnel (or direct) and serve them as one M3U playlist for Kodi, VLC and other players. Proxies HLS (TS, fMP4, AES-128) and raw/ICY audio streams; no root, no TUN device, fails closed.
+> Route each IPTV and internet radio channel through its own userspace WireGuard tunnel (or direct) and serve them as one M3U playlist for Kodi, VLC and other players. Proxies HLS (TS, fMP4, AES-128), MPEG-DASH without DRM and raw/ICY audio streams; no root, no TUN device, fails closed.
 
 - Repository: `github.com/KingOfKalk/wg-stream-proxy`, Go, AGPL-3.0-or-later
 - Status: binding for the latest [release](https://github.com/KingOfKalk/wg-stream-proxy/releases); the roadmap (section 10) lists what is released and what is planned
@@ -13,7 +13,7 @@
 - Route each channel through a chosen WireGuard tunnel, or explicitly `direct`. Nothing else on the host is affected.
 - Multiple tunnels in one process, fully in userspace (no TUN device, no root, no kernel module).
 - One extended M3U channel list (`/playlist.m3u8`) for Kodi (IPTV Simple Client), VLC and other players.
-- HLS passthrough with playlist rewriting; raw passthrough for radio and MPEG-TS.
+- HLS and MPEG-DASH (without DRM) passthrough with playlist and manifest rewriting; raw passthrough for radio and MPEG-TS.
 - Fail closed: a channel never silently bypasses its tunnel.
 - Migration from an existing M3U file via `import`.
 - Capacity: 3 concurrent viewers (household use).
@@ -22,7 +22,7 @@
 
 - Decryption, DRM licenses or keys inside the proxy (permanent). AES-128 HLS keys are only passed through.
 - Transcoding, restreaming, Widevine passthrough, Kodi add-on, web UI, Xtream Codes, multi-user.
-- DASH: not supported (DASH without DRM planned for v0.4, spec 10).
+- DASH with DRM: manifests with `ContentProtection` are refused (3.6).
 
 ### 1.3 Platforms
 
@@ -37,8 +37,9 @@ Player (Kodi / VLC)
    | HTTP (LAN)
 wg-stream-proxy
    |-- /playlist.m3u8   channel list generator
-   |-- /c/{id}          channel entry: type detection, HLS rewrite or raw pipe
+   |-- /c/{id}          channel entry: type detection, HLS or DASH rewrite or raw pipe
    |-- /r/...           signed resources (sub-playlists, segments, keys)
+   |-- /p/...           prefix-signed resources (DASH segments)
    |-- routes           one per tunnel + "direct", each with http.Transport and private-range guard
    '-- tunnels          wireguard-go device + gVisor netstack per tunnel file
 ```
@@ -65,13 +66,14 @@ wg-stream-proxy
 
 1. Fetch the channel URL through the channel's route.
 2. Detect the type:
-   1. `upstream.type = "hls"` or `"raw"` set: use it.
-   2. `Content-Type` is `application/vnd.apple.mpegurl` or `application/x-mpegurl` (case-insensitive, parameters ignored): HLS.
+   1. `upstream.type = "hls"`, `"dash"` or `"raw"` set: use it.
+   2. `Content-Type` (case-insensitive, parameters ignored) is `application/vnd.apple.mpegurl` or `application/x-mpegurl`: HLS; `application/dash+xml`: DASH.
    3. Body starts with `#EXTM3U` (after optional UTF-8 BOM and whitespace, within the first 512 bytes): HLS.
-   4. Otherwise: raw.
-3. HLS: rewrite (3.2) and return. Raw: pipe (3.3), unless it is a playlist the proxy does not rewrite (refused, 3.3).
+   4. Body is XML with the root element `MPD` (case-insensitive, namespace prefix ignored, after optional UTF-8 BOM, XML declaration, comments and doctype, within the first 512 bytes): DASH.
+   5. Otherwise: raw.
+3. HLS: rewrite (3.2) and return. DASH: rewrite (3.6) and return. Raw: pipe (3.3), unless it is a playlist the proxy does not rewrite (refused, 3.3).
 
-Resources under `/r/` use the same detection (steps 2.2-2.4): playlists are rewritten, playlists the proxy does not rewrite are refused (3.3), everything else is streamed with `io.Copy`.
+Resources under `/r/` and `/p/` (4, 4.1) use the same detection (steps 2.2-2.5): playlists and manifests are rewritten, playlists the proxy does not rewrite are refused (3.3), everything else is streamed with `io.Copy`.
 
 ### 3.2 HLS rewriting
 
@@ -91,13 +93,13 @@ Resources under `/r/` use the same detection (steps 2.2-2.4): playlists are rewr
 ### 3.3 Raw passthrough
 
 - Upstream body piped with `io.Copy` and flush; no size or total time limit.
-- Fail closed: a playlist the proxy does not rewrite is refused with `502` instead of piped, on `raw` and `auto` channels and `/r/` resources, because the player would fetch the URLs in it directly, past the tunnel. Checked on `GET` responses with a `2xx` status (`HEAD` and other statuses send no playlist); `hls` channels are always rewritten (3.2). Detected, after the HLS detection of 3.1:
-  - by `Content-Type` (case-insensitive, parameters ignored; not on `raw` channels, whose configured type overrides it): PLS `audio/x-scpls`, `audio/scpls`, `application/pls+xml`; M3U `audio/x-mpegurl`, `audio/mpegurl`; DASH `application/dash+xml`; XSPF `application/xspf+xml`; ASX `video/x-ms-asx`, `audio/x-ms-asx`, `video/x-ms-wvx`, `audio/x-ms-wax`;
-  - by the start of the body (first 512 bytes, after optional UTF-8 BOM and whitespace): `[playlist]` (PLS) or `[Reference]` (ASX reference file), case-insensitive; `#EXTM3U` (reaches this check only on `raw` channels); a first line that is neither blank nor a `#` comment and is an absolute URL (`scheme://`, scheme of two or more characters) or a scheme-relative one (`//`) without control characters (plain M3U); an XML root element `MPD`, `playlist` or `ASX` (case-insensitive, namespace prefix ignored, after XML declaration, comments and doctype).
+- Fail closed: a playlist the proxy does not rewrite is refused with `502` instead of piped, on `raw` and `auto` channels and `/r/` and `/p/` resources, because the player would fetch the URLs in it directly, past the tunnel. Checked on `GET` responses with a `2xx` status (`HEAD` and other statuses send no playlist); `hls` and `dash` channels are always rewritten (3.2, 3.6). Detected, after the HLS and DASH detection of 3.1:
+  - by `Content-Type` (case-insensitive, parameters ignored; not on `raw` channels, whose configured type overrides it): PLS `audio/x-scpls`, `audio/scpls`, `application/pls+xml`; M3U `audio/x-mpegurl`, `audio/mpegurl`; XSPF `application/xspf+xml`; ASX `video/x-ms-asx`, `audio/x-ms-asx`, `video/x-ms-wvx`, `audio/x-ms-wax`;
+  - by the start of the body (first 512 bytes, after optional UTF-8 BOM and whitespace): `[playlist]` (PLS) or `[Reference]` (ASX reference file), case-insensitive; `#EXTM3U` (reaches this check only on `raw` channels); a first line that is neither blank nor a `#` comment and is an absolute URL (`scheme://`, scheme of two or more characters) or a scheme-relative one (`//`) without control characters (plain M3U); an XML root element `MPD` (DASH, reaches this check only on `raw` channels), `playlist` or `ASX` (case-insensitive, namespace prefix ignored, after XML declaration, comments and doctype).
   - Media (MPEG-TS, fMP4, MP3, AAC, Ogg, ICY streams) matches none of these. A `warn` log line names channel, route, URL (8) and format (`pls`, `m3u`, `dash`, `xspf`, `asx`); metrics reason `unsupported` (7.3).
-  - Rewriting PLS and plain M3U (internet radio) is a possible later feature; DASH is planned for v0.4 (10).
+  - Rewriting PLS and plain M3U (internet radio) is a possible later feature.
 - Shoutcast v1 servers answer `ICY 200 OK`; the raw route's connection wrapper rewrites a leading `ICY ` status line to `HTTP/1.0 ` before Go's HTTP parser sees it.
-  - Used for `/c/` requests of `raw` and `auto` channels (the type of `auto` is only known from the response; the wrapper leaves `HTTP/` responses unchanged). These connections are not reused (one request per connection); `hls` channels and `/r/` resources use the normal pool.
+  - Used for `/c/` requests of `raw` and `auto` channels (the type of `auto` is only known from the response; the wrapper leaves `HTTP/` responses unchanged). These connections are not reused (one request per connection); `hls` and `dash` channels and `/r/` and `/p/` resources use the normal pool.
   - Only the first bytes of each connection are checked, so a connection carries one request: an ICY response has no length and ends with its connection, and a server may answer one port with ICY or HTTP per path. Over `https` the wrapper sees TLS records and changes nothing (Shoutcast v1 has no TLS).
 - `Icy-MetaData` is forwarded from the client; `icy-*` response headers are copied back.
 
@@ -106,11 +108,11 @@ Resources under `/r/` use the same detection (steps 2.2-2.4): playlists are rewr
 - Request headers to upstream:
   - `User-Agent`: from merged `upstream.headers` if set, else `[upstream] user_agent`; none if a layer removed it with an empty value (5.4).
   - Merged `upstream.headers` (header names case-insensitive, canonicalised).
-  - From the client only: `Range`, `If-Range`, `Icy-MetaData`. `Range` is not forwarded for URLs whose path ends in `.m3u8` or `.m3u` (case-insensitive, query ignored).
+  - From the client only: `Range`, `If-Range`, `Icy-MetaData`. `Range` is not forwarded for URLs whose path ends in `.m3u8`, `.m3u` or `.mpd` (case-insensitive, query ignored).
   - The same rules apply on every redirect hop; no automatic `Referer`.
 - `HEAD` requests: handled like `GET` (the upstream request is always `GET`), response headers relayed, upstream body closed immediately, no body sent; `auto` type detection uses only the `Content-Type`.
 - Response headers copied to the client: `Content-Type`, `Content-Range`, `Accept-Ranges`, `Cache-Control`, `Last-Modified`, `icy-*`; `Content-Length` and `ETag` only if the body is neither rewritten nor transparently decompressed.
-- Rewritten playlists: `Content-Type: application/vnd.apple.mpegurl`, uncompressed, `Cache-Control: no-cache`, status `200` (a playlist answered with `206` is refetched without `Range` and `If-Range`; another `206` gives `502`).
+- Rewritten playlists: `Content-Type: application/vnd.apple.mpegurl` (DASH manifests: `application/dash+xml`), uncompressed, `Cache-Control: no-cache`, status `200` (a playlist answered with `206` is refetched without `Range` and `If-Range`; another `206` gives `502`).
 - Status mapping: upstream `2xx` and `4xx` passed through; upstream `5xx`, other statuses (e.g. a `3xx` that is not followed) and connection errors return `502`; timeouts return `504`.
 - Limits: max 10 redirects (`301`, `302`, `303`, `307`, `308` with `Location`; each hop goes through the guard), playlist body max `[upstream] max_playlist_size` (default 8 MiB, at most 32 MiB; a larger body gives `502`, metrics reason `size`), upstream URL max 4096 bytes (redirect targets included).
 - Timeouts (`[upstream]`): `connect_timeout` (10s), `header_timeout` until response headers (15s), `read_timeout` between body reads (30s, implemented as a resettable timer). No total timeout.
@@ -121,7 +123,7 @@ Resources under `/r/` use the same detection (steps 2.2-2.4): playlists are rewr
   - Failures: every `502` and `504` of this section, of the tunnel start (2.1), of the playlist checks (3.2, 3.3) and of the guard (3.5), and an upstream `4xx`.
   - Answer: `200`, `Content-Type: application/vnd.apple.mpegurl`, `Cache-Control: no-store`, a VOD media playlist (`#EXT-X-VERSION:3`, `#EXT-X-TARGETDURATION:1`, `#EXT-X-MEDIA-SEQUENCE:0`, `#EXT-X-PLAYLIST-TYPE:VOD`, `#EXT-X-ENDLIST`) that lists the clip's segment 5 times (`#EXTINF:0.960,`, 4.8 s) as `/clip/{name}/{n}.ts` with `n` = 0-4 (7.1), absolute like resource URLs.
   - Clip per failure: `tunnel-unreachable` ("Tunnel not reachable") when the tunnel did not start (start failure, no handshake within `connect_timeout`, a start cancelled by a reload); `channel-blocked` ("Channel blocked by configuration") for a guard refusal (3.5) or an upstream address outside the tunnel's `AllowedIPs` (5.5, also when a name resolves only to such addresses); `channel-not-available` ("Channel not available") for everything else: DNS, connect, TLS, redirects, size, timeouts, upstream statuses, rejected and refused playlists.
-  - Unchanged: `HEAD`, `/r/`, channels listed without `.m3u8` and `error = false` keep the statuses above; an unknown or disabled channel stays `404`.
+  - Unchanged: `HEAD`, `/r/`, `/p/`, channels listed without `.m3u8` and `error = false` keep the statuses above; an unknown or disabled channel stays `404`.
   - Logs and metrics count the failure as they do without a clip; its `warn` line gets `clip=<name>`. An upstream `4xx` answered with a clip gets the `upstream error status` line of a `5xx`. Served clips count in `error_clips_total` (7.3).
 
 ### 3.5 Private-range guard
@@ -131,6 +133,29 @@ Resources under `/r/` use the same detection (steps 2.2-2.4): playlists are rewr
 - Blocked: loopback, RFC 1918, RFC 6598, link-local, IPv6 ULA, unspecified (`0.0.0.0/8`, `::`), multicast, IPv4-mapped forms of these. Public IPs and any port are allowed.
 - Exceptions per route: `[upstream.allow_private] direct = ["192.168.1.0/24"]`, `gr = ["10.8.0.0/24"]`.
 - Blocked addresses of a DNS answer are skipped; if none is left, the request fails like a connection error with `502` (metrics reason `guard`).
+
+### 3.6 DASH rewriting
+
+MPEG-DASH manifests (MPD) without DRM. Players build segment URLs themselves from `SegmentTemplate`, so per-URL signatures (4) cannot work: every base URL of the manifest becomes a prefix-signed URL (4.1) instead, and the player builds the segment URLs below it.
+
+- Stateless like HLS (3.2): the manifest is fetched and rewritten on every player request, so `type="dynamic"` (live) manifests reload through the proxy; `max_playlist_size` applies (3.4).
+- Token-level XML: elements and attributes the rewriter changes are written again (attribute values re-escaped); every other byte (declaration, comments, whitespace, unknown elements and namespaces, `SegmentTimeline`) stays unchanged. Names of the elements and attributes below match by local name, case-insensitively, whatever their namespace prefix.
+- Rewritten:
+  - Every `BaseURL`, on any level: resolved against the first `BaseURL` of the level above (the manifest's final URL after redirects at the top) and replaced by the prefix URL of its directory plus its file name and query, e.g. `dash/` becomes `http://wsp.lan:2349/p/{channel}/{sig}/n/{b64prefix}/`. Its attributes (`serviceLocation`, ...) stay. Several `BaseURL` elements on one level (CDN failover) each get their own prefix URL; relative ones on the level below resolve against the first.
+  - An `MPD` without its own `BaseURL` gets one for the manifest's directory, as its first child, so references the player would resolve against the proxy URL of the manifest stay below the upstream directory.
+  - Segment references (`SegmentTemplate` `media`, `initialization`, `index`, `bitstreamSwitching`; `SegmentURL` `media`, `index`; `sourceURL` of `Initialization`, `RepresentationIndex`, `BitstreamSwitching`): plain relative references stay unchanged and resolve against the rewritten `BaseURL`. Absolute, scheme-relative (`//`), rooted (`/`) and dot-segment (`.`, `..`) references, and relative ones with `:` in the first segment, become the prefix URL of their fixed directory (up to the last `/` before the first `$`, `?` or `#`, resolved against the `BaseURL` above) plus the rest, template identifiers kept.
+  - `UTCTiming` other than `direct` (`urn:mpeg:dash:utc:direct:2014` or `:2012`): `schemeIdUri="urn:mpeg:dash:utc:http-iso:2014"` and `value` the proxy's `/time` (7.1), so the player never asks an upstream time server.
+- Prefix URLs allow a query (mode `q`, 4.1) if the URL they stand for has one; `BaseURL` prefix URLs also if a plain segment reference of the manifest has one.
+- Removed with their content: `Location` (the player reloads the proxy URL it has), `PatchLocation` (the player reloads the whole manifest), `ContentSteering`, `Metrics` (reporting URLs), `SupplementalProperty` of MPD chaining or fallback (`urn:mpeg:dash:chaining:2016`, `urn:mpeg:dash:fallback:2016`).
+- Refused with `502` (fail closed, metrics reason `drm`, 7.3): a manifest with a `ContentProtection` element anywhere. It is never passed through (1.2).
+- Rejected with `502` (metrics reason `other`), instead of leaving a URL the player could fetch directly or that players read differently:
+  - XML that is not well-formed UTF-8 XML 1.0, a `DOCTYPE` or other declaration (no entities), text or elements outside the single root element, a root element other than `MPD`, an empty `MPD`, nesting deeper than 32 elements;
+  - duplicate attributes (also an interpreted attribute twice in another case or with another prefix), `xml:base`, remote elements (`xlink:href` other than `urn:mpeg:dash:resolve-to-zero:2013`);
+  - a `BaseURL` with child elements or processing instructions; a `BaseURL` or segment reference with whitespace (other than around it), control characters or `\`, that does not parse, does not resolve to `http(s)` with a host, has user info, or has a template identifier before the end of its host;
+  - a `Representation` `id` with whitespace, control characters, `:` or `\`, or starting with `/` (`$RepresentationID$` must not turn a relative reference into an absolute one); an `EssentialProperty` of MPD chaining or fallback;
+  - a `BaseURL` after a reference on the same or a lower level that was resolved against the base it would change.
+- Error clips (3.4) are only for channels listed with `.m3u8`; DASH channels (listed with `.mpd`, 6) get the HTTP status.
+- Not supported: `xlink` remote elements, `Location` and `PatchLocation` updates, DRM. A rooted or dot-segment template on a level above a `Representation` with its own `BaseURL` resolves against the base of its own level.
 
 ## 4. Resource URLs
 
@@ -142,6 +167,18 @@ Resources under `/r/` use the same detection (steps 2.2-2.4): playlists are rewr
 - Invalid signature, unknown or disabled channel: `404`. Only the canonical encoding is accepted (no padding, no line breaks, zero trailing bits). No expiry.
 - Signing key: `WG_STREAM_PROXY_SIGNING_KEY`, or a file named by `WG_STREAM_PROXY_SIGNING_KEY_FILE`; raw bytes after trimming leading and trailing ASCII whitespace, minimum 32 bytes, else startup error. An empty variable counts as unset; setting both is a startup error. If neither is set: random key with a warning that resource URLs do not survive restarts. Generate with `openssl rand -base64 32`.
 - `/c/{id}` URLs in the channel list are unsigned and stable.
+
+### 4.1 Prefix-signed resources
+
+For DASH (3.6): one signature covers every URL below an upstream prefix.
+
+- Format: `/p/{channel}/{sig}/{mode}/{b64prefix}/{path}`
+  - `{b64prefix}`: base64url (no padding) of the upstream prefix: `http://` or `https://`, host, optional port and a path that starts and ends with `/`; no user info, query, fragment or dot segments, at most 4096 bytes, in the form of Go's `url.URL.String`.
+  - `{mode}`: `n` (requests below it carry no query) or `q` (a query is passed on).
+  - `{sig}`: base64url of the first 16 bytes of `HMAC-SHA256(key, "prefix:" + channel + "\n" + mode + "\n" + prefix)`, with the signing key of 4. The `prefix:` label keeps the two kinds apart: a `/r/` signature never verifies as a prefix signature and the other way round.
+  - `{path}`: the path the player appended, as it sent it (escaped). The upstream URL is the prefix plus `{path}`, plus `?` and the request's query if the mode is `q`.
+- Valid only if the upstream URL stays below the prefix: `{path}` has one or more non-empty segments of RFC 3986 path characters (unreserved, sub-delims, `:`, `@`, valid percent escapes); decoded once, no segment contains `/`, `\`, `%` (double encoding) or control characters, and no segment name (the part before a `;`) is empty, `.` or `..` (also encoded, `%2e%2e`); with mode `n` the request has no query (not even an empty `?`); with mode `q` the query is printable ASCII without space and `#`; the upstream URL is at most 4096 bytes and parses with the prefix's scheme, host and port.
+- Everything else as for `/r/` (4): invalid signature, path or query, unknown or disabled channel give `404`; only the canonical encoding is accepted; no expiry; route, headers, guard (3.5) and redirects (3.4) come from the channel config at request time, so a reload that changes the channel's route applies to existing prefix URLs too.
 
 ## 5. Configuration
 
@@ -225,7 +262,7 @@ group = "Greek TV"                    # optional
 enabled = true
 
 [channel.upstream]
-type = "auto"                         # auto | hls | raw
+type = "auto"                         # auto | hls | dash | raw
 headers = { Referer = "https://www.example.org/" }
 
 [channel.playlist]
@@ -292,8 +329,8 @@ url = "https://live.example.net/daserste/live/hls/de/master.m3u8"
 - Per channel:
   1. `playlist.extra` lines, sorted by directive, then key; keys removed with an empty value (5.4) are not written.
   2. `#EXTINF:-1 tvg-id=".." tvg-name=".." tvg-logo=".." group-title=".."`, then `attrs` sorted by key, then `,<name>`. Empty values are omitted; `"` in values and names is replaced by `'`. Commas in names are fine (IPTV Simple Client takes the name after the last quoted attribute). Kodi lists a channel in its Radio section only with `radio="true"`, which comes from `attrs = { radio = "true" }` (no extra key).
-  3. URL: `/c/{id}.m3u8` if `upstream.type = "hls"` or the upstream URL path contains `.m3u8`, otherwise `/c/{id}`. The handler strips a trailing `.m3u8` from the id.
-- `#KODIPROP` and other `extra` lines appear only here, never in playlists under `/c/` or `/r/`.
+  3. URL: `/c/{id}.m3u8` if `upstream.type = "hls"`, `/c/{id}.mpd` if it is `"dash"`; otherwise `/c/{id}.m3u8` if the upstream URL path contains `.m3u8`, `/c/{id}.mpd` if it contains `.mpd`, else `/c/{id}`. The handler strips a trailing `.m3u8` or `.mpd` from the id.
+- `#KODIPROP` and other `extra` lines appear only here, never in playlists or manifests under `/c/`, `/r/` or `/p/`. Kodi plays DASH only with `inputstream.adaptive` ([deploy.md](deploy.md)).
 
 ```
 #EXTM3U x-tvg-url="https://epg.example.org/epg/epg.xml.gz" url-tvg="https://epg.example.org/epg/epg.xml.gz"
@@ -309,8 +346,10 @@ http://wsp.lan:2349/c/ert-world.m3u8
 | Path | Description |
 |---|---|
 | `GET/HEAD /playlist.m3u8` | Channel list |
-| `GET/HEAD /c/{id}`, `/c/{id}.m3u8` | Channel entry |
+| `GET/HEAD /c/{id}`, `/c/{id}.m3u8`, `/c/{id}.mpd` | Channel entry |
 | `GET/HEAD /r/{channel}/{sig}/{b64url}/{name}` | Signed resource |
+| `GET/HEAD /p/{channel}/{sig}/{mode}/{b64prefix}/{path}` | Prefix-signed resource (4.1) |
+| `GET/HEAD /time` | Current UTC time for DASH players (3.6), ISO 8601 with milliseconds (`2026-11-19T12:01:30.500Z`), `text/plain; charset=utf-8`, `Cache-Control: no-store`; no upstream request, no metrics |
 | `GET/HEAD /logos/{file}` | Local logo, flat directory, no traversal (5.4) |
 | `GET/HEAD /clip/{name}/{n}.ts` | Built-in clip segment (3.4): `{name}` a clip of `internal/clips` (`tunnel-unreachable`, `channel-blocked`, `channel-not-available`, and the in-flight texts), `{n}` the position, 0-63 in decimal without leading zeros. PTS, DTS and PCR are shifted by 10 s + `n` × 0.96 s and the continuity counters continued, so positions 0, 1, … play as one stream. `video/mp2t`, unsigned; no upstream request. Anything else under `/clip/`: `404` |
 | `GET /healthz` | 200 while serving; body: version and source URL (AGPL section 13) |
@@ -326,7 +365,7 @@ Served only on their own listener `debug.listen` (5.3), off by default and never
 | Path | Description |
 |---|---|
 | `/debug/pprof/…` | Go profiler (`net/http/pprof`: index, `profile`, `heap`, `goroutine`, `trace`, …) |
-| `GET /debug/requests` | JSON `{"requests": [...]}`: the last 256 finished `/c/`, `/r/` and `/clip/` requests, newest first |
+| `GET /debug/requests` | JSON `{"requests": [...]}`: the last 256 finished `/c/`, `/r/`, `/p/` and `/clip/` requests, newest first |
 | `GET /debug/tunnels` | JSON `{"tunnels": [...]}`: per configured tunnel, sorted by name |
 | `POST /debug/tunnels/{name}/stop` | Cool-down of a tunnel |
 
@@ -387,19 +426,19 @@ The EPG commands (`epg ids`, `epg match`, `import --match-epg`) download `epg.ur
 - `tunnel_last_handshake_timestamp_seconds{tunnel}`: `0` while the tunnel is not running or has no handshake yet.
 - `active_requests{channel,kind}`: in-flight requests incl. open raw streams; `kind` = `playlist`, `segment`, `raw`.
 - `upstream_requests_total{channel,kind,code}`: `code` = upstream status, or `error`.
-- `upstream_errors_total{channel,reason}`: `reason` = `connect`, `timeout`, `guard`, `tls`, `redirects`, `size`, `unsupported`, `other`.
+- `upstream_errors_total{channel,reason}`: `reason` = `connect`, `timeout`, `guard`, `tls`, `redirects`, `size`, `unsupported`, `drm`, `other`.
 - `error_clips_total{clip}`: error clips served instead of an HTTP error (3.4), by clip name (`tunnel-unreachable`, `channel-blocked`, `channel-not-available`; each starts at 0). The failure behind it counts as without a clip.
 - `tunnel_start_seconds{tunnel}` (histogram): one observation per successful tunnel start, the time from the start request until the first handshake completed (device up included). Observed where the tunnel starts, once per start however many requests waited for it; a failed start is not observed (the start failure line, spec 8, logs it).
-- `upstream_phase_seconds{route,phase}` (histogram): where the time of the upstream requests of `/c/` and `/r/` goes, per route (`direct` or a tunnel name), `phase` = `dns` (host lookups), `connect` (connection setup, Happy-Eyeballs fallback included), `tls` (TLS handshakes), `first_byte` (start of the upstream request until the first response byte); the same definitions as the debug line (`dns`, `connect`, `tls`, `ttfb`, spec 8), without a tunnel start wait (that is `tunnel_start_seconds`).
+- `upstream_phase_seconds{route,phase}` (histogram): where the time of the upstream requests of `/c/`, `/r/` and `/p/` goes, per route (`direct` or a tunnel name), `phase` = `dns` (host lookups), `connect` (connection setup, Happy-Eyeballs fallback included), `tls` (TLS handshakes), `first_byte` (start of the upstream request until the first response byte); the same definitions as the debug line (`dns`, `connect`, `tls`, `ttfb`, spec 8), without a tunnel start wait (that is `tunnel_start_seconds`).
 - Buckets of both histograms, in seconds: `0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 15` (classic histograms).
 
-Only `/c/` and `/r/` requests of enabled channels count; `channel` is the channel id, never a URL. `/clip/` requests count in no metric.
+Only `/c/`, `/r/` and `/p/` requests of enabled channels count; `channel` is the channel id, never a URL. `/clip/` requests count in no metric.
 
-- `kind`: `playlist` if the response is detected as a playlist (3.1) or refused as one (3.3), else `raw` for `/c/` and `segment` for `/r/`. Until the type is detected, and if it never is (error, non-`2xx` status), an `hls` channel and, without a configured type, an upstream path ending in `.m3u8` or `.m3u` count as `playlist`.
+- `kind`: `playlist` if the response is detected as a playlist or DASH manifest (3.1) or refused as one (3.3), else `raw` for `/c/` and `segment` for `/r/` and `/p/`. Until the type is detected, and if it never is (error, non-`2xx` status), an `hls` or `dash` channel and, without a configured type, an upstream path ending in `.m3u8`, `.m3u` or `.mpd` count as `playlist`.
 - `upstream_requests_total` counts every upstream request, the refetch of a partial playlist (3.4) included.
-- `upstream_errors_total` counts failures before the response (with `code="error"`) and after it: playlist body or sniff read errors, a rejected playlist or a second `206` (`other`), a refused playlist format (`unsupported`, 3.3), a stream ended by an upstream error. Upstream statuses count only in `upstream_requests_total`.
+- `upstream_errors_total` counts failures before the response (with `code="error"`) and after it: playlist body or sniff read errors, a rejected playlist or a second `206` (`other`), a refused playlist format (`unsupported`, 3.3), a refused DRM manifest (`drm`, 3.6), a stream ended by an upstream error. Upstream statuses count only in `upstream_requests_total`.
 - A request the client gave up counts neither as error nor, if no response came, as upstream request.
-- Timing histograms: labels are the route or tunnel name and the phase only, never a channel or URL. They are collected for every `/c/` and `/r/` request at every log level and recorded when the request ends (a stream: when it closes). A request observes only the phases that happened: no `dns` for an IP literal or a pooled connection, no `connect` for a pooled connection, no `tls` for plain HTTP, no `first_byte` without a response; phases that failed (a refused connect, a failed handshake) count with their duration. `first_byte` is observed once per request, for the last upstream response (a refetch, 3.4, does not count twice). Requests the client gave up observe what happened before.
+- Timing histograms: labels are the route or tunnel name and the phase only, never a channel or URL. They are collected for every `/c/`, `/r/` and `/p/` request at every log level and recorded when the request ends (a stream: when it closes). A request observes only the phases that happened: no `dns` for an IP literal or a pooled connection, no `connect` for a pooled connection, no `tls` for plain HTTP, no `first_byte` without a response; phases that failed (a refused connect, a failed handshake) count with their duration. `first_byte` is observed once per request, for the last upstream response (a refetch, 3.4, does not count twice). Requests the client gave up observe what happened before.
 
 `/metrics` also serves the standard `go_*` and `process_*` metrics of the Prometheus Go client.
 
@@ -407,13 +446,14 @@ Only `/c/` and `/r/` requests of enabled channels count; `channel` is the channe
 
 - Intended for LAN use; exposure to the internet needs an authenticating reverse proxy.
 - WireGuard keys only in tunnel files and never logged; upstream URLs (in log lines and in error messages) are logged as scheme, host and file name only, e.g. `https://cdn.example.com/…/7.m3u8`: no user info, query string, fragment or other path segment, because CDNs put session ids and tokens there. The file name is reduced like `{name}` (spec 4); a URL without path shows scheme and host only.
-- Debug log (`log_level = "debug"`): one `request` line per `/c/`, `/r/` and `/clip/` request when it ends, with request id, channel, route, kind, client status and bytes, client disconnect, upstream status and error reason, and where the time went: `tunnel_start` (only if the request waited for a tunnel start), `dns`, `connect` (Happy-Eyeballs fallback included), `tls`, `ttfb` (first upstream byte), `total`; drain waits and retired tunnels; wireguard-go's own events (handshakes, keepalives, retries) with the peer shown by tunnel name. Tunnel start (with handshake), start failure and close lines carry their durations at every level. The log never contains keys, key fragments, query strings or upstream paths beyond the file name. Above debug the debug lines cost only a level check; the timing behind them is collected at every level for the timing metrics (7.3).
+- Debug log (`log_level = "debug"`): one `request` line per `/c/`, `/r/`, `/p/` and `/clip/` request when it ends, with request id, channel, route, kind, client status and bytes, client disconnect, upstream status and error reason, and where the time went: `tunnel_start` (only if the request waited for a tunnel start), `dns`, `connect` (Happy-Eyeballs fallback included), `tls`, `ttfb` (first upstream byte), `total`; drain waits and retired tunnels; wireguard-go's own events (handshakes, keepalives, retries) with the peer shown by tunnel name. Tunnel start (with handshake), start failure and close lines carry their durations at every level. The log never contains keys, key fragments, query strings or upstream paths beyond the file name. Above debug the debug lines cost only a level check; the timing behind them is collected at every level for the timing metrics (7.3).
 - Debug endpoints (7.1): off by default, on their own listener, without authentication. They answer only requests addressed by IP or `localhost`, so a web page cannot reach them by rebinding its own name to the debug address. Bind them to loopback (e.g. `127.0.0.1:2350`, used through `docker exec … tunnel`) or at most the LAN, never beyond: the profiler exposes process internals (memory, goroutine stacks, command line), and whoever reaches the port can cool tunnels down. `/debug/requests` holds no keys, tokens, query strings or upstream paths beyond the file name (the same reduction as the log).
+- Prefix-signed URLs (4.1): whoever has a valid `/p/` URL can fetch every URL below its prefix (same scheme, host and port, below the prefix directory) through the channel's route, with the channel's headers, and with a query only if the mode allows one; nothing outside the prefix, nothing for another channel, and nothing once the channel is removed or disabled. A prefix is the directory of a `BaseURL` or segment reference of a manifest the channel served, so a manifest whose `BaseURL` is a host root opens that whole host. Like `/r/` URLs they do not expire and reach the LAN players only (above).
 - Container: non-root, read-only root filesystem, all capabilities dropped, single replica. Details: [deploy.md](deploy.md).
 
 ## 9. Engineering rules
 
-- Layout: `cmd/wg-stream-proxy/`, `internal/{config,tunnel,route,hls,playlist,server,importer,epg,metrics,clips}`, `examples/config/`, `testdata/`, `deploy/`, `docs/`.
+- Layout: `cmd/wg-stream-proxy/`, `internal/{config,tunnel,route,hls,dash,playlist,server,importer,epg,metrics,clips}`, `examples/config/`, `testdata/`, `deploy/`, `docs/`.
 - Dependencies: stdlib `net/http`, `log/slog`, `wireguard-go`, gVisor netstack, a TOML parser, Prometheus client. No web framework.
 - `internal/clips` embeds the built-in clip segments (design: [clips.md](clips.md)): six 0.96 s MPEG-TS files in `internal/clips/segments/`, rendered by `internal/clips/generate.sh` (pinned image, Inter 4.1 by version and checksum) and committed. Change a text by editing the script, rerunning it and committing the result. Only rendered pixels ship, not the font (SIL OFL 1.1). `clips.Repeat` shifts the timestamps and continues the continuity counters of a segment for its position in a stream of copies (7.1).
 - gVisor stays at the version in `wireguard-go`'s `go.mod` and is only updated together with it (excluded from automatic bumps).

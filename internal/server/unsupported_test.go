@@ -51,7 +51,11 @@ func TestUnsupportedPlaylists(t *testing.T) {
 		{name: "pls as text", ctype: "text/plain", body: "[playlist]\r\nFile1=" + stream + "\r\n", format: "pls"},
 		{name: "plain m3u", ctype: "audio/x-mpegurl", body: stream + "\n", format: "m3u"},
 		{name: "plain m3u as octet-stream", ctype: "application/octet-stream", body: "# radio\n" + stream + "\n", format: "m3u"},
-		{name: "dash", ctype: "application/dash+xml", body: `<?xml version="1.0"?><MPD><BaseURL>` + stream + `</BaseURL></MPD>`, format: "dash"},
+		{
+			// Auto channels and resources rewrite it (spec 3.3).
+			name: "dash on a raw channel", ctype: "application/dash+xml",
+			body: `<?xml version="1.0"?><MPD><BaseURL>` + stream + `</BaseURL></MPD>`, format: "dash", channels: []string{"raw"},
+		},
 		{name: "xspf", ctype: "application/xspf+xml", body: `<playlist xmlns="http://xspf.org/ns/0/"><trackList><track><location>` + stream + `</location></track></trackList></playlist>`, format: "xspf"},
 		{name: "asx", ctype: "video/x-ms-asf", body: `<ASX version="3.0"><Entry><Ref href="` + stream + `"/></Entry></ASX>`, format: "asx"},
 		{

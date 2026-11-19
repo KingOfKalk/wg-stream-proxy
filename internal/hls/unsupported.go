@@ -44,14 +44,16 @@ var xmlRoots = map[string]string{
 
 // Unsupported returns the format of a playlist the proxy does not rewrite
 // (spec 3.3), or "" for anything else. The caller passes responses Detect
-// did not classify as HLS: piping such a playlist would hand the player
+// classified as Raw: piping such a playlist would hand the player
 // upstream URLs to fetch directly, past the channel's tunnel.
 //
-// A configured HLS type is never refused: the rewriter handles the body.
+// A configured HLS or DASH type is never refused: the rewriter handles
+// the body. On an auto channel, Detect classifies DASH manifests (format
+// "dash") as DASH, so only raw channels refuse them.
 // A configured Raw type ignores the Content-Type, like Detect, but not the
 // body. prefix is the start of the body (see SniffLen).
 func Unsupported(contentType string, prefix []byte, configured Type) string {
-	if configured == HLS {
+	if configured == HLS || configured == DASH {
 		return ""
 	}
 	if configured != Raw {

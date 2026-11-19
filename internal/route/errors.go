@@ -25,6 +25,9 @@ const (
 	ReasonRedirects Reason = "redirects"
 	ReasonSize      Reason = "size"
 	ReasonOther     Reason = "other"
+	// ReasonDRM is a DASH manifest with ContentProtection, refused
+	// (spec 3.6, 1.2). Classify never returns it.
+	ReasonDRM Reason = "drm"
 	// ReasonUnsupported is a playlist in a format the proxy does not
 	// rewrite, refused instead of piped (spec 3.3). Classify never
 	// returns it.

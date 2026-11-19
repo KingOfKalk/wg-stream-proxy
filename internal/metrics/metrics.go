@@ -89,7 +89,7 @@ func New(opts Options) *Metrics {
 		reg: prometheus.NewRegistry(),
 		active: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "wsp_active_requests",
-			Help: "Requests in flight under /c/ and /r/, open raw streams included.",
+			Help: "Requests in flight under /c/, /r/ and /p/, open raw streams included.",
 		}, []string{"channel", "kind"}),
 		requests: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "wsp_upstream_requests_total",

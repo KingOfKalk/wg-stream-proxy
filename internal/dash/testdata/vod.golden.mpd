@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" profiles="urn:mpeg:dash:profile:full:2011" type="static" mediaPresentationDuration="PT6S" minBufferTime="PT2S"><BaseURL>http://wsp.lan/p/n/{https://cdn.example.net/ch/}/</BaseURL>
+  <ProgramInformation moreInformationURL="https://www.example.org/programme">
+    <Title>Made-up VOD with a segment list and on-demand files</Title>
+  </ProgramInformation>
+  <Period id="p0" duration="PT6S">
+    <AdaptationSet mimeType="video/mp4" contentType="video" segmentAlignment="true">
+      <Representation id="v1" bandwidth="400000" codecs="avc1.42c01e" width="640" height="360">
+        <SegmentList timescale="1000" duration="2000">
+          <Initialization sourceURL="http://wsp.lan/p/n/{https://vod-cdn.example.com/assets/42/v1/}/init.mp4"/>
+          <SegmentURL media="http://wsp.lan/p/q/{https://vod-cdn.example.com/assets/42/v1/}/seg-1.m4s?sig=abc123"/>
+          <SegmentURL media="seg-2.m4s"/>
+          <SegmentURL media="seg-3.m4s" mediaRange="0-65535"/>
+        </SegmentList>
+      </Representation>
+    </AdaptationSet>
+    <AdaptationSet mimeType="audio/mp4" contentType="audio" lang="de">
+      <Representation id="a1" bandwidth="64000" codecs="mp4a.40.2" audioSamplingRate="48000">
+        <BaseURL>http://wsp.lan/p/n/{https://cdn.example.net/ch/audio/}/a1_de.mp4</BaseURL>
+        <SegmentBase indexRange="820-1003" timescale="48000">
+          <Initialization range="0-819"/>
+        </SegmentBase>
+      </Representation>
+    </AdaptationSet>
+  </Period>
+</MPD>

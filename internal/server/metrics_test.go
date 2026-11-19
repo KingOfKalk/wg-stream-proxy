@@ -30,7 +30,7 @@ const (
 		"# TYPE wsp_upstream_requests_total counter\n"
 	errorsHead = "# HELP wsp_upstream_errors_total Upstream request failures by reason.\n" +
 		"# TYPE wsp_upstream_errors_total counter\n"
-	activeHead = "# HELP wsp_active_requests Requests in flight under /c/ and /r/, open raw streams included.\n" +
+	activeHead = "# HELP wsp_active_requests Requests in flight under /c/, /r/ and /p/, open raw streams included.\n" +
 		"# TYPE wsp_active_requests gauge\n"
 )
 
@@ -301,7 +301,7 @@ wsp_upstream_errors_total{channel="radio",reason="other"} 1
 				// and a resource, before anything is streamed.
 				hlsFixture(e.up, e.upURL)
 				e.up.add("/radio", file{ctype: "audio/x-scpls", body: "[playlist]\nFile1=http://radio.example/s\n"})
-				e.up.add("/cdn/seg.ts", file{ctype: "application/dash+xml", body: "<MPD/>"})
+				e.up.add("/cdn/seg.ts", file{ctype: "application/xspf+xml", body: "<playlist/>"})
 				for _, p := range []string{"/c/radio", "/c/forced-raw", e.signer.Path("news", e.upURL+"/cdn/seg.ts")} {
 					if resp, _ := e.get(t, p, nil); resp.StatusCode != http.StatusBadGateway {
 						t.Errorf("GET %s: status %d, want 502", p, resp.StatusCode)

@@ -75,6 +75,7 @@ func TestChannelEqual(t *testing.T) {
 		{"name", base, strings.Replace(base, "News", "Sport", 1), false},
 		{"enabled", base, rich("enabled = false\n"), false},
 		{"type", base, rich("upstream.type = \"hls\"\n"), false},
+		{"type dash", base, rich("upstream.type = \"dash\"\n"), false},
 		{"group", base, rich("group = \"Other\"\n"), false},
 		{"tvg_id", base, rich("playlist.tvg_id = \"x\"\n"), false},
 		{"logo", base, rich("playlist.logo = \"https://example.com/l.png\"\n"), false},

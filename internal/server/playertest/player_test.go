@@ -39,6 +39,7 @@ type playerCase struct {
 	id       string // channel id
 	upstream string // path on fixtureHost
 	hls      bool   // HLS channel: /c/{id}.m3u8, else /c/{id}
+	dash     bool   // DASH channel: /c/{id}.mpd
 	seconds  int    // ffmpeg -t
 	video    bool   // must decode video frames
 	// fetched are path prefixes the fixture server must have served:
@@ -101,6 +102,13 @@ var playerCases = []playerCase{
 		name: "icy radio", id: "icy", upstream: "/shoutcast/radio/tone.mp3", seconds: 5,
 		fetched: []string{"/shoutcast/radio/tone.mp3"},
 	},
+	{
+		// Redirected to /vod/dash/: the rewritten manifest has the
+		// MPD-level BaseURL for that directory and the Period BaseURL
+		// for seg/; ffmpeg builds the $Time$ segment URLs below them.
+		name: "dash vod", id: "dash-vod", upstream: "/redirect/dash/manifest.mpd", dash: true, seconds: 10, video: true,
+		fetched: []string{"/vod/dash/seg/init-0.m4s", "/vod/dash/seg/init-1.m4s", "/vod/dash/seg/chunk-0-", "/vod/dash/seg/chunk-1-"},
+	},
 }
 
 // TestPlayer is L4 of docs/testing.md: ffmpeg stands in for Kodi and
@@ -125,8 +133,11 @@ func TestPlayer(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			u := base + "/c/" + tc.id
-			if tc.hls {
+			switch {
+			case tc.hls:
 				u += ".m3u8"
+			case tc.dash:
+				u += ".mpd"
 			}
 			p := play(t, ffmpeg, u, tc.seconds)
 			if p.state != "end" {

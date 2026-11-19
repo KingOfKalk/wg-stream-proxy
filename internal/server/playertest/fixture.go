@@ -3,8 +3,8 @@
 // Package playertest holds the player tests of docs/testing.md (L4) and
 // their fixture server. Fixtures serves the media fixtures of
 // testdata/media like broadcasters do: HLS as VOD and as a live window
-// that advances with time, raw MPEG-TS, and endless Icecast-like and
-// Shoutcast v1 (ICY) radio streams.
+// that advances with time, DASH as VOD, raw MPEG-TS, and endless
+// Icecast-like and Shoutcast v1 (ICY) radio streams.
 //
 // The player tests run ffmpeg and only run with WSP_PLAYER_TESTS=1; the
 // fixture server's own tests always run.
@@ -54,6 +54,8 @@ type Options struct {
 //     fixture starts its clock; one more segment is published whenever
 //     the duration of the next segment has passed, and ENDLIST is added
 //     once the last segment is out. Other files are served as is.
+//   - /redirect/{file}: a 302 redirect to /vod/{file}, like a channel
+//     URL that redirects to its CDN.
 //   - /raw/{fixture}: the segments of {fixture}/index.m3u8 in one
 //     response, like a raw MPEG-TS channel.
 //   - /icecast/{file}: the file in an endless loop with icy-* headers,
@@ -134,6 +136,8 @@ func (f *Fixtures) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.serveFile(w, r, name)
 	case "live":
 		f.serveLive(w, r, name)
+	case "redirect":
+		http.Redirect(w, r, "/vod/"+name, http.StatusFound)
 	case "raw":
 		f.serveRaw(w, r, name)
 	case "icecast":
@@ -149,6 +153,7 @@ func (f *Fixtures) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // server.
 var contentTypes = map[string]string{
 	".m3u8": "application/vnd.apple.mpegurl",
+	".mpd":  "application/dash+xml",
 	".ts":   "video/mp2t",
 	".m4s":  "video/iso.segment",
 	".mp4":  "video/mp4",

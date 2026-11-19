@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 // Package server is the HTTP side of wg-stream-proxy (spec 7.1): the
-// channel list, channel entries under /c/, signed resources under /r/,
-// error clip segments under /clip/, logos under /logos/, /healthz and
-// /metrics, plus the debug endpoints on their own listener ([debug]
-// listen, off by default). Upstream requests go through the channel's route
-// (internal/route); playlists are rewritten with internal/hls.
+// channel list, channel entries under /c/, signed resources under /r/ and
+// /p/, the time for DASH players under /time, error clip segments under
+// /clip/, logos under /logos/, /healthz and /metrics, plus the debug
+// endpoints on their own listener ([debug] listen, off by default).
+// Upstream requests go through the channel's route (internal/route);
+// playlists are rewritten with internal/hls, DASH manifests with
+// internal/dash.
 package server
 
 import (
@@ -18,6 +20,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/KingOfKalk/wg-stream-proxy/internal/clips"
 	"github.com/KingOfKalk/wg-stream-proxy/internal/config"
@@ -46,7 +49,7 @@ type Options struct {
 	// Metrics receives the request metrics and is served on /metrics;
 	// nil means a new registry without tunnel metrics.
 	Metrics *metrics.Metrics
-	// RecentRequests is how many finished /c/ and /r/ requests are kept
+	// RecentRequests is how many finished /c/, /r/ and /p/ requests are kept
 	// for /debug/requests; 0 keeps none (no debug listener).
 	RecentRequests int
 }
@@ -60,7 +63,7 @@ type Server struct {
 	version string
 	mux     *http.ServeMux
 	metrics *metrics.Metrics
-	// requestIDs numbers the /c/ and /r/ requests.
+	// requestIDs numbers the /c/, /r/ and /p/ requests.
 	requestIDs atomic.Uint64
 	// recent keeps the latest finished requests for /debug/requests;
 	// nil while the debug listener is off.
@@ -105,6 +108,8 @@ func New(opts Options) (*Server, error) {
 	s.mux.HandleFunc("GET /playlist.m3u8", s.handlePlaylist)
 	s.mux.HandleFunc("GET /c/{id}", s.handleChannel)
 	s.mux.HandleFunc("GET /r/", s.handleResource)
+	s.mux.HandleFunc("GET /p/", s.handlePrefix)
+	s.mux.HandleFunc("GET "+timePath, s.handleTime)
 	s.mux.HandleFunc("GET /healthz", s.handleHealth)
 	s.mux.HandleFunc("GET /logos/{file}", s.handleLogo)
 	s.mux.HandleFunc("GET /clip/{name}/{file}", s.handleClip)
@@ -228,4 +233,23 @@ func validHost(h string) bool {
 func isHostByte(c byte) bool {
 	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' ||
 		c == '.' || c == '-' || c == '_' || c == ':' || c == '[' || c == ']'
+}
+
+// timePath answers the time for the UTCTiming of rewritten DASH manifests
+// (spec 3.6, 7.1).
+const timePath = "/time"
+
+// handleTime answers the current UTC time in ISO 8601 with milliseconds
+// (urn:mpeg:dash:utc:http-iso:2014), so DASH players never ask an
+// upstream time server directly.
+func (s *Server) handleTime(w http.ResponseWriter, r *http.Request) {
+	body := time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
+	h := w.Header()
+	h.Set("Content-Type", "text/plain; charset=utf-8")
+	h.Set("Cache-Control", "no-store")
+	h.Set("Content-Length", strconv.Itoa(len(body)))
+	if r.Method == http.MethodHead {
+		return
+	}
+	_, _ = io.WriteString(w, body)
 }

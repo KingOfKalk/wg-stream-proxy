@@ -18,6 +18,8 @@ const (
 	HLS
 	// Raw is piped through unchanged.
 	Raw
+	// DASH is an MPEG-DASH manifest (MPD) that gets rewritten.
+	DASH
 )
 
 // SniffLen is the number of leading body bytes Detect needs to recognise a
@@ -36,8 +38,10 @@ func ParseType(s string) (Type, error) {
 		return HLS, nil
 	case "raw":
 		return Raw, nil
+	case "dash":
+		return DASH, nil
 	}
-	return Auto, fmt.Errorf("hls: unknown stream type %q (want auto, hls or raw)", s)
+	return Auto, fmt.Errorf("hls: unknown stream type %q (want auto, hls, dash or raw)", s)
 }
 
 // String returns the configuration name of t.
@@ -49,29 +53,37 @@ func (t Type) String() string {
 		return "hls"
 	case Raw:
 		return "raw"
+	case DASH:
+		return "dash"
 	}
 	return fmt.Sprintf("Type(%d)", uint8(t))
 }
 
-// Detect returns HLS or Raw for a response, following spec 3.1 step 2:
-// a configured type other than Auto wins, then the Content-Type, then
-// whether the body starts with #EXTM3U after an optional UTF-8 BOM and
-// whitespace. prefix is the start of the body (see SniffLen). Resources
-// under /r/ pass Auto.
+// Detect returns HLS, DASH or Raw for a response, following spec 3.1 step
+// 2: a configured type other than Auto wins, then the Content-Type, then
+// the body: #EXTM3U after an optional UTF-8 BOM and whitespace is HLS, an
+// XML root element MPD is DASH. prefix is the start of the body (see
+// SniffLen). Resources under /r/ and /p/ pass Auto.
 func Detect(contentType string, prefix []byte, configured Type) Type {
-	if configured == HLS || configured == Raw {
+	if configured != Auto {
 		return configured
 	}
 	mediaType, _, _ := strings.Cut(contentType, ";")
 	mediaType = strings.TrimSpace(mediaType)
-	if strings.EqualFold(mediaType, "application/vnd.apple.mpegurl") ||
-		strings.EqualFold(mediaType, "application/x-mpegurl") {
+	switch {
+	case strings.EqualFold(mediaType, "application/vnd.apple.mpegurl"),
+		strings.EqualFold(mediaType, "application/x-mpegurl"):
 		return HLS
+	case strings.EqualFold(mediaType, "application/dash+xml"):
+		return DASH
 	}
 	body := bytes.TrimPrefix(prefix, []byte(utf8BOM))
 	body = bytes.TrimLeft(body, " \t\r\n\v\f")
-	if bytes.HasPrefix(body, []byte("#EXTM3U")) {
+	switch {
+	case bytes.HasPrefix(body, []byte("#EXTM3U")):
 		return HLS
+	case len(body) > 0 && body[0] == '<' && xmlRoots[strings.ToLower(xmlRoot(body))] == FormatDASH:
+		return DASH
 	}
 	return Raw
 }
