@@ -25,6 +25,10 @@ const (
 	ReasonRedirects Reason = "redirects"
 	ReasonSize      Reason = "size"
 	ReasonOther     Reason = "other"
+	// ReasonUnsupported is a playlist in a format the proxy does not
+	// rewrite, refused instead of piped (spec 3.3). Classify never
+	// returns it.
+	ReasonUnsupported Reason = "unsupported"
 )
 
 // Classify returns the reason of an upstream error, or "" for nil:

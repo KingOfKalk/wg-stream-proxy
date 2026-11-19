@@ -493,10 +493,17 @@ func TestPlaylistPartialContent(t *testing.T) {
 
 func TestDetection(t *testing.T) {
 	e := newTVEnv(t)
-	// Configured raw: the playlist is piped unchanged.
+	// Configured raw: a playlist is refused, not piped (spec 3.3).
 	resp, body := e.get(t, "/c/forced-raw", nil)
-	if resp.StatusCode != http.StatusOK || !strings.Contains(body, "low/index.m3u8\n") || strings.Contains(body, "/r/") {
-		t.Errorf("forced raw: status %d, body %q", resp.StatusCode, body)
+	if resp.StatusCode != http.StatusBadGateway || strings.Contains(body, "index.m3u8") {
+		t.Errorf("forced raw playlist: status %d, body %q", resp.StatusCode, body)
+	}
+	// Configured raw: a stream is piped whatever the Content-Type.
+	const ts = "\x47\x40\x00\x10 stream"
+	e.up.add("/cdn/v1/master.m3u8", file{ctype: "application/vnd.apple.mpegurl", body: ts})
+	resp, body = e.get(t, "/c/forced-raw", nil)
+	if resp.StatusCode != http.StatusOK || body != ts {
+		t.Errorf("forced raw stream: status %d, body %q", resp.StatusCode, body)
 	}
 	if resp.Header.Get("Content-Length") == "" {
 		t.Error("forced raw: Content-Length not relayed")

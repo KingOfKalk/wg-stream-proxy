@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-// Command wg-stream-proxy routes IPTV streams through userspace WireGuard
-// tunnels and serves them as one M3U8 playlist.
+// Command wg-stream-proxy routes each IPTV and internet radio channel
+// through its own userspace WireGuard tunnel (or direct) and serves them as
+// one M3U playlist for Kodi, VLC and other players. It proxies HLS (TS,
+// fMP4, AES-128) and raw/ICY audio streams; no root, no TUN device, fails
+// closed.
 package main
 
 import (
@@ -15,6 +18,7 @@ import (
 	"time"
 
 	"github.com/KingOfKalk/wg-stream-proxy/internal/config"
+	"github.com/KingOfKalk/wg-stream-proxy/internal/route"
 	"github.com/KingOfKalk/wg-stream-proxy/internal/server"
 )
 
@@ -47,6 +51,8 @@ type cli struct {
 	hangup chan os.Signal
 	// reloaded, if set, is called with the result of each reload.
 	reloaded func(error)
+	// clock schedules the config file checks; nil means the system clock.
+	clock route.Clock
 	// epgAllowPrivate adds private-range guard exceptions per route name
 	// for the EPG download (tests allow the loopback range).
 	epgAllowPrivate map[string][]netip.Prefix

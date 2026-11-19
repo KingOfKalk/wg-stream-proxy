@@ -152,6 +152,11 @@ func (st *runState) reload(cfg *config.Config, err error) error {
 			"debug_listen", old.cfg.DebugListen(), "configured", cfg.DebugListen())
 	}
 
+	if cfg.WatchInterval() != old.cfg.WatchInterval() {
+		st.log.Warn("reload: reload.watch_interval changed, restart required; keeping the old interval",
+			"watch_interval", old.cfg.WatchInterval(), "configured", cfg.WatchInterval())
+	}
+
 	changes, err := st.mgr.Apply(tunnels, tunnelDrainTimeout)
 	if err == nil {
 		err = st.mgr.SetTimeouts(cfg.Upstream().ConnectTimeout, cfg.IdleTimeout())

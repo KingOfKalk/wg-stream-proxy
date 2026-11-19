@@ -19,6 +19,9 @@ direct = []
 [tunnels]
 idle_timeout = "60m"
 
+[reload]
+watch_interval = "2s"                 # check the config files for changes and reload; "0" turns it off
+
 # [epg]
 # url = "https://epg.example.com/epg.xml.gz"  # optional, no default
 

@@ -24,6 +24,7 @@ const (
 	defaultHeaderTimeout  = 15 * time.Second
 	defaultReadTimeout    = 30 * time.Second
 	defaultIdleTimeout    = 60 * time.Minute
+	defaultWatchInterval  = 2 * time.Second
 	defaultPlaylistSize   = 8 << 20
 )
 
@@ -116,6 +117,20 @@ func (c *Config) applySettings(raw rawConfig, src string, ov Overrides, routes m
 	c.upstream.HeaderTimeout = duration("upstream.header_timeout", up.HeaderTimeout, defaultHeaderTimeout)
 	c.upstream.ReadTimeout = duration("upstream.read_timeout", up.ReadTimeout, defaultReadTimeout)
 	c.idleTimeout = duration("tunnels.idle_timeout", raw.Tunnels.IdleTimeout, defaultIdleTimeout)
+
+	c.watchInterval = defaultWatchInterval
+	if v := raw.Reload.WatchInterval; v != nil {
+		// Zero turns watching off, so it is the one value that is not
+		// "positive".
+		switch d, err := time.ParseDuration(*v); {
+		case err != nil:
+			fail("reload.watch_interval", src, "invalid duration %q", *v)
+		case d < 0:
+			fail("reload.watch_interval", src, `must be positive, or "0" to turn watching off`)
+		default:
+			c.watchInterval = d
+		}
+	}
 
 	c.upstream.MaxPlaylistSize = defaultPlaylistSize
 	if v := up.MaxPlaylistSize; v != nil {

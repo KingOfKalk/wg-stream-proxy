@@ -408,3 +408,15 @@ func TestReloadWarnsOnDebugListenChange(t *testing.T) {
 		t.Errorf("no restart warning:\n%s", e.logs.String())
 	}
 }
+
+func TestReloadWarnsOnWatchIntervalChange(t *testing.T) {
+	dir := writeConfig(t, map[string]string{"config.toml": ""})
+	e := startRun(t, dir, 0)
+	writeFiles(t, dir, map[string]string{"config.toml": "[reload]\nwatch_interval = \"10s\"\n"})
+	if err := e.reload(t); err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+	if !strings.Contains(e.logs.String(), `msg="reload: reload.watch_interval changed, restart required; keeping the old interval" watch_interval=2s configured=10s`) {
+		t.Errorf("no restart warning:\n%s", e.logs.String())
+	}
+}
