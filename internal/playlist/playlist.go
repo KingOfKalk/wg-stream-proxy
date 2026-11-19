@@ -74,15 +74,24 @@ func writeChannel(b *strings.Builder, ch config.Channel, base string) {
 }
 
 // ChannelPath returns the list path of a channel (spec 6): /c/{id}.m3u8
-// if its upstream type is hls or its upstream URL path contains ".m3u8",
-// otherwise /c/{id}.
+// if its upstream type is hls, /c/{id}.mpd if it is dash; otherwise
+// /c/{id}.m3u8 if its upstream URL path contains ".m3u8", /c/{id}.mpd if
+// it contains ".mpd", else /c/{id}.
 func ChannelPath(ch config.Channel) string {
 	p := "/c/" + ch.ID()
-	if ch.Type() == config.TypeHLS {
+	switch ch.Type() {
+	case config.TypeHLS:
 		return p + ".m3u8"
+	case config.TypeDASH:
+		return p + ".mpd"
 	}
-	if u, err := url.Parse(ch.URL()); err == nil && strings.Contains(u.Path, ".m3u8") {
+	u, err := url.Parse(ch.URL())
+	switch {
+	case err != nil:
+	case strings.Contains(u.Path, ".m3u8"):
 		return p + ".m3u8"
+	case strings.Contains(u.Path, ".mpd"):
+		return p + ".mpd"
 	}
 	return p
 }

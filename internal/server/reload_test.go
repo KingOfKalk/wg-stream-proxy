@@ -222,7 +222,7 @@ func newPeer(t *testing.T, body string) (*tunneltest.Peer, *upstream) {
 	t.Helper()
 	up := newUpstream()
 	up.add("/seg.ts", file{ctype: "video/mp2t", body: body})
-	up.add("/radio", file{ctype: "audio/mpeg", body: strings.Repeat("r", 1024), endless: true})
+	up.add("/radio", file{ctype: "audio/mpeg", body: binaryBody('r', 1024), endless: true})
 	p := tunneltest.Start(t, tunneltest.Options{Handler: up})
 	p.SetHost("upstream.test", tunneltest.ServerAddr4)
 	return p, up

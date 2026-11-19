@@ -25,6 +25,9 @@ const (
 	ReasonRedirects Reason = "redirects"
 	ReasonSize      Reason = "size"
 	ReasonOther     Reason = "other"
+	// ReasonDRM is a DASH manifest with ContentProtection, refused
+	// (spec 3.6, 1.2). Classify never returns it.
+	ReasonDRM Reason = "drm"
 	// ReasonUnsupported is a playlist in a format the proxy does not
 	// rewrite, refused instead of piped (spec 3.3). Classify never
 	// returns it.
@@ -33,7 +36,8 @@ const (
 
 // Classify returns the reason of an upstream error, or "" for nil:
 //   - guard: the private-range guard refused every address;
-//   - redirects: more than MaxRedirects redirects;
+//   - redirects: more than MaxRedirects redirects, or a redirect
+//     Request.Redirect refused;
 //   - size: an upstream URL or a playlist is too long;
 //   - timeout: header_timeout, read_timeout or another deadline;
 //   - connect: lookup or connect failed, connect_timeout included;
@@ -47,7 +51,7 @@ func Classify(err error) Reason {
 		return ""
 	case errors.Is(err, ErrBlocked):
 		return ReasonGuard
-	case errors.Is(err, ErrTooManyRedirects):
+	case errors.Is(err, ErrTooManyRedirects), errors.Is(err, ErrRedirectRefused):
 		return ReasonRedirects
 	case errors.Is(err, ErrURLTooLong), errors.Is(err, ErrTooLarge):
 		return ReasonSize

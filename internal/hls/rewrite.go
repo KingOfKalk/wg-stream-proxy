@@ -20,7 +20,8 @@ const (
 )
 
 var (
-	// ErrPlaylistTooLarge: the playlist exceeds MaxPlaylistSize.
+	// ErrPlaylistTooLarge: the playlist exceeds MaxPlaylistSize, or the
+	// rewritten playlist maxOutput.
 	ErrPlaylistTooLarge = errors.New("hls: playlist too large")
 	// ErrInvalidFinalURL: the final URL is not an absolute http(s) URL.
 	ErrInvalidFinalURL = errors.New("hls: final URL is not an absolute http(s) URL")
@@ -53,6 +54,9 @@ const lineSpace = " \t\v\f"
 // (line endings LF, CRLF or lone CR, BOM, blank lines, comments, other tags
 // and attributes, whitespace around URI lines) stay unchanged.
 //
+// The output is at most maxOutput(len(playlist)) bytes, else
+// ErrPlaylistTooLarge.
+//
 // Fail closed: input larger than MaxPlaylistSize (the caller limits the
 // read as well), an http(s) or relative URI that does not parse or resolves
 // to a URL longer than MaxURLLen, and playlists players could read
@@ -69,8 +73,12 @@ func Rewrite(playlist []byte, final *url.URL, appendURL func(dst, abs []byte) []
 		return nil, fmt.Errorf("%w: NUL byte", ErrInvalidPlaylist)
 	}
 	rw := rewriter{final: final, appendURL: appendURL, out: make([]byte, 0, outputCap(len(playlist)))}
+	limit := maxOutput(len(playlist))
 	first := true
 	for rest := playlist; len(rest) > 0; {
+		if len(rw.out) > limit {
+			return nil, fmt.Errorf("%w: rewritten playlist larger than %d bytes", ErrPlaylistTooLarge, limit)
+		}
 		var content, eol []byte
 		content, eol, rest = nextLine(rest)
 		if first {
@@ -85,7 +93,18 @@ func Rewrite(playlist []byte, final *url.URL, appendURL func(dst, abs []byte) []
 		}
 		rw.out = append(rw.out, eol...)
 	}
+	if len(rw.out) > limit {
+		return nil, fmt.Errorf("%w: rewritten playlist larger than %d bytes", ErrPlaylistTooLarge, limit)
+	}
 	return rw.out, nil
+}
+
+// maxOutput is the largest rewritten playlist for an input of n bytes:
+// 16 times the input, at least 1 MiB and at most 64 MiB. A short URI can
+// become a long resource URL, so without a limit a small playlist could
+// grow by orders of magnitude.
+func maxOutput(n int) int {
+	return min(max(16*n, 1<<20), 64<<20)
 }
 
 // outputCap is the initial capacity of the output for a playlist of n

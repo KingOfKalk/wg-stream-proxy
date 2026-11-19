@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("<MPD><Period><AdaptationSet><Representation><SegmentList><SegmentURL mediA=\"//%80/\"/></SegmentList></Representation></AdaptationSet></Period></MPD>")

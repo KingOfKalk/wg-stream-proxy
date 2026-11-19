@@ -184,7 +184,7 @@ flowchart TB
   A change that stayed the same for one more interval calls the same
   reload as `SIGHUP`; no change, no reload.
 - Tunnel lifecycle: lazy start, idle close, drain (section 6).
-- Signing key: signs and verifies `/r/` URLs (spec 4). Changing it needs
+- Signing key: signs and verifies `/r/` and `/p/` URLs (spec 4, 4.1). Changing it needs
   a restart, like `listen` and the tunnels dir location.
 - `/healthz` and `/metrics` (Prometheus, `wsp_` prefix, spec 7.3).
 
@@ -193,16 +193,20 @@ flowchart TB
 - `/playlist.m3u8`: renders the channel list from the active config. No
   upstream request, no tunnel.
 - `/c/{id}`: the stable, unsigned entry point of a channel. Fetches the
-  channel URL through the channel's route, then rewrites (HLS) or pipes
-  (raw).
+  channel URL through the channel's route, then rewrites (HLS, DASH) or
+  pipes (raw).
 - `/r/...`: signed resources found inside rewritten playlists:
   sub-playlists, segments, keys. Same route and headers as the channel.
-- Responses: HLS playlists are rewritten; other playlist formats (PLS,
-  plain M3U, DASH, XSPF, ASX) are refused with `502`, so the player never
-  gets upstream URLs (fail closed, spec 3.3); everything else (segments,
-  keys, raw streams) is piped with `io.Copy`.
+- `/p/...`: prefix-signed resources (spec 4.1): every URL below a base
+  directory of a rewritten DASH manifest, where the player builds segment
+  URLs from templates itself. Same route and headers as the channel.
+- Responses: HLS playlists and DASH manifests (without DRM) are
+  rewritten; other playlist formats (PLS, plain M3U, XSPF, ASX, DASH on a
+  `raw` channel) and DASH with DRM are refused with `502`, so the player
+  never gets upstream URLs (fail closed, spec 3.3, 3.6); everything else
+  (segments, keys, raw streams) is piped with `io.Copy`.
 - The planes touch in four places: each request reads the *active*
-  config, `/c/` and `/r/` use the signing key, each upstream dial goes
+  config, `/c/`, `/r/` and `/p/` use the signing key, each upstream dial goes
   through a route whose tunnel the lifecycle manager runs, and each
   request updates the metrics.
 
@@ -342,14 +346,68 @@ sequenceDiagram
 ```
 
 - Raw passthrough (spec 3.3) covers radio and MPEG-TS: anything that is
-  not detected as HLS. A playlist the proxy does not rewrite (PLS, plain
-  M3U, DASH, XSPF, ASX, or any playlist on a `raw` channel) is refused
-  with `502` instead: piped, it would send the player past the tunnel.
+  not detected as HLS or DASH. A playlist the proxy does not rewrite (PLS,
+  plain M3U, XSPF, ASX, or any playlist or manifest on a `raw` channel) is
+  refused with `502` instead: piped, it would send the player past the
+  tunnel.
 - Shoutcast v1 servers answer `ICY 200 OK` instead of an HTTP status
   line; the route's connection wrapper fixes that before Go's HTTP parser
   reads it.
 - An open stream counts as tunnel activity, so the tunnel stays up while
   someone listens.
+
+### 4.4 DASH channel
+
+A live DASH channel (spec 3.6) on tunnel `gr`: the channel URL redirects
+to a CDN, the manifest has a relative Period `BaseURL` `dash/` and a
+`SegmentTemplate` with `$RepresentationID$` and `$Time$`.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    box rgba(59,127,176,0.18) Home LAN
+        participant P as Player
+    end
+    box rgba(111,92,194,0.18) wg-stream-proxy
+        participant S as server + dash
+        participant R as route gr + guard
+    end
+    box rgba(102,114,126,0.18) Internet
+        participant U as CDN
+    end
+
+    P->>S: GET /c/news.mpd
+    S->>R: GET channel URL (redirects followed)
+    R->>U: through tunnel gr
+    U-->>S: 200 MPD, final URL https://cdn/ch/manifest.mpd
+    S->>S: refuse ContentProtection,<br/>rewrite every BaseURL to a /p/ prefix URL,<br/>UTCTiming to /time, drop Location
+    S-->>P: 200 rewritten MPD
+    loop every minimumUpdatePeriod
+        P->>S: GET /c/news.mpd (fetched and rewritten again)
+    end
+    P->>S: GET /p/news/{sig}/n/{b64 https://cdn/ch/dash/}/News-video=1-1077.dash
+    S->>S: verify signature and path below the prefix
+    S->>R: GET https://cdn/ch/dash/News-video=1-1077.dash
+    R->>U: through tunnel gr
+    U-->>S: segment bytes
+    S-->>P: streamed (io.Copy)
+```
+
+- The player builds segment URLs itself (`$Time$`, `$Number$`), so one
+  signature must cover all of them: the prefix URL signs the upstream
+  directory (scheme, host, port, path) for the channel; the proxy accepts
+  any path below it that cannot step out (no `..`, encoded `..`, `%2F`,
+  `//`, no query unless the manifest uses one, spec 4.1).
+- Plain relative templates stay as they are; the player resolves them
+  against the rewritten `BaseURL`. Absolute templates and references that
+  leave their directory get a prefix URL of their own.
+- Everything a player could fetch past the proxy is rewritten, removed
+  (`Location`, `PatchLocation`, content steering, reporting) or makes the
+  manifest fail with `502` (remote `xlink` elements, `DOCTYPE`, ambiguous
+  XML); a manifest with DRM (`ContentProtection`) is refused (`drm`).
+- Like HLS, the rewrite is stateless: a live manifest is rewritten on
+  every reload, and route and headers come from the channel config at
+  request time.
 
 ## 5. Routing and the guard
 
@@ -476,7 +534,7 @@ flowchart TB
 
     subgraph l1["1 · HTTP"]
         pl["/playlist.m3u8<br/>playlist.Render"]:::data
-        cr["/c/{id}, /r/…<br/>handleChannel,<br/>handleResource"]:::data
+        cr["/c/{id}, /r/…, /p/…<br/>handleChannel,<br/>handleResource,<br/>handlePrefix"]:::data
         logos["/logos/{file}"]:::data
         ep["/healthz, /metrics"]:::obs
     end
@@ -486,8 +544,9 @@ flowchart TB
     end
     subgraph l3["3 · Content"]
         proxy["Server.proxy<br/>fetch, then respond"]:::data
-        det["hls.Detect<br/>HLS or raw"]:::data
+        det["hls.Detect<br/>HLS, DASH or raw"]:::data
         rw["hls.Rewrite + Signer<br/>URIs to signed /r/"]:::data
+        drw["dash.Rewrite + Signer<br/>bases to prefix-signed /p/"]:::data
         pipe["stream<br/>io.Copy + flush"]:::data
         reg["metrics.Metrics<br/>wsp_* registry"]:::obs
     end
@@ -541,7 +600,7 @@ Requests go down the layers, responses travel back up.
 |---|---|---|---|
 | 1 HTTP | Routing of the paths, absolute base URL, `/logos/` from disk, `/healthz`; graceful shutdown waits for running handlers | `internal/server`, `internal/playlist` | 6, 7.1 |
 | 2 Generation | The immutable `generation`: one `config.Config` plus the `route.Set` built for it, in an `atomic.Pointer`. Every request takes it once and keeps it to its end | `internal/server`, `internal/config` | 5.6 |
-| 3 Content | `Server.proxy`: fetch through the channel's route, then `hls.Detect`; playlists go through `hls.Rewrite` with a `Signer.PathBuilder`, playlists `hls.Unsupported` names are refused with `502`, everything else goes through `stream` (`io.Copy` + flush). Status mapping, the `206` refetch | `internal/hls`, `internal/server` | 3.1-3.4, 4 |
+| 3 Content | `Server.proxy`: fetch through the channel's route, then `hls.Detect`; playlists go through `hls.Rewrite` with a `Signer.PathBuilder`, DASH manifests through `dash.Rewrite` with `Signer.PrefixPath`, playlists `hls.Unsupported` names are refused with `502`, everything else goes through `stream` (`io.Copy` + flush). Status mapping, the `206` refetch | `internal/hls`, `internal/server` | 3.1-3.4, 4 |
 | 4 Routes | One `Route` per tunnel plus `direct`. `Fetch` applies the upstream header rules, redirects and timeouts; the route's `dial` resolves, runs `Guard.Check` and connects Happy-Eyeballs style. Two `http.Transport`s per route: the normal pool, and the ICY transport for `/c/` of raw and `auto` channels, which uses each connection for one request only | `internal/route` | 2.1, 3.3-3.5 |
 | 5 Tunnels | `tunnel.Manager` with one `Tunnel` per tunnel file: lazy start, idle close, drain, reload (`Apply`). `direct` is `route.Host()`: host resolver and dialer | `internal/tunnel`, `internal/tunnel/netstack`, `internal/config/wgquick` | 2.1, 5.5 |
 | 6 Host network | One UDP socket per running tunnel to its peer; plain TCP for `direct`. No TUN device, no routing table change | wireguard-go `conn` | 1.1, 2.1 |
@@ -820,6 +879,7 @@ flowchart TD
     server["internal/server<br/>HTTP handlers, Run, reload"]:::done
     playlist["internal/playlist<br/>channel list"]:::done
     hls["internal/hls<br/>Detect, Rewrite, Signer"]:::done
+    dash["internal/dash<br/>MPD Rewrite"]:::done
     route["internal/route<br/>routes, guard, upstream rules"]:::done
     tunnel["internal/tunnel<br/>Manager, Tunnel, DNS"]:::done
     netstack["internal/tunnel/netstack<br/>copy of wireguard-go's"]:::done
@@ -832,7 +892,7 @@ flowchart TD
     probe["internal/probe<br/>probe command"]:::done
 
     main --> server & config & importer & epg & probe & route & tunnel & hls
-    server --> playlist & hls & route & tunnel & metrics & clips
+    server --> playlist & hls & dash & route & tunnel & metrics & clips
     playlist --> config
     route --> config
     tunnel -. "implements route Network" .-> route
@@ -852,11 +912,12 @@ run time.
 | `cmd/wg-stream-proxy` | Subcommand dispatch; `serve`, `check`, `probe`, `import`, `healthcheck`, `epg`, `tunnel` and `version` work | exists |
 | `internal/config` | Config dir resolution (`Resolve`), loading and validation of `config.toml` and channel files (`Load`), slugs (`Slug`), route resolution | exists |
 | `internal/config/wgquick` | Tunnel file parser (`Parse`), UAPI conversion (`UAPIConfig`), `AllowedIPs` check (`Allows`) | exists |
-| `internal/hls` | Type detection (`Detect`), playlist rewriter (`Rewrite`), signed `/r/` URLs (`Signer`), signing key (`LoadSigningKey`); pure functions, no I/O | exists |
+| `internal/hls` | Type detection (`Detect`), playlist rewriter (`Rewrite`), signed `/r/` URLs and prefix-signed `/p/` URLs (`Signer`), signing key (`LoadSigningKey`); pure functions, no I/O | exists |
+| `internal/dash` | DASH manifest rewriter (`Rewrite`, spec 3.6): token-level XML, `BaseURL` to prefix URLs, DRM refused ([#86](https://github.com/KingOfKalk/wg-stream-proxy/issues/86)); pure function, no I/O | exists |
 | `internal/tunnel` | One `wireguard-go` device + gVisor netstack per tunnel, DNS inside the tunnel, lazy start ([#11](https://github.com/KingOfKalk/wg-stream-proxy/issues/11)); idle close and drain ([#16](https://github.com/KingOfKalk/wg-stream-proxy/issues/16)); reload (`Manager.Apply`); state snapshots and cool-down (`Manager.Cooldown`, [#68](https://github.com/KingOfKalk/wg-stream-proxy/issues/68)) | exists |
 | `internal/tunnel/netstack` | Trimmed copy of wireguard-go's `tun/netstack` (MIT) that drops packets sent after `Close` ([#47](https://github.com/KingOfKalk/wg-stream-proxy/issues/47), spec 9) | exists |
 | `internal/route` | One route per tunnel plus `direct`, `http.Transport` settings, guard, upstream header rules, timeouts, status mapping ([#12](https://github.com/KingOfKalk/wg-stream-proxy/issues/12)); raw and ICY ([#15](https://github.com/KingOfKalk/wg-stream-proxy/issues/15)). Defines the `Network` interface (resolve + dial a resolved `IP:port`) that tunnels and `direct` implement | exists |
-| `internal/server` | `/playlist.m3u8`, `/c/`, `/r/`, `/healthz`, absolute URL base, graceful shutdown (`Run`) ([#14](https://github.com/KingOfKalk/wg-stream-proxy/issues/14)); `/logos/`, `healthcheck` ([#19](https://github.com/KingOfKalk/wg-stream-proxy/issues/19)); `/metrics` ([#18](https://github.com/KingOfKalk/wg-stream-proxy/issues/18)); `SIGHUP` reload (`Reloader`); debug endpoints on their own listener ([#68](https://github.com/KingOfKalk/wg-stream-proxy/issues/68)), incl. `POST /debug/probe` for the `probe` command ([#122](https://github.com/KingOfKalk/wg-stream-proxy/issues/122)) | exists |
+| `internal/server` | `/playlist.m3u8`, `/c/`, `/r/`, `/p/` and `/time` ([#86](https://github.com/KingOfKalk/wg-stream-proxy/issues/86)), `/healthz`, absolute URL base, graceful shutdown (`Run`) ([#14](https://github.com/KingOfKalk/wg-stream-proxy/issues/14)); `/logos/`, `healthcheck` ([#19](https://github.com/KingOfKalk/wg-stream-proxy/issues/19)); `/metrics` ([#18](https://github.com/KingOfKalk/wg-stream-proxy/issues/18)); `SIGHUP` reload (`Reloader`); debug endpoints on their own listener ([#68](https://github.com/KingOfKalk/wg-stream-proxy/issues/68)), incl. `POST /debug/probe` for the `probe` command ([#122](https://github.com/KingOfKalk/wg-stream-proxy/issues/122)) | exists |
 | `internal/playlist` | Renders the channel list (spec 6) | exists |
 | `internal/clips` | Built-in clip segments (`go:embed`, rendered by `generate.sh`), `Repeat` for a segment at a position in a stream of copies (timestamps, continuity counters); error clips on `/c/` ([#115](https://github.com/KingOfKalk/wg-stream-proxy/issues/115)) | exists |
 | `internal/metrics` | Private Prometheus registry with the `wsp_` metrics (spec 7.3) and the Go and process metrics; tunnel gauges read at scrape time ([#18](https://github.com/KingOfKalk/wg-stream-proxy/issues/18)) | exists |
@@ -1024,8 +1085,9 @@ flowchart TB
 | Guard | The private-range guard: checks the resolved IP before every upstream dial and blocks LAN, loopback and similar ranges unless allowed per route. |
 | Fail closed | When something is wrong (no route, tunnel down, unsafe playlist), the request fails; it never falls back to a less safe path. |
 | Resource URL | A signed `/r/{channel}/{sig}/{b64url}/{name}` URL that replaces an upstream URL inside a rewritten playlist. |
-| Signing key | The secret for the HMAC signature of resource URLs, so `/r/` only fetches URLs that came from a rewritten playlist of that channel. |
+| Prefix URL | A prefix-signed `/p/{channel}/{sig}/{mode}/{b64prefix}/` URL that replaces a base URL inside a rewritten DASH manifest; it covers every path below the upstream directory. |
+| Signing key | The secret for the HMAC signature of resource and prefix URLs, so `/r/` and `/p/` only fetch URLs that came from a rewritten playlist or manifest of that channel. |
 | Control plane | Config, reload, tunnel lifecycle, signing key, health and metrics. |
-| Data plane | The request path: channel list, `/c/`, `/r/`, raw pipe. |
+| Data plane | The request path: channel list, `/c/`, `/r/`, `/p/`, raw pipe. |
 | Observability plane | `/healthz`, `/metrics` and what feeds them. Section 3 counts it to the control plane; section 7 draws it on its own. |
 | Generation | One loaded config with the routes built for it. A request uses the generation it started with; a reload swaps in the next one for new requests. |

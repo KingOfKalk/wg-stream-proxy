@@ -518,9 +518,9 @@ func TestDetection(t *testing.T) {
 		t.Errorf("forced hls: status %d, body %q", resp.StatusCode, body)
 	}
 	// Auto: raw bodies are piped with their headers.
-	e.up.add("/radio", file{ctype: "audio/mpeg", body: "ID3 not a playlist", header: http.Header{"Icy-Name": {"Jazz"}, "X-Private": {"no"}}})
+	e.up.add("/radio", file{ctype: "audio/mpeg", body: "ID3\x04\x00 not a playlist", header: http.Header{"Icy-Name": {"Jazz"}, "X-Private": {"no"}}})
 	resp, body = e.get(t, "/c/radio", http.Header{"Icy-Metadata": {"1"}, "Cookie": {"no"}})
-	if resp.StatusCode != http.StatusOK || body != "ID3 not a playlist" {
+	if resp.StatusCode != http.StatusOK || body != "ID3\x04\x00 not a playlist" {
 		t.Errorf("raw: status %d, body %q", resp.StatusCode, body)
 	}
 	if resp.Header.Get("Icy-Name") != "Jazz" || resp.Header.Get("X-Private") != "" || resp.Header.Get("Content-Type") != "audio/mpeg" {
@@ -687,7 +687,7 @@ func TestProductionGuard(t *testing.T) {
 
 func TestClientDisconnectCancelsUpstream(t *testing.T) {
 	e := newTVEnv(t)
-	e.up.add("/radio", file{ctype: "audio/mpeg", body: strings.Repeat("a", 4096), endless: true})
+	e.up.add("/radio", file{ctype: "audio/mpeg", body: binaryBody('a', 4096), endless: true})
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, e.proxy.URL+"/c/radio", nil)
 	if err != nil {
 		t.Fatal(err)

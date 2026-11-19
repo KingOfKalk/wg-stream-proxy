@@ -111,7 +111,7 @@ func TestRunTunnelIdleClose(t *testing.T) {
 	const idle = 10 * time.Minute
 	up := newUpstream()
 	up.add("/seg.ts", file{ctype: "video/mp2t", body: "segment"})
-	up.add("/radio", file{ctype: "audio/mpeg", body: strings.Repeat("a", 1024), endless: true})
+	up.add("/radio", file{ctype: "audio/mpeg", body: binaryBody('a', 1024), endless: true})
 	peer := tunneltest.Start(t, tunneltest.Options{Handler: up})
 	peer.SetHost("upstream.test", tunneltest.ServerAddr4)
 	dir := writeConfig(t, map[string]string{

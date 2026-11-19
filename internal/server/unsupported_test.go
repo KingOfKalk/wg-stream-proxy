@@ -3,6 +3,7 @@
 package server
 
 import (
+	"math/rand/v2"
 	"net/http"
 	"strings"
 	"testing"
@@ -51,7 +52,11 @@ func TestUnsupportedPlaylists(t *testing.T) {
 		{name: "pls as text", ctype: "text/plain", body: "[playlist]\r\nFile1=" + stream + "\r\n", format: "pls"},
 		{name: "plain m3u", ctype: "audio/x-mpegurl", body: stream + "\n", format: "m3u"},
 		{name: "plain m3u as octet-stream", ctype: "application/octet-stream", body: "# radio\n" + stream + "\n", format: "m3u"},
-		{name: "dash", ctype: "application/dash+xml", body: `<?xml version="1.0"?><MPD><BaseURL>` + stream + `</BaseURL></MPD>`, format: "dash"},
+		{
+			// Auto channels and resources rewrite it (spec 3.3).
+			name: "dash on a raw channel", ctype: "application/dash+xml",
+			body: `<?xml version="1.0"?><MPD><BaseURL>` + stream + `</BaseURL></MPD>`, format: "dash", channels: []string{"raw"},
+		},
 		{name: "xspf", ctype: "application/xspf+xml", body: `<playlist xmlns="http://xspf.org/ns/0/"><trackList><track><location>` + stream + `</location></track></trackList></playlist>`, format: "xspf"},
 		{name: "asx", ctype: "video/x-ms-asf", body: `<ASX version="3.0"><Entry><Ref href="` + stream + `"/></Entry></ASX>`, format: "asx"},
 		{
@@ -146,4 +151,173 @@ func TestUnsupportedPlaylists(t *testing.T) {
 			t.Errorf("404: status %d, body %q", resp.StatusCode, body)
 		}
 	})
+}
+
+// TestSniffGap checks spec 3.1 and 3.3 for XML playlists whose root
+// element is not in the first 512 bytes, or that a short look misreads:
+// they are detected or refused, never piped with their URLs.
+func TestSniffGap(t *testing.T) {
+	const secret = "token-a1b2c3"
+	stream := "http://radio.example/" + secret + "/stream.mp3"
+	longComment := "<!--" + strings.Repeat("x", 1000) + "-->"
+	tests := []struct {
+		name, ctype, body string
+		// want per path: /c/auto, /c/raw, /r/
+		want [3]int
+	}{
+		{
+			name: "doctype with internal subset", ctype: "text/xml",
+			body: `<?xml version="1.0"?><!DOCTYPE MPD [<!ENTITY a "b">]><MPD><BaseURL>` + stream + `</BaseURL><Period/></MPD>`,
+			// auto and /r/ detect DASH, whose rewriter rejects the DOCTYPE.
+			want: [3]int{502, 502, 502},
+		},
+		{
+			name: "MPD after a long comment", ctype: "application/octet-stream",
+			body: longComment + `<MPD><BaseURL>` + stream + `</BaseURL><Period/></MPD>`,
+			want: [3]int{200, 502, 200},
+		},
+		{
+			name: "XSPF after a long comment", ctype: "application/octet-stream",
+			body: longComment + `<playlist><trackList><track><location>` + stream + `</location></track></trackList></playlist>`,
+			want: [3]int{502, 502, 502},
+		},
+		{
+			name: "no root within 64 KiB", ctype: "text/xml",
+			body: "<!--" + strings.Repeat("x", 70000) + `--><playlist><location>` + stream + `</location></playlist>`,
+			want: [3]int{502, 502, 502},
+		},
+		{
+			name: "MPD hidden in a comment from encoding/xml", ctype: "text/xml",
+			body: `<!---><MPD><BaseURL>` + stream + `</BaseURL><Period/></MPD>--><x/>`,
+			want: [3]int{502, 502, 502},
+		},
+		{
+			name: "MPD hidden in a processing instruction", ctype: "text/xml",
+			body: `<?p a><MPD><BaseURL>` + stream + `</BaseURL><Period/></MPD><q ?><x/>`,
+			want: [3]int{502, 502, 502},
+		},
+		{
+			name: "MPD hidden in a doctype", ctype: "text/xml",
+			body: `<!DOCTYPE x [<!ENTITY a "]><MPD><BaseURL>` + stream + `</BaseURL><Period/></MPD><!-- ">]><x/>`,
+			want: [3]int{502, 502, 502},
+		},
+		{
+			name: "MPD after another root", ctype: "text/xml",
+			body: `<x/><MPD><BaseURL>` + stream + `</BaseURL><Period/></MPD>`,
+			want: [3]int{502, 502, 502},
+		},
+		{
+			name: "MPD after another root and a declaration", ctype: "text/xml",
+			body: "<?xml version=\"1.0\"?>\n<x></x>\n<MPD><BaseURL>" + stream + "</BaseURL><Period/></MPD>",
+			want: [3]int{502, 502, 502},
+		},
+		{
+			name: "MPD beyond the sniff window", ctype: "text/xml",
+			body: "<x>" + strings.Repeat("t", 70000) + "</x><MPD><BaseURL>" + stream + "</BaseURL><Period/></MPD>",
+			want: [3]int{502, 502, 502},
+		},
+		{
+			name: "HTML page", ctype: "text/html",
+			body: `<!DOCTYPE html><html><body><a href="` + stream + `">x</a></body></html>`,
+			want: [3]int{502, 502, 502},
+		},
+		{
+			name: "UTF-16BE MPD without BOM", ctype: "text/xml",
+			body: utf16be(`<?xml version="1.0"?><MPD><BaseURL>` + stream + `</BaseURL></MPD>`),
+			want: [3]int{502, 502, 502},
+		},
+		{
+			name: "UTF-16 MPD", ctype: "text/xml",
+			body: "\xff\xfe" + utf16le(`<MPD><BaseURL>`+stream+`</BaseURL></MPD>`),
+			want: [3]int{502, 502, 502},
+		},
+	}
+	mpd := `<MPD><BaseURL>` + stream + `</BaseURL><Period/></MPD>`
+	for _, lead := range []struct{ name, short, long string }{
+		{"text", "x", strings.Repeat("x", 600)},
+		{"a second BOM", "\ufeff\ufeff", strings.Repeat("\ufeff", 200)},
+		{"a comment line", "#c\n", strings.Repeat("#c\n", 200)},
+		{"NBSP", "\u00a0", strings.Repeat("\u00a0", 300)},
+		{"NUL", "\x00", ""},
+	} {
+		tests = append(tests, struct {
+			name, ctype, body string
+			want              [3]int
+		}{"MPD after " + lead.name, "text/xml", lead.short + mpd, [3]int{502, 502, 502}})
+		if lead.long != "" {
+			tests = append(tests, struct {
+				name, ctype, body string
+				want              [3]int
+			}{"MPD after long " + lead.name, "text/xml", lead.long + mpd, [3]int{502, 502, 502}})
+		}
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e := newDirectEnv(t, allowLoopback, unsupportedTOML)
+			e.up.add("/list", file{ctype: tt.ctype, body: tt.body})
+			for i, p := range []string{"/c/auto", "/c/raw", e.signer.Path("auto", e.upURL+"/list")} {
+				resp, body := e.get(t, p, nil)
+				if resp.StatusCode != tt.want[i] {
+					t.Errorf("GET %s: status %d, want %d", p, resp.StatusCode, tt.want[i])
+				}
+				if strings.Contains(body, secret) || strings.Contains(body, "radio.example") || strings.Contains(body, utf16le("radio")) || strings.Contains(body, utf16be("radio")) {
+					t.Errorf("GET %s: body leaks the upstream URL", p)
+				}
+			}
+		})
+	}
+}
+
+// utf16be encodes ASCII s as UTF-16BE.
+func utf16be(s string) string {
+	b := make([]byte, 0, 2*len(s))
+	for i := 0; i < len(s); i++ {
+		b = append(b, 0, s[i])
+	}
+	return string(b)
+}
+
+// utf16le encodes ASCII s as UTF-16LE.
+func utf16le(s string) string {
+	b := make([]byte, 0, 2*len(s))
+	for i := 0; i < len(s); i++ {
+		b = append(b, s[i], 0)
+	}
+	return string(b)
+}
+
+// TestSniffStreams: TTML subtitles and media that only look like XML in
+// part still stream unchanged.
+func TestSniffStreams(t *testing.T) {
+	ttml := `<?xml version="1.0" encoding="UTF-8"?>` + "\n" +
+		`<tt xmlns="http://www.w3.org/ns/ttml" xml:lang="en"><body><div><p begin="0s" end="2s">Hello</p></div></body></tt>` + "\n"
+	rnd := rand.New(rand.NewPCG(3, 4))
+	random := make([]byte, 4096)
+	for i := range random {
+		random[i] = byte(rnd.Uint32())
+	}
+	for _, tt := range []struct{ name, ctype, body string }{
+		{"ttml", "application/ttml+xml", ttml},
+		{"webvtt", "text/vtt", "WEBVTT\n\n00:00.000 --> 00:02.000\nHello\n"},
+		{"mp3 from mid-frame starting with <", "audio/mpeg", "\x3c\x9a\x01" + strings.Repeat("\xff\xfb\x90\x64\x00\x0f\xf0\x00\x00\x69", 300)},
+		{"random bytes", "application/octet-stream", string(random)},
+		{"fmp4 with a 60-byte ftyp", "video/mp4", "\x00\x00\x00<ftypiso6\x00\x00\x00\x00iso6dash" + strings.Repeat("\x00", 2000)},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			e := newDirectEnv(t, allowLoopback, unsupportedTOML)
+			e.up.add("/list", file{ctype: tt.ctype, body: tt.body})
+			for _, p := range []string{"/c/auto", "/c/raw", e.signer.Path("auto", e.upURL+"/list")} {
+				if resp, body := e.get(t, p, nil); resp.StatusCode != http.StatusOK || body != tt.body {
+					t.Errorf("GET %s: status %d, %d bytes; want 200 and the body", p, resp.StatusCode, len(body))
+				}
+			}
+		})
+	}
+	// A TTML document larger than the sniff window is refused.
+	big := `<tt xmlns="http://www.w3.org/ns/ttml"><body>` + strings.Repeat(`<p>x</p>`, 9000) + `</body></tt>`
+	e := newDirectEnv(t, allowLoopback, unsupportedTOML)
+	e.up.add("/list", file{ctype: "application/ttml+xml", body: big})
+	if resp, _ := e.get(t, "/c/auto", nil); resp.StatusCode != http.StatusBadGateway {
+		t.Errorf("large TTML: status %d, want 502", resp.StatusCode)
+	}
 }

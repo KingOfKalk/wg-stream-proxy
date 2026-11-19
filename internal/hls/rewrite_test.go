@@ -244,3 +244,23 @@ func TestRewriteWithSigner(t *testing.T) {
 		t.Errorf("%d rewritten URIs, want 11", len(got))
 	}
 }
+
+// TestRewriteOutputLimit bounds the rewritten playlist: a short URI can
+// become a long resource URL, so a playlist of many short URIs could grow
+// by orders of magnitude.
+func TestRewriteOutputLimit(t *testing.T) {
+	in := []byte(strings.Repeat("a\n", 200000)) // 400 KB
+	long := func(dst, abs []byte) []byte { return append(dst, strings.Repeat("x", 100)...) }
+	if out, err := Rewrite(in, mustParse(t, "https://cdn.example.com/x.m3u8"), long); !errors.Is(err, ErrPlaylistTooLarge) {
+		t.Fatalf("Rewrite: %d bytes, %v; want ErrPlaylistTooLarge", len(out), err)
+	}
+	short := func(dst, abs []byte) []byte { return append(dst, strings.Repeat("x", 20)...) }
+	if _, err := Rewrite(in, mustParse(t, "https://cdn.example.com/x.m3u8"), short); err != nil {
+		t.Fatalf("Rewrite within the limit: %v", err)
+	}
+	for n, want := range map[int]int{0: 1 << 20, 1 << 20: 16 << 20, 8 << 20: 64 << 20, MaxPlaylistSize: 64 << 20} {
+		if got := maxOutput(n); got != want {
+			t.Errorf("maxOutput(%d) = %d, want %d", n, got, want)
+		}
+	}
+}

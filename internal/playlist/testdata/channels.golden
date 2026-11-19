@@ -14,3 +14,12 @@ https://tv.example.org/wsp/c/radio-jazz
 https://tv.example.org/wsp/c/raw-with-playlist-path.m3u8
 #EXTINF:-1 tvg-name="Query only" tvg-logo="missing.png" group-title="20-radio",Query only
 https://tv.example.org/wsp/c/query-only
+#KODIPROP:inputstream=inputstream.adaptive
+#EXTINF:-1 tvg-name="DASH by path" group-title="DASH",DASH by path
+https://tv.example.org/wsp/c/dash-by-path.mpd
+#EXTINF:-1 tvg-name="DASH by type" group-title="DASH",DASH by type
+https://tv.example.org/wsp/c/dash-by-type.mpd
+#EXTINF:-1 tvg-name="HLS type with MPD path" group-title="DASH",HLS type with MPD path
+https://tv.example.org/wsp/c/hls-type-with-mpd-path.m3u8
+#EXTINF:-1 tvg-name="DASH type with HLS path" group-title="DASH",DASH type with HLS path
+https://tv.example.org/wsp/c/dash-type-with-hls-path.mpd

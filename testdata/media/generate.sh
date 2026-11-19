@@ -29,8 +29,8 @@ owner=$2
 
 ffmpeg -hide_banner -version | head -n 1
 
-rm -rf ts fmp4 aes demuxed radio
-mkdir -p ts fmp4 aes demuxed/video demuxed/audio radio
+rm -rf ts fmp4 aes demuxed radio dash
+mkdir -p ts fmp4 aes demuxed/video demuxed/audio radio dash/seg
 
 # Sources: 12 s of a 192x108 test pattern at 25 fps and a 440 Hz tone.
 DURATION=12
@@ -80,6 +80,20 @@ run -f lavfi -i "$AUDIO" -vn $A $COMMON $HLS \
 run -f lavfi -i "sine=frequency=660:sample_rate=44100:duration=10" \
 	-c:a libmp3lame -b:a 32k -ac 1 -id3v2_version 0 -write_xing 0 $COMMON radio/tone.mp3
 
+# dash: H.264 + AAC as MPEG-DASH (VOD), shaped like a broadcaster's live
+# packager: SegmentTemplate with $RepresentationID$ and $Time$, a
+# SegmentTimeline, and the segments below a relative Period BaseURL.
+tmp=$(mktemp -d)
+echo "+ ffmpeg (dash)"
+# shellcheck disable=SC2086 # word splitting of the option strings is intended
+ffmpeg -hide_banner -loglevel error -y -f lavfi -i "$VIDEO" -f lavfi -i "$AUDIO" $V $A $COMMON \
+	-avoid_negative_ts make_zero -f dash -seg_duration 2 -use_template 1 -use_timeline 1 \
+	-init_seg_name 'init-$RepresentationID$.m4s' -media_seg_name 'chunk-$RepresentationID$-$Time$.m4s' \
+	-adaptation_sets 'id=0,streams=v id=1,streams=a' "$tmp/manifest.mpd"
+mv "$tmp"/*.m4s dash/seg/
+sed 's|\(<Period[^>]*>\)|\1\n\t\t<BaseURL>seg/</BaseURL>|' "$tmp/manifest.mpd" > dash/manifest.mpd
+rm -rf "$tmp"
+
 # Master playlists, written by hand.
 master() {
 	printf '#EXTM3U\n#EXT-X-VERSION:%s\n#EXT-X-INDEPENDENT-SEGMENTS\n%s' "$2" "$3" > "$1/master.m3u8"
@@ -98,5 +112,5 @@ master demuxed 3 '#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aud",NAME="Tone",LANGUAGE="e
 video/index.m3u8
 '
 
-chown -R "$owner" ts fmp4 aes demuxed radio
+chown -R "$owner" ts fmp4 aes demuxed radio dash
 du -sh .

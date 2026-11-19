@@ -126,6 +126,10 @@ func TestRunFormats(t *testing.T) {
 		status   int
 		variants int
 		segments int
+		periods  int
+		// adaptationSets counts the AdaptationSet elements of a DASH
+		// manifest.
+		adaptationSets int
 	}{
 		{
 			name:  "hls media playlist and its first segment",
@@ -163,9 +167,29 @@ func TestRunFormats(t *testing.T) {
 			path:  "/r.pls", allow: true, steps: []string{"url"}, format: "refused", refused: "pls", class: "unsupported", status: 200,
 		},
 		{
-			name:  "refused dash",
-			files: map[string]file{"/m.mpd": {ctype: "application/dash+xml", body: "<MPD/>"}},
-			path:  "/m.mpd", allow: true, steps: []string{"url"}, format: "refused", refused: "dash", class: "unsupported", status: 200,
+			name:  "dash manifest",
+			files: map[string]file{"/m.mpd": {ctype: "application/dash+xml", body: dashManifest}},
+			path:  "/m.mpd", allow: true, ok: true, steps: []string{"url"}, format: "dash", status: 200, periods: 2, adaptationSets: 3,
+		},
+		{
+			name:  "dash manifest detected by body after a long comment",
+			files: map[string]file{"/play": {ctype: "application/octet-stream", body: "<!--" + strings.Repeat("x", 1000) + "-->" + strings.TrimPrefix(dashManifest, "<?xml version=\"1.0\"?>\n")}},
+			path:  "/play", allow: true, ok: true, steps: []string{"url"}, format: "dash", status: 200, periods: 2, adaptationSets: 3,
+		},
+		{
+			name:  "dash manifest with DRM",
+			files: map[string]file{"/m.mpd": {ctype: "application/dash+xml", body: `<MPD><Period><AdaptationSet><ContentProtection schemeIdUri="urn:mpeg:dash:mp4protection:2011"/></AdaptationSet></Period></MPD>`}},
+			path:  "/m.mpd", allow: true, steps: []string{"url"}, format: "dash", class: "drm", status: 200,
+		},
+		{
+			name:  "dash manifest the rewriter rejects",
+			files: map[string]file{"/m.mpd": {ctype: "application/dash+xml", body: `<MPD><Period xlink:href="https://x.example/p.xml" xmlns:xlink="http://www.w3.org/1999/xlink"/></MPD>`}},
+			path:  "/m.mpd", allow: true, steps: []string{"url"}, format: "dash", class: "other", status: 200,
+		},
+		{
+			name:  "refused utf-16 xml",
+			files: map[string]file{"/x": {ctype: "text/xml", body: "\xff\xfe<\x00M\x00P\x00D\x00>\x00"}},
+			path:  "/x", allow: true, steps: []string{"url"}, format: "refused", refused: "unknown", class: "unsupported", status: 200,
 		},
 		{
 			name:  "refused plain m3u by body",
@@ -230,6 +254,9 @@ func TestRunFormats(t *testing.T) {
 			}
 			if s.Variants != tt.variants || s.Segments != tt.segments {
 				t.Errorf("variants/segments = %d/%d, want %d/%d", s.Variants, s.Segments, tt.variants, tt.segments)
+			}
+			if s.Periods != tt.periods || s.AdaptationSets != tt.adaptationSets {
+				t.Errorf("periods/adaptation sets = %d/%d, want %d/%d", s.Periods, s.AdaptationSets, tt.periods, tt.adaptationSets)
 			}
 			last := rep.Steps[len(rep.Steps)-1]
 			if tt.class == "" {
@@ -587,3 +614,15 @@ func TestSanitize(t *testing.T) {
 		t.Errorf("output contains control characters: %q", buf.String())
 	}
 }
+
+// dashManifest is a live DASH manifest with two periods and three
+// adaptation sets.
+const dashManifest = `<?xml version="1.0"?>
+<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" type="dynamic">
+  <Period id="1"><BaseURL>dash/</BaseURL>
+    <AdaptationSet mimeType="video/mp4"><SegmentTemplate media="v-$Number$.m4s"/><Representation id="v" bandwidth="1"/></AdaptationSet>
+    <AdaptationSet mimeType="audio/mp4"><SegmentTemplate media="a-$Number$.m4s"/><Representation id="a" bandwidth="1"/></AdaptationSet>
+  </Period>
+  <Period id="2"><AdaptationSet mimeType="video/mp4"><SegmentTemplate media="v-$Number$.m4s"/><Representation id="v" bandwidth="1"/></AdaptationSet></Period>
+</MPD>
+`

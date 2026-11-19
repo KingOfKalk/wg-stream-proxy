@@ -3,8 +3,8 @@
 // Command wg-stream-proxy routes each IPTV and internet radio channel
 // through its own userspace WireGuard tunnel (or direct) and serves them as
 // one M3U playlist for Kodi, VLC and other players. It proxies HLS (TS,
-// fMP4, AES-128) and raw/ICY audio streams; no root, no TUN device, fails
-// closed.
+// fMP4, AES-128), MPEG-DASH without DRM and raw/ICY audio streams; no
+// root, no TUN device, fails closed.
 package main
 
 import (

@@ -6,8 +6,9 @@ Guidance for AI coding agents working on this repository.
 
 - Go service: route each IPTV and internet radio channel through its own
   userspace WireGuard tunnel (or direct) and serve them as one M3U playlist
-  for Kodi, VLC and other players. Proxies HLS (TS, fMP4, AES-128) and
-  raw/ICY audio streams; no root, no TUN device, fails closed.
+  for Kodi, VLC and other players. Proxies HLS (TS, fMP4, AES-128),
+  MPEG-DASH without DRM and raw/ICY audio streams; no root, no TUN device,
+  fails closed.
 - Spec (binding): [docs/spec.md](docs/spec.md). Deployment:
   [docs/deploy.md](docs/deploy.md). Testing:
   [docs/testing.md](docs/testing.md). Monitoring:

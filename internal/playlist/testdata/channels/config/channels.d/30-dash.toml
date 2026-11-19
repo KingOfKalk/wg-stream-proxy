@@ -1,0 +1,30 @@
+tunnel = "direct"
+group = "DASH"
+
+[[channel]]
+name = "DASH by path"
+url = "https://dash.example.com/live/ch1/manifest.mpd"
+
+[channel.playlist.extra.KODIPROP]
+"inputstream" = "inputstream.adaptive"
+
+[[channel]]
+name = "DASH by type"
+url = "https://dash.example.com/live/ch2"
+
+[channel.upstream]
+type = "dash"
+
+[[channel]]
+name = "HLS type with MPD path"
+url = "https://dash.example.com/live/ch3.mpd"
+
+[channel.upstream]
+type = "hls"
+
+[[channel]]
+name = "DASH type with HLS path"
+url = "https://dash.example.com/live/ch4/index.m3u8"
+
+[channel.upstream]
+type = "dash"

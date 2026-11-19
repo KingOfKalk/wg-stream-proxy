@@ -7,7 +7,7 @@ Companion to [spec.md](spec.md) (7.3 metrics, 7.1 debug endpoints, 8 log) and [d
 | Where | What | Use |
 |---|---|---|
 | `GET /metrics` on the main listener (`listen`, default `:2349`) | The `wsp_` metrics ([spec 7.3](spec.md)) plus the standard `go_*` and `process_*` metrics | Trends over days: Prometheus and Grafana (this document) |
-| Log, `log_level = "debug"` | One `request` line per `/c/`, `/r/` and `/clip/` request with its timings ([spec 8](spec.md)); tunnel start, failure and close lines carry durations at every level; a failure answered with an error clip has `clip=<name>` on its `warn` line (every level) | Why one request was slow or failed |
+| Log, `log_level = "debug"` | One `request` line per `/c/`, `/r/`, `/p/` and `/clip/` request with its timings ([spec 8](spec.md)); tunnel start, failure and close lines carry durations at every level; a failure answered with an error clip has `clip=<name>` on its `warn` line (every level) | Why one request was slow or failed |
 | Debug endpoints on `debug.listen` (off by default) | Profiles, the last 256 requests, tunnel state, cool-down ([spec 7.1](spec.md), [deploy.md](deploy.md#debug-endpoints)) | Looking at the running process now |
 
 `/metrics` has no authentication and sits on the player-facing port: keep the proxy on the LAN ([spec 8](spec.md)). Metrics hold channel ids and tunnel names from your config, never URLs or keys.

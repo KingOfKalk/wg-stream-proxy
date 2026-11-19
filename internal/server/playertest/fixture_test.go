@@ -64,6 +64,7 @@ func testFS() fstest.MapFS {
 		"a/key.bin":     {Data: []byte("test-only-key-01")},
 		"b/index.m3u8":  {Data: []byte(vodPlaylist)},
 		"r/tone.mp3":    {Data: []byte("0123456789abcdefghijklmnopqrstuvwxyz")},
+		"d/m.mpd":       {Data: []byte("<MPD/>")},
 	}
 	for i := range 5 {
 		f["a/seg"+strconv.Itoa(i)+".ts"] = &fstest.MapFile{Data: []byte("segment " + strconv.Itoa(i) + ";")}
@@ -172,6 +173,7 @@ func TestStatic(t *testing.T) {
 		{"directory", "/vod/a", nil, http.StatusNotFound, "", ""},
 		{"raw ts", "/raw/a", nil, http.StatusOK, "video/mp2t", "segment 0;segment 1;segment 2;segment 3;segment 4;"},
 		{"raw without playlist", "/raw/r", nil, http.StatusNotFound, "", ""},
+		{"dash manifest", "/vod/d/m.mpd", nil, http.StatusOK, "application/dash+xml", "<MPD/>"},
 	}
 	f, _, srv := newTestFixtures(t)
 	for _, tt := range tests {
@@ -321,5 +323,26 @@ func TestCloseEndsShoutcast(t *testing.T) {
 	f.Close()
 	if _, err := io.Copy(io.Discard, r); err != nil {
 		t.Logf("stream ended with %v", err)
+	}
+}
+
+func TestRedirect(t *testing.T) {
+	f, _, srv := newTestFixtures(t)
+	c := *srv.Client()
+	c.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/redirect/d/m.mpd", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := c.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusFound || resp.Header.Get("Location") != "/vod/d/m.mpd" {
+		t.Errorf("status %d, Location %q; want 302 to /vod/d/m.mpd", resp.StatusCode, resp.Header.Get("Location"))
+	}
+	if reqs := f.Requests(); len(reqs) != 1 || reqs[0] != "/redirect/d/m.mpd" {
+		t.Errorf("Requests() = %v", reqs)
 	}
 }

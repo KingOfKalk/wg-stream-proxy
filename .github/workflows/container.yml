@@ -135,7 +135,7 @@ jobs:
             --build-arg VERSION="$VERSION" --build-arg REVISION="$GITHUB_SHA" \
             --provenance=false --sbom=false \
             --annotation "index:org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
-            --annotation "index:org.opencontainers.image.description=Route each IPTV and internet radio channel through its own userspace WireGuard tunnel (or direct) and serve them as one M3U playlist for Kodi, VLC and other players. Proxies HLS (TS, fMP4, AES-128) and raw/ICY audio streams; no root, no TUN device, fails closed." \
+            --annotation "index:org.opencontainers.image.description=Route each IPTV and internet radio channel through its own userspace WireGuard tunnel (or direct) and serve them as one M3U playlist for Kodi, VLC and other players. Proxies HLS (TS, fMP4, AES-128), MPEG-DASH without DRM and raw/ICY audio streams; no root, no TUN device, fails closed." \
             --annotation "index:org.opencontainers.image.licenses=AGPL-3.0-or-later" \
             --metadata-file "$RUNNER_TEMP/metadata.json" \
             --push "${args[@]}" .

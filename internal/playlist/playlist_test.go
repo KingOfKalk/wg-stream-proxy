@@ -90,13 +90,17 @@ func TestRenderEmpty(t *testing.T) {
 func TestChannelPath(t *testing.T) {
 	cfg := load(t, "channels")
 	want := map[string]string{
-		"ert1-eidiseis":          "/c/ert1-eidiseis.m3u8", // path contains .m3u8
-		"skai-live-hd":           "/c/skai-live-hd.m3u8",  // type hls
-		"news-24":                "/c/news-24",            // .M3U8 does not count
-		"radio-jazz":             "/c/radio-jazz",
-		"raw-with-playlist-path": "/c/raw-with-playlist-path.m3u8", // contains .m3u8
-		"query-only":             "/c/query-only",                  // query ignored
-		"disabled-channel":       "/c/disabled-channel.m3u8",
+		"ert1-eidiseis":           "/c/ert1-eidiseis.m3u8", // path contains .m3u8
+		"skai-live-hd":            "/c/skai-live-hd.m3u8",  // type hls
+		"news-24":                 "/c/news-24",            // .M3U8 does not count
+		"radio-jazz":              "/c/radio-jazz",
+		"raw-with-playlist-path":  "/c/raw-with-playlist-path.m3u8", // contains .m3u8
+		"query-only":              "/c/query-only",                  // query ignored
+		"disabled-channel":        "/c/disabled-channel.m3u8",
+		"dash-by-path":            "/c/dash-by-path.mpd",            // path contains .mpd
+		"dash-by-type":            "/c/dash-by-type.mpd",            // type dash
+		"hls-type-with-mpd-path":  "/c/hls-type-with-mpd-path.m3u8", // type hls wins
+		"dash-type-with-hls-path": "/c/dash-type-with-hls-path.mpd", // type dash wins
 	}
 	for _, ch := range cfg.Channels() {
 		w, ok := want[ch.ID()]

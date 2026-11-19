@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/KingOfKalk/wg-stream-proxy/internal/dash"
 	"github.com/KingOfKalk/wg-stream-proxy/internal/hls"
 	"github.com/KingOfKalk/wg-stream-proxy/internal/route"
 	"github.com/KingOfKalk/wg-stream-proxy/internal/tunnel"
@@ -50,7 +51,9 @@ const (
 const (
 	FormatHLSMaster = "hls-master"
 	FormatHLSMedia  = "hls-media"
-	FormatRaw       = "raw"
+	// FormatDASH is a DASH manifest (MPD) the proxy rewrites (spec 3.6).
+	FormatDASH = "dash"
+	FormatRaw  = "raw"
 	// FormatICY is a raw stream with icy-* headers (Shoutcast radio).
 	FormatICY = "icy"
 	// FormatRefused is a playlist in a format the proxy does not rewrite
@@ -116,9 +119,12 @@ type Step struct {
 	// Refused is the playlist format the proxy refuses (hls.Format*).
 	Refused string `json:"refused,omitempty"`
 	// Variants and Segments count the entries of an HLS playlist.
-	Variants  int `json:"variants,omitempty"`
-	Segments  int `json:"segments,omitempty"`
-	Redirects int `json:"redirects,omitempty"`
+	Variants int `json:"variants,omitempty"`
+	Segments int `json:"segments,omitempty"`
+	// Periods and AdaptationSets count the elements of a DASH manifest.
+	Periods        int `json:"periods,omitempty"`
+	AdaptationSets int `json:"adaptation_sets,omitempty"`
+	Redirects      int `json:"redirects,omitempty"`
 	// OK: the proxy would serve this response.
 	OK bool `json:"ok"`
 	// Class is the failure class: a route.Reason, or ClassStatus.
@@ -228,7 +234,7 @@ func (p *prober) step(ctx context.Context, role, rawURL string, icy bool) *Step 
 		s.OK = true
 		return s
 	}
-	typ, refused, err := detect(resp.Header.Get("Content-Type"), body)
+	typ, refused, body, err := detect(resp.Header.Get("Content-Type"), body)
 	switch {
 	case err != nil:
 		s.fail(string(route.Classify(err)), "reading the response: "+err.Error())
@@ -237,6 +243,8 @@ func (p *prober) step(ctx context.Context, role, rawURL string, icy bool) *Step 
 		s.fail(string(route.ReasonUnsupported), "unsupported playlist format "+refused+" (refused, spec 3.3)")
 	case typ == hls.HLS:
 		p.playlist(s, resp, body)
+	case typ == hls.DASH:
+		p.manifest(s, resp, body)
 	default:
 		s.Format = FormatRaw
 		if hasICYHeader(resp.Header) {
@@ -252,20 +260,57 @@ func (p *prober) step(ctx context.Context, role, rawURL string, icy bool) *Step 
 // by Content-Type first, then by the start of the body. This is the one
 // place that names the formats; refused is the format of a playlist the
 // proxy does not rewrite.
-func detect(contentType string, body *bufio.Reader) (typ hls.Type, refused string, err error) {
+func detect(contentType string, body *bufio.Reader) (typ hls.Type, refused string, rest *bufio.Reader, err error) {
 	typ = hls.Detect(contentType, nil, hls.Auto)
-	if typ == hls.HLS {
-		return typ, "", nil
+	if typ != hls.Raw {
+		return typ, "", body, nil
 	}
-	prefix, err := body.Peek(hls.SniffLen)
-	if err != nil && !errors.Is(err, io.EOF) {
-		return typ, "", err
+	prefix, rest, err := hls.Sniff(body)
+	if err != nil {
+		return typ, "", rest, err
 	}
 	typ = hls.Detect(contentType, prefix, hls.Auto)
-	if typ != hls.HLS {
+	if typ == hls.Raw {
 		refused = hls.Unsupported(contentType, prefix, hls.Auto)
 	}
-	return typ, refused, nil
+	return typ, refused, rest, nil
+}
+
+// manifest reads and checks a DASH manifest like the proxy does before
+// serving it: whole within the size limit and accepted by the rewriter
+// (spec 3.6); a manifest with DRM fails with class drm.
+func (p *prober) manifest(s *Step, resp *http.Response, body io.Reader) {
+	s.Format = FormatDASH
+	data, err := route.ReadPlaylist(body, p.opts.MaxPlaylistSize)
+	if err != nil {
+		s.fail(string(route.Classify(err)), err.Error())
+		return
+	}
+	n := int64(len(data))
+	s.Size = &n
+	if resp.StatusCode == http.StatusPartialContent {
+		s.fail(string(route.ReasonOther), "upstream answered a manifest with 206 without Range")
+		return
+	}
+	// The rewriter errors never contain URLs from the manifest.
+	_, err = dash.Rewrite(data, dash.Options{
+		Final:     resp.Request.URL,
+		PrefixURL: func(string, bool) (string, error) { return "http://probe.invalid/p/", nil },
+		TimeURL:   "http://probe.invalid/time",
+	})
+	switch {
+	case errors.Is(err, dash.ErrDRM):
+		s.fail(string(route.ReasonDRM), err.Error())
+		return
+	case errors.Is(err, dash.ErrTooLarge):
+		s.fail(string(route.ReasonSize), err.Error())
+		return
+	case err != nil:
+		s.fail(string(route.ReasonOther), err.Error())
+		return
+	}
+	s.Periods, s.AdaptationSets = dash.Count(data)
+	s.OK = true
 }
 
 // playlist reads and checks an HLS playlist like the proxy does before

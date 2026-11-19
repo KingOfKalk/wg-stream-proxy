@@ -116,7 +116,7 @@ func TestRequest(t *testing.T) {
 	c.End() // only the first End counts
 
 	const want = `
-# HELP wsp_active_requests Requests in flight under /c/ and /r/, open raw streams included.
+# HELP wsp_active_requests Requests in flight under /c/, /r/ and /p/, open raw streams included.
 # TYPE wsp_active_requests gauge
 wsp_active_requests{channel="news",kind="playlist"} 1
 wsp_active_requests{channel="news",kind="raw"} 0

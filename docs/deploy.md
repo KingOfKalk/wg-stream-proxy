@@ -106,6 +106,36 @@ Kodi cannot play MP3 radio streams through `inputstream.adaptive`. With the glob
 
 An empty value removes a key set by a lower layer for `headers`, `attrs` and `extra` (spec 5.4).
 
+HLS content steering and interstitials (`EXT-X-CONTENT-STEERING`, asset lists of `EXT-X-DATERANGE`) do not work through the proxy: their JSON documents carry URLs the player would fetch directly, so the proxy refuses them (spec 3.3).
+
+## DASH channels in Kodi
+
+Kodi plays MPEG-DASH through `inputstream.adaptive`. A channel is DASH if its URL path contains `.mpd` or it has `upstream.type = "dash"`; the channel list then points to `/c/<id>.mpd` (spec 6). A channel file for DASH channels:
+
+```toml
+# channels.d/dash.toml
+tunnel = "gr"
+
+[defaults.playlist.extra.KODIPROP]
+"inputstream" = "inputstream.adaptive"
+"mimetype" = "application/dash+xml"
+
+[[channel]]
+name = "Example News"
+url = "https://live.example.com/news/manifest.mpd"
+
+[[channel]]
+name = "Example Sport"
+url = "https://live.example.com/sport/play"   # no .mpd in the path
+
+[channel.upstream]
+type = "dash"
+```
+
+The playlist then has `#KODIPROP:inputstream=inputstream.adaptive` and `#KODIPROP:mimetype=application/dash+xml` before each channel's `#EXTINF` line. Kodi 20 and older also need `"inputstream.adaptive.manifest_type" = "mpd"` (deprecated since Kodi 21). With `inputstream.adaptive` set in `_defaults.toml` (above), only the DASH-specific keys go into this file.
+
+The proxy rewrites the manifest so that every segment, the time source (`UTCTiming`) and manifest reloads go through the proxy and the channel's tunnel (spec 3.6). DASH with DRM is not supported: a manifest with `ContentProtection` is refused with `502` and the log line `DRM manifest refused`. DASH channels get no error clip (below).
+
 ## When a channel fails
 
 An HLS channel (one listed with `.m3u8`) that fails to start plays a short error clip instead of Kodi's "Playback failed" dialog: about 5 s of a dark still with one line of text, then playback stops ([spec 3.4](spec.md)).
@@ -128,8 +158,8 @@ docker exec wg-stream-proxy /wg-stream-proxy probe --route gr --header 'Referer=
 ```
 
 - Put the URL in single quotes: tokens in the query string contain `&`. The output shows the final URL as scheme, host and file name only, like the log.
-- Exit code `0`: the proxy would serve it; `1`: it would not (the last lines say why: `guard`, `timeout`, `tls`, `status` for a `403` or `404`, `unsupported` for a playlist format the proxy refuses); `2`: wrong usage.
-- Per request you see the format (HLS master or media playlist with the number of variants or segments, raw or ICY stream, refused playlist) and where the time went: tunnel start, DNS, connect, TLS, first byte. For HLS the first variant and the first segment are fetched too, which finds geo-blocks that only hit the segments.
+- Exit code `0`: the proxy would serve it; `1`: it would not (the last lines say why: `guard`, `timeout`, `tls`, `status` for a `403` or `404`, `unsupported` for a playlist format the proxy refuses, `drm` for a DASH manifest with DRM); `2`: wrong usage.
+- Per request you see the format (HLS master or media playlist with the number of variants or segments, DASH manifest with the number of periods and adaptation sets, raw or ICY stream, refused playlist) and where the time went: tunnel start, DNS, connect, TLS, first byte. For HLS the first variant and the first segment are fetched too, which finds geo-blocks that only hit the segments.
 - `--header Name=Value` is the same as `upstream.headers` of a channel (`User-Agent`, `Referer`, `Cookie`); once it works, copy the headers into the channel file.
 - Without `[debug] listen`, or if nothing listens there, the probe runs standalone (`standalone` in the output, one line on stderr says so): it starts the route's tunnel itself and stops it at the end. That is a second device with the key of the tunnel, so while a proxy has that tunnel up, the provider's server switches to the new endpoint and a stream on that tunnel can stall until the next handshake. Prefer the debug listener; `--standalone` forces this mode (for a config the running proxy has not loaded yet, with no stream on that tunnel).
 

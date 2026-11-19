@@ -108,7 +108,8 @@ func (l *live) playlist() string {
 // segment returns the content of segment seq of channel ch: size bytes
 // that differ for every channel and sequence number.
 func segment(ch string, seq, size int) []byte {
-	line := fmt.Sprintf("%s segment %d\n", ch, seq)
+	// Binary like MPEG-TS (sync byte, NUL): text is refused (spec 3.3).
+	line := fmt.Sprintf("\x47\x00%s segment %d\n", ch, seq)
 	b := make([]byte, size)
 	for i := 0; i < size; {
 		i += copy(b[i:], line)

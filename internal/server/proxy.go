@@ -13,25 +13,33 @@ import (
 	"time"
 
 	"github.com/KingOfKalk/wg-stream-proxy/internal/config"
+	"github.com/KingOfKalk/wg-stream-proxy/internal/dash"
 	"github.com/KingOfKalk/wg-stream-proxy/internal/hls"
 	"github.com/KingOfKalk/wg-stream-proxy/internal/metrics"
 	"github.com/KingOfKalk/wg-stream-proxy/internal/route"
 	"github.com/KingOfKalk/wg-stream-proxy/internal/tunnel"
 )
 
-// playlistContentType is the Content-Type of rewritten playlists (spec
+// Content-Types of rewritten HLS playlists and DASH manifests (spec
 // 3.4).
-const playlistContentType = "application/vnd.apple.mpegurl"
+const (
+	playlistContentType = "application/vnd.apple.mpegurl"
+	manifestContentType = "application/dash+xml"
+)
 
 // copyBufferSize is the chunk size of piped bodies; every chunk is
 // flushed to the client.
 const copyBufferSize = 32 << 10
 
-// handleChannel serves /c/{id} and /c/{id}.m3u8 (spec 3.1): the channel
-// URL with the configured upstream type.
+// handleChannel serves /c/{id}, /c/{id}.m3u8 and /c/{id}.mpd (spec 3.1,
+// 6): the channel URL with the configured upstream type.
 func (s *Server) handleChannel(w http.ResponseWriter, r *http.Request) {
 	g := s.active()
-	ch, ok := g.channel(strings.TrimSuffix(r.PathValue("id"), ".m3u8"))
+	id, ok := strings.CutSuffix(r.PathValue("id"), ".m3u8")
+	if !ok {
+		id = strings.TrimSuffix(id, ".mpd")
+	}
+	ch, ok := g.channel(id)
 	if !ok {
 		http.NotFound(w, r)
 		return
@@ -46,10 +54,10 @@ func (s *Server) handleChannel(w http.ResponseWriter, r *http.Request) {
 	// Raw and auto channels may be Shoutcast v1 radios: fetch them through
 	// the route's ICY transport (spec 3.3). The type of an auto channel is
 	// known only from the response, and the ICY wrapper leaves HTTP
-	// responses unchanged, so an auto channel that turns out to be HLS
-	// works too.
+	// responses unchanged, so an auto channel that turns out to be HLS or
+	// DASH works too. HLS and DASH channels use the normal pool.
 	s.proxy(w, r, g, ch, fetch{
-		upstream: ch.URL(), configured: typ, icy: typ != hls.HLS, other: metrics.KindRaw,
+		upstream: ch.URL(), configured: typ, icy: typ == hls.Auto || typ == hls.Raw, other: metrics.KindRaw,
 		errorClips: errorClips(r, g.cfg, ch),
 	})
 }
@@ -70,6 +78,28 @@ func (s *Server) handleResource(w http.ResponseWriter, r *http.Request) {
 	}
 	// Resources (segments, keys, sub-playlists) are HTTP: normal pool.
 	s.proxy(w, r, g, ch, fetch{upstream: upstream, configured: hls.Auto, other: metrics.KindSegment})
+}
+
+// handlePrefix serves /p/{channel}/{sig}/{mode}/{b64prefix}/{path} (spec
+// 4.1): the signed upstream prefix plus the path below it, which the
+// player built from a rewritten DASH manifest. Route and headers come
+// from the channel config, never from the URL.
+func (s *Server) handlePrefix(w http.ResponseWriter, r *http.Request) {
+	pr, err := s.signer.ParsePrefix(r.URL)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	g := s.active()
+	ch, ok := g.channel(pr.Channel)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	// Upstream redirects are followed only below the prefix: the client
+	// chooses the path, so an open redirect on the prefix host would
+	// otherwise reach any URL through the channel's route.
+	s.proxy(w, r, g, ch, fetch{upstream: pr.URL, configured: hls.Auto, other: metrics.KindSegment, redirect: pr.Below})
 }
 
 // channel returns the enabled channel with the given id.
@@ -95,15 +125,18 @@ type fetch struct {
 	// errorClips: a failure is answered with an error clip instead of an
 	// HTTP error (spec 3.4).
 	errorClips bool
+	// redirect, if set, is route.Request.Redirect: which redirects are
+	// followed (prefix-signed resources, spec 4.1).
+	redirect func(*url.URL) bool
 }
 
 // kind returns the metrics kind of the request until the response type
 // is known, and for responses whose type is never detected (errors,
-// non-2xx): playlist for an hls channel or, without a configured type,
-// an upstream path ending in .m3u8 or .m3u; else f.other.
+// non-2xx): playlist for an hls or dash channel or, without a configured
+// type, an upstream path ending in .m3u8, .m3u or .mpd; else f.other.
 func (f fetch) kind() metrics.Kind {
 	switch f.configured {
-	case hls.HLS:
+	case hls.HLS, hls.DASH:
 		return metrics.KindPlaylist
 	case hls.Auto:
 		if u, err := url.Parse(f.upstream); err == nil && route.IsPlaylistPath(u.Path) {
@@ -137,7 +170,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request, g *generation, ch
 	defer func() { s.requestFinished(rec.finish(r, ch, rq)) }()
 	client := r.Header
 	for refetch := false; ; refetch = true {
-		resp, err := rt.Fetch(ctx, route.Request{URL: f.upstream, Header: ch.Header(), Client: client, ICY: f.icy, Trace: &rec.trace})
+		resp, err := rt.Fetch(ctx, route.Request{URL: f.upstream, Header: ch.Header(), Client: client, ICY: f.icy, Trace: &rec.trace, Redirect: f.redirect})
 		if err != nil {
 			s.fail(w, r, g, ch, f, err, rq.FetchError)
 			return
@@ -180,26 +213,29 @@ func (s *Server) respond(w http.ResponseWriter, r *http.Request, g *generation, 
 	body := bufio.NewReaderSize(resp.Body, hls.SniffLen)
 	ctype := resp.Header.Get("Content-Type")
 	typ := hls.Detect(ctype, nil, f.configured)
-	if typ != hls.HLS && r.Method != http.MethodHead {
+	if typ == hls.Raw && r.Method != http.MethodHead {
 		// Look at the start of the body: an auto channel or resource may
-		// be HLS (spec 3.1 step 2.3), and no channel may pipe a playlist
-		// the proxy does not rewrite (spec 3.3). A HEAD request closes
-		// the upstream body unread (spec 3.4); it sends no URLs.
-		prefix, err := body.Peek(hls.SniffLen)
-		if err != nil && !errors.Is(err, io.EOF) {
+		// be HLS or DASH (spec 3.1 steps 2.3, 2.4), and no channel may pipe
+		// a playlist the proxy does not rewrite (spec 3.3). A HEAD request
+		// closes the upstream body unread (spec 3.4); it sends no URLs.
+		// XML without its root element in the first bytes is read
+		// further (hls.Sniff).
+		prefix, rest, err := hls.Sniff(body)
+		body = rest
+		if err != nil {
 			rq.Response(resp.StatusCode)
 			s.fail(w, r, g, ch, f, err, rq.Error)
 			return false
 		}
 		typ = hls.Detect(ctype, prefix, f.configured)
-		if typ != hls.HLS {
+		if typ == hls.Raw {
 			if format := hls.Unsupported(ctype, prefix, f.configured); format != "" {
 				s.refuse(w, r, g, ch, f, rq, resp, format)
 				return false
 			}
 		}
 	}
-	if typ != hls.HLS {
+	if typ == hls.Raw {
 		rq.SetKind(f.other)
 		rq.Response(resp.StatusCode)
 		s.stream(w, r, ch, rq, resp, body)
@@ -221,7 +257,7 @@ func (s *Server) respond(w http.ResponseWriter, r *http.Request, g *generation, 
 		}
 		return true
 	}
-	s.rewrite(w, r, g, ch, f, rq, resp, body)
+	s.rewrite(w, r, g, ch, f, rq, resp, body, typ)
 	return false
 }
 
@@ -241,15 +277,20 @@ func (s *Server) refuse(w http.ResponseWriter, r *http.Request, g *generation, c
 	s.answerFailure(w, r, g, http.StatusBadGateway, clip)
 }
 
-// rewrite answers with the rewritten playlist (spec 3.2, 3.4): every URI
-// becomes an absolute resource URL of the channel.
-func (s *Server) rewrite(w http.ResponseWriter, r *http.Request, g *generation, ch config.Channel, f fetch, rq *metrics.Request, resp *http.Response, body io.Reader) {
+// rewrite answers with the rewritten HLS playlist (spec 3.2, 3.4), every
+// URI an absolute resource URL of the channel, or with the rewritten DASH
+// manifest (typ DASH, spec 3.6), every URL below an absolute prefix URL of
+// the channel.
+func (s *Server) rewrite(w http.ResponseWriter, r *http.Request, g *generation, ch config.Channel, f fetch, rq *metrics.Request, resp *http.Response, body io.Reader, typ hls.Type) {
 	h := w.Header()
 	route.CopyResponseHeader(h, resp, true)
 	// The rewritten body is a new, whole representation.
 	h.Del("Accept-Ranges")
 	h.Del("Content-Range")
 	h.Set("Content-Type", playlistContentType)
+	if typ == hls.DASH {
+		h.Set("Content-Type", manifestContentType)
+	}
 	h.Set("Cache-Control", "no-cache")
 	if r.Method == http.MethodHead {
 		w.WriteHeader(http.StatusOK)
@@ -264,16 +305,35 @@ func (s *Server) rewrite(w http.ResponseWriter, r *http.Request, g *generation, 
 		return
 	}
 	base := baseURL(g.cfg.PublicBaseURL(), r)
-	paths := s.signer.PathBuilder(ch.ID())
-	out, err := hls.Rewrite(data, final, func(dst, abs []byte) []byte {
-		return paths.AppendPath(append(dst, base...), abs)
-	})
+	var out []byte
+	if typ == hls.DASH {
+		out, err = dash.Rewrite(data, dash.Options{
+			Final: final,
+			PrefixURL: func(prefix string, query bool) (string, error) {
+				p, err := s.signer.PrefixPath(ch.ID(), prefix, query)
+				return base + p, err
+			},
+			TimeURL: base + timePath,
+		})
+	} else {
+		paths := s.signer.PathBuilder(ch.ID())
+		out, err = hls.Rewrite(data, final, func(dst, abs []byte) []byte {
+			return paths.AppendPath(append(dst, base...), abs)
+		})
+	}
 	if err != nil {
-		// hls errors never contain URIs from the playlist.
+		// hls and dash errors never contain URLs from the playlist.
 		clip := f.clip(nil)
-		s.log.Warn("playlist rejected", withClip([]any{"channel", ch.ID(), "url", route.LogURL(final.String()), "error", err}, clip)...)
-		rq.Error(string(route.ReasonOther))
-		recordOf(w).failed(route.ReasonOther)
+		msg, reason := "playlist rejected", route.ReasonOther
+		switch {
+		case errors.Is(err, dash.ErrDRM):
+			msg, reason = "DRM manifest refused", route.ReasonDRM
+		case errors.Is(err, dash.ErrTooLarge), errors.Is(err, hls.ErrPlaylistTooLarge):
+			reason = route.ReasonSize
+		}
+		s.log.Warn(msg, withClip([]any{"channel", ch.ID(), "url", route.LogURL(final.String()), "error", err}, clip)...)
+		rq.Error(string(reason))
+		recordOf(w).failed(reason)
 		s.answerFailure(w, r, g, http.StatusBadGateway, clip)
 		return
 	}

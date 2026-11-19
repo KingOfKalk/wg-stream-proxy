@@ -38,6 +38,7 @@ type UpstreamType string
 const (
 	TypeAuto UpstreamType = "auto"
 	TypeHLS  UpstreamType = "hls"
+	TypeDASH UpstreamType = "dash"
 	TypeRaw  UpstreamType = "raw"
 )
 

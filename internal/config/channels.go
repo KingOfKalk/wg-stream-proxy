@@ -256,10 +256,10 @@ func (l *channelLoader) layer(prefix string, up rawUpstream, pl rawPlaylist) lay
 
 	if up.Type != nil {
 		t := UpstreamType(*up.Type)
-		if t == TypeAuto || t == TypeHLS || t == TypeRaw {
+		if t == TypeAuto || t == TypeHLS || t == TypeDASH || t == TypeRaw {
 			ly.typ = &t
 		} else {
-			fail("upstream.type", "invalid value %q: use auto, hls or raw", *up.Type)
+			fail("upstream.type", "invalid value %q: use auto, hls, dash or raw", *up.Type)
 		}
 	}
 

@@ -19,7 +19,7 @@ group = "Greek TV"                    # optional
 enabled = true
 
 [channel.upstream]
-type = "auto"                         # auto | hls | raw
+type = "auto"                         # auto | hls | dash | raw
 headers = { Referer = "https://www.example.org/" }
 
 [channel.playlist]
