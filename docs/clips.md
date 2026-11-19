@@ -1,8 +1,8 @@
 # wg-stream-proxy - In-flight and error clips
 
-Design for the v0.3 clips ([spec 10](spec.md#10-roadmap), [#83](https://github.com/KingOfKalk/wg-stream-proxy/issues/83), [#105](https://github.com/KingOfKalk/wg-stream-proxy/issues/105)). Companion to [spec.md](spec.md), [architecture.md](architecture.md) and [observability.md](observability.md).
+Design for the clips (error clips: v0.3; in-flight clips: parked, Later; [spec 10](spec.md#10-roadmap), [#83](https://github.com/KingOfKalk/wg-stream-proxy/issues/83), [#105](https://github.com/KingOfKalk/wg-stream-proxy/issues/105)). Companion to [spec.md](spec.md), [architecture.md](architecture.md) and [observability.md](observability.md).
 
-- Status: decided design (section 10), not implemented yet. Spec sentences come with the implementation PRs (section 11).
+- Status: error clips are implemented. **In-flight clips are parked** (owner decision 2026-11-19, [#116](https://github.com/KingOfKalk/wg-stream-proxy/issues/116)): the design text below stays for a later start, but nothing is built and the `[clips]` table has only `error`. The settings `inflight` and `grace` that earlier drafts planned do not exist; they come back with the implementation. Spec sentences come with the implementation PRs (section 11).
 - Findings are from ffmpeg and VLC in throwaway containers (section 4) and from the Kodi sources (section 5). Kodi itself was not run.
 - Decisions: [section 10](#10-decisions); implementation plan: [section 11](#11-implementation-plan).
 
@@ -27,7 +27,7 @@ Design for the v0.3 clips ([spec 10](spec.md#10-roadmap), [#83](https://github.c
 - The switchover works in ffmpeg (libavformat, Kodi's default HLS path) and VLC when clip and stream are both MPEG-TS and the clip has an audio track. It fails with fMP4 streams in both players, and ffmpeg loses the audio when the clip has none.
 - Kodi's `inputstream.adaptive` reopens all decoders at every discontinuity; its maintainers call discontinuities "not well supported", and a Raspberry Pi 4 user reports a permanent stall there (November 2026). Only a test on the Pi tells.
 - The clip costs time: the real picture comes about 3 s after the upstream is ready (the clip segments the player already holds). It pays off only when cold starts are long.
-- Decided: error clips first; in-flight clips only for MPEG-TS channels, built but off by default until the Pi test (section 9) passes; the v0.2 timing data (section 8) shows where they help.
+- Decided: error clips first; in-flight clips only for MPEG-TS channels, built but off by default until the Pi test (section 9) passes; the v0.2 timing data (section 8) shows where they help. In-flight clips are parked ([#116](https://github.com/KingOfKalk/wg-stream-proxy/issues/116)); prefetch ([#84](https://github.com/KingOfKalk/wg-stream-proxy/issues/84)) waits for timing data.
 
 ## 2. Terms
 
@@ -304,6 +304,8 @@ sequenceDiagram
 
 ### 6.3 In-flight clips
 
+> **Parked** ([#116](https://github.com/KingOfKalk/wg-stream-proxy/issues/116)): not built, no setting and no behaviour in the code. The text below is the design for a later start. Where it mentions `grace` or `inflight`, those settings do not exist yet; the `[clips]` table has only `error`.
+
 **Entry and grace**
 
 - Only `GET /c/` of HLS channels, only while the channel is known to be MPEG-TS with muxed audio (see *Limits*).
@@ -393,7 +395,7 @@ Bounded labels only (clip names are fixed, no channel ids on new series):
 ### 6.9 Spec changes (with the implementation)
 
 - 3.2: stateless except clip sessions. 3.4: error clips instead of `502`/`504` on `GET /c/` of HLS channels.
-- 5.3: `[clips]` with `error = true`, `inflight = false`, `grace = "1s"`. 7.1: `/s/…` and `/clip/…`. 7.3: the metrics of 6.6. 9: package `internal/clips`.
+- 5.3: `[clips]` with `error = true` (in-flight clips would add `inflight` and `grace`; parked, [#116](https://github.com/KingOfKalk/wg-stream-proxy/issues/116)). 7.1: `/s/…` and `/clip/…`. 7.3: the metrics of 6.6. 9: package `internal/clips`.
 - testing.md: L1 for the timestamp rewrite and the session playlist (injected clock), L2 fuzz target for the TS rewrite, L4 with ffmpeg: in-flight switch and error clip against the fixture server.
 
 ## 7. Distribution
@@ -499,14 +501,14 @@ All decided by the owner on 2026-11-19, following the recommendations of the fir
 4. **Audio**: silent AAC-LC stereo 48 kHz track. Without one, ffmpeg loses the stream's audio after the switch (case 6).
 5. **Status per phase**: one 0.96 s segment per phase, chosen when the player asks. The text lags 1-2 s; phases shorter than a segment may not show.
 6. **Distribution**: generator script, committed segments, `go:embed` (section 7). Clips in the config dir may come later as an add-on.
-7. **Scope and order**: error clips first. In-flight clips are built but off (`inflight = false`) until the Pi test (section 9) passes with `inputstream.adaptive` and with Kodi's default player.
+7. **Scope and order**: error clips first. In-flight clips are parked ([#116](https://github.com/KingOfKalk/wg-stream-proxy/issues/116)). When built, they stay off until the Pi test (section 9) passes with `inputstream.adaptive` and with Kodi's default player.
 8. **Error clips**: only for `GET /c/` of HLS channels, all failure classes of 3.2. `HEAD`, `/r/` and raw channels keep their HTTP errors; logs and metrics keep the cause.
 9. **Unsuitable channels**: per-channel memory of the last start's format. fMP4, a separate audio rendition or no memory yet: no in-flight clip.
 10. **Variant in a session**: highest `BANDWIDTH`. One variant for the whole viewing anyway.
-11. **Grace**: 1 s, configurable. Fast starts stay stateless and gain no latency.
+11. **Grace** (parked with the in-flight clips, no setting today): 1 s, configurable. Fast starts stay stateless and gain no latency.
 12. **Target duration**: 1 s during the clip, the upstream's value after the switch. Deviates from RFC 8216 6.2.1; worked in ffmpeg and VLC; the Pi test confirms it for Kodi.
 13. **Radio**: no in-flight clips for raw and ICY channels. An endless silent MP3 with `StreamTitle` for `radio = "true"` channels comes later, after the video clips.
-14. **Configuration**: one global `[clips]` table: `error = true`, `inflight = false`, `grace = "1s"`.
+14. **Configuration**: one global `[clips]` table. Today: `error = true`. With in-flight clips later: `inflight = false`, `grace = "1s"` (parked, #116).
 15. **Sessions**: in memory, lost on restart; the player stops and the viewer starts the channel again.
 
 ## 11. Implementation plan
@@ -525,8 +527,8 @@ flowchart LR
 2. **Error clips**
    - `GET /c/` of HLS channels answers a VOD playlist with the error segment 5 times (6.2), class per 3.2; segments under `/clip/{name}/{n}.ts`.
    - TS timestamp and continuity-counter rewrite (6.3) with L1 tests and an L2 fuzz target.
-   - `[clips]` table with `error`, `inflight`, `grace` (spec 5.3); metrics and log fields of 6.6; spec 3.4, 7.1, 7.3; L4 player test: ffmpeg plays the error clip and exits 0.
-3. **In-flight clips** (behind `inflight = false`)
+   - `[clips]` table with `error` (spec 5.3); metrics and log fields of 6.6; spec 3.4, 7.1, 7.3; L4 player test: ffmpeg plays the error clip and exits 0.
+3. **In-flight clips** (parked, [#116](https://github.com/KingOfKalk/wg-stream-proxy/issues/116); behind `inflight = false` when built)
    - Per-channel format memory, grace, master playlist to `/s/{session}/index.m3u8`, phase segments from the request trace, switch with renumbering and discontinuity sequence, target duration 1 s then the upstream's, failure during a session, session expiry (6.3).
    - Spec 3.2 and 7.1; L1 with an injected clock; L4: ffmpeg against the fixture server through a slow route plays clip and stream.
    - Pi test instructions (section 9) in deploy.md; the owner runs them before `inflight` may default to `true`.

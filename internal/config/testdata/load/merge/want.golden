@@ -28,9 +28,7 @@
   },
   "EPGURL": "",
   "Clips": {
-    "Error": false,
-    "Inflight": true,
-    "Grace": "3s"
+    "Error": false
   },
   "Tunnels": [
     {

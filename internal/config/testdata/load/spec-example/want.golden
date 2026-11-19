@@ -20,9 +20,7 @@
   "AllowPrivate": {},
   "EPGURL": "https://epg.example.org/epg/epg.xml.gz",
   "Clips": {
-    "Error": true,
-    "Inflight": false,
-    "Grace": "1s"
+    "Error": true
   },
   "Tunnels": [
     {

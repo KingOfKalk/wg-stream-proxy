@@ -9,5 +9,3 @@ gr = ["10.8.0.0/24"]
 
 [clips]
 error = false
-inflight = true
-grace = "3s"

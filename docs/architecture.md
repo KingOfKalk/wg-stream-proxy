@@ -869,17 +869,17 @@ run time.
 |---|---|---|
 | **v0.1 Core** (released as v0.1.0) | The core of the spec: config, tunnels, routes and guard, HLS rewrite, raw/ICY, signed `/r/`, channel list, `SIGHUP` reload, metrics, `import`, `epg`; Dockerfile, Compose file, image on `ghcr.io` (`linux/amd64`, `linux/arm64`); test layers L1-L6 | the whole picture above |
 | **v0.2 Observability** (released as v0.2.0) | Timing histograms, debug endpoints with profiles, recent requests and cool-down | metrics (`/metrics`), new debug endpoints |
-| **v0.3 Experience** | Placeholder and error clips with seamless switchover (own design doc), per-request prefetch, file-watch reload | data plane (clips, prefetch), control plane (reload trigger) |
+| **v0.3 Experience** | Error clips (own design doc), file-watch reload | data plane (clips), control plane (reload trigger) |
 | **v0.4 Content** | DASH without DRM, EPG proxy mode, logo proxying, ad-hoc proxy endpoint | data plane |
-| **Later** | Distribution (GoReleaser, systemd unit, launchd plist, Kustomize), 32-bit ARM, scaling beyond 3 viewers, per-tunnel overrides | deployment, limits |
+| **Later** | In-flight clips with seamless switchover (parked, #116), per-request prefetch (waits for timing data, #84), distribution (GoReleaser, systemd unit, launchd plist, Kustomize), 32-bit ARM, scaling beyond 3 viewers, per-tunnel overrides | deployment, data plane, limits |
 
 ```mermaid
 flowchart LR
     v01["v0.1 Core<br/>released<br/>container image"]:::proxy
     v02["v0.2 Observability<br/>released<br/>timing histograms,<br/>debug endpoints"]:::proxy
-    v03["v0.3 Experience<br/>clips, prefetch,<br/>file-watch reload"]:::later
+    v03["v0.3 Experience<br/>error clips,<br/>file-watch reload"]:::later
     v04["v0.4 Content<br/>DASH, EPG proxy,<br/>logo proxy,<br/>ad-hoc endpoint"]:::later
-    later["Later<br/>GoReleaser, systemd, launchd,<br/>Kustomize, 32-bit ARM,<br/>more viewers,<br/>per-tunnel overrides"]:::later
+    later["Later<br/>in-flight clips, prefetch,<br/>GoReleaser, systemd, launchd,<br/>Kustomize, 32-bit ARM,<br/>more viewers,<br/>per-tunnel overrides"]:::later
     v01 --> v02 --> v03 --> v04 -.-> later
 
     classDef proxy fill:#6f5cc2,stroke:#46398a,color:#ffffff
@@ -889,7 +889,7 @@ flowchart LR
 ### 9.2 Final version
 
 The same structure as in section 2; released parts are purple, future parts
-are grey and dashed. The details of v0.3 and later are not specified yet
+are grey and dashed. The details of later versions are not specified yet
 (the clips get their own design doc), so this shows only *where* each part
 fits.
 
@@ -904,8 +904,8 @@ flowchart LR
         watch["File-watch reload<br/>v0.3"]:::later
         srv["HTTP server<br/>playlist, /c, /r"]:::proxy
         obs["Timing histograms,<br/>debug endpoints<br/>v0.2"]:::proxy
-        clips["Placeholder and<br/>error clips v0.3"]:::later
-        pre["Prefetch v0.3"]:::later
+        clips["Error clips<br/>v0.3"]:::later
+        pre["Prefetch<br/>later"]:::later
         extra["EPG proxy, logo proxy,<br/>ad-hoc endpoint, DASH<br/>v0.4"]:::later
         routes{{"Routes + guard"}}:::guard
     end
@@ -952,13 +952,13 @@ flowchart LR
 - v0.2 added measurements only (timing histograms, debug endpoints with
   recent requests and cool-down); it does not change how requests are
   routed.
-- v0.3 adds behaviour *in front of* the routes (clips, prefetch) and a
+- v0.3 adds behaviour *in front of* the routes (error clips) and a
   second reload trigger next to `SIGHUP`.
 - v0.4 extends the data plane (DASH without DRM, EPG and logos fetched
   through the proxy, an ad-hoc endpoint).
 - Later items change how the binary is shipped and run (distribution,
-  release binaries, section 10) or the limits (more viewers, 32-bit ARM,
-  per-tunnel overrides).
+  release binaries, section 10), the limits (more viewers, 32-bit ARM,
+  per-tunnel overrides) or the data plane (in-flight clips, prefetch).
 
 ## 10. Deployment
 

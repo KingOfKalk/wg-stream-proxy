@@ -25,9 +25,7 @@ type rawConfig struct {
 		IdleTimeout *string `toml:"idle_timeout"`
 	} `toml:"tunnels"`
 	Clips struct {
-		Error    *bool   `toml:"error"`
-		Inflight *bool   `toml:"inflight"`
-		Grace    *string `toml:"grace"`
+		Error *bool `toml:"error"`
 	} `toml:"clips"`
 	Reload struct {
 		WatchInterval *string `toml:"watch_interval"`

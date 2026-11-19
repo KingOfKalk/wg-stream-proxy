@@ -56,9 +56,6 @@ type Clips struct {
 	// Error: GET /c/ of an HLS channel answers a failure with an error
 	// clip instead of an HTTP error (spec 3.4).
 	Error bool
-	// Inflight and Grace configure the in-flight clips; not used yet.
-	Inflight bool
-	Grace    time.Duration
 }
 
 // Tunnel is a tunnel file found in the tunnels dir. Its content is not
