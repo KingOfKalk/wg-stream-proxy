@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.3.0](https://github.com/KingOfKalk/wg-stream-proxy/compare/v0.2.1...v0.3.0) (2026-11-19)
+
+
+### Features
+
+* **cli:** help command and top-level --help with a command list ([#113](https://github.com/KingOfKalk/wg-stream-proxy/issues/113)) ([601e9d7](https://github.com/KingOfKalk/wg-stream-proxy/commit/601e9d7b72175884099792554592e55519806330))
+* **clips:** generate and embed the clip segments ([#118](https://github.com/KingOfKalk/wg-stream-proxy/issues/118)) ([073fe5c](https://github.com/KingOfKalk/wg-stream-proxy/commit/073fe5c1d7b9ceec44b5174e06d4c4052ebcb0e7))
+* **config:** reload on config file changes ([#106](https://github.com/KingOfKalk/wg-stream-proxy/issues/106)) ([4a63685](https://github.com/KingOfKalk/wg-stream-proxy/commit/4a63685ea25ff92a8c7b8a2124ca06e571834f93))
+* **server:** show error clips when an HLS channel fails to start ([#119](https://github.com/KingOfKalk/wg-stream-proxy/issues/119)) ([6e8e861](https://github.com/KingOfKalk/wg-stream-proxy/commit/6e8e86142e673d9a14a0045e5edb8cbcb3dfda82))
+
+
+### Code Refactoring
+
+* **config:** drop the unused [clips] inflight and grace settings ([#121](https://github.com/KingOfKalk/wg-stream-proxy/issues/121)) ([278be73](https://github.com/KingOfKalk/wg-stream-proxy/commit/278be7327f63f9a94551cef934abf21926cc3be2))
+
+
+### Documentation
+
+* **clips:** design placeholder and error clips ([#112](https://github.com/KingOfKalk/wg-stream-proxy/issues/112)) ([b889423](https://github.com/KingOfKalk/wg-stream-proxy/commit/b88942364d20ac41e4041a3e7b7245594559c27f))
+* describe radio, the M3U channel list and the released versions correctly ([#110](https://github.com/KingOfKalk/wg-stream-proxy/issues/110)) ([20b9151](https://github.com/KingOfKalk/wg-stream-proxy/commit/20b91514abf2fb5fd4bac6556f3c2f3b0a1c12d0))
+
 ## [0.2.1](https://github.com/KingOfKalk/wg-stream-proxy/compare/v0.2.0...v0.2.1) (2026-11-19)
 
 
