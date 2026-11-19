@@ -51,6 +51,16 @@ type Upstream struct {
 	MaxPlaylistSize int64
 }
 
+// Clips holds the [clips] settings of config.toml (spec 5.3).
+type Clips struct {
+	// Error: GET /c/ of an HLS channel answers a failure with an error
+	// clip instead of an HTTP error (spec 3.4).
+	Error bool
+	// Inflight and Grace configure the in-flight clips; not used yet.
+	Inflight bool
+	Grace    time.Duration
+}
+
 // Tunnel is a tunnel file found in the tunnels dir. Its content is not
 // parsed by this package.
 type Tunnel struct {
@@ -71,6 +81,7 @@ type Config struct {
 	allowPrivate  map[string][]netip.Prefix
 	idleTimeout   time.Duration
 	watchInterval time.Duration
+	clips         Clips
 	epgURL        string
 	tunnels       []Tunnel
 	channels      []Channel
@@ -111,6 +122,9 @@ func (c *Config) AllowPrivate() map[string][]netip.Prefix {
 	}
 	return m
 }
+
+// Clips returns the [clips] settings.
+func (c *Config) Clips() Clips { return c.clips }
 
 // IdleTimeout returns [tunnels] idle_timeout.
 func (c *Config) IdleTimeout() time.Duration { return c.idleTimeout }

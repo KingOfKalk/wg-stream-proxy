@@ -307,7 +307,9 @@ sequenceDiagram
   init segments) is streamed unchanged. AES-128 keys are
   passed through; the player decrypts.
 - Status mapping (spec 3.4): upstream `2xx`/`4xx` pass through, `5xx` and
-  connection errors give `502`, timeouts `504`.
+  connection errors give `502`, timeouts `504`. A `GET` of `/c/` gets an
+  error clip instead (spec 3.4): a 5 s VOD playlist of a built-in segment
+  served under `/clip/`, so Kodi shows the error as text.
 
 ### 4.3 Radio: raw and ICY stream
 
@@ -826,9 +828,10 @@ flowchart TD
     metrics["internal/metrics<br/>Prometheus"]:::done
     importer["internal/importer<br/>M3U import"]:::done
     epg["internal/epg<br/>epg ids, epg match"]:::done
+    clips["internal/clips<br/>clip segments, Repeat"]:::done
 
     main --> server & config & importer & epg & route & tunnel & hls
-    server --> playlist & hls & route & tunnel & metrics
+    server --> playlist & hls & route & tunnel & metrics & clips
     playlist --> config
     route --> config
     tunnel -. "implements route Network" .-> route
@@ -853,6 +856,7 @@ run time.
 | `internal/route` | One route per tunnel plus `direct`, `http.Transport` settings, guard, upstream header rules, timeouts, status mapping ([#12](https://github.com/KingOfKalk/wg-stream-proxy/issues/12)); raw and ICY ([#15](https://github.com/KingOfKalk/wg-stream-proxy/issues/15)). Defines the `Network` interface (resolve + dial a resolved `IP:port`) that tunnels and `direct` implement | exists |
 | `internal/server` | `/playlist.m3u8`, `/c/`, `/r/`, `/healthz`, absolute URL base, graceful shutdown (`Run`) ([#14](https://github.com/KingOfKalk/wg-stream-proxy/issues/14)); `/logos/`, `healthcheck` ([#19](https://github.com/KingOfKalk/wg-stream-proxy/issues/19)); `/metrics` ([#18](https://github.com/KingOfKalk/wg-stream-proxy/issues/18)); `SIGHUP` reload (`Reloader`); debug endpoints on their own listener ([#68](https://github.com/KingOfKalk/wg-stream-proxy/issues/68)) | exists |
 | `internal/playlist` | Renders the channel list (spec 6) | exists |
+| `internal/clips` | Built-in clip segments (`go:embed`, rendered by `generate.sh`), `Repeat` for a segment at a position in a stream of copies (timestamps, continuity counters); error clips on `/c/` ([#115](https://github.com/KingOfKalk/wg-stream-proxy/issues/115)) | exists |
 | `internal/metrics` | Private Prometheus registry with the `wsp_` metrics (spec 7.3) and the Go and process metrics; tunnel gauges read at scrape time ([#18](https://github.com/KingOfKalk/wg-stream-proxy/issues/18)) | exists |
 | `internal/importer` | `import` of an existing M3U file (spec 7.2), `--match-epg` with an `epg.Index`; pure function, no I/O | exists |
 | `internal/epg` | Downloads `epg.url` over the direct route, streams the XMLTV channel list (plain or gzip), ranks EPG names for `epg match` and `import --match-epg` (spec 7.2, [#21](https://github.com/KingOfKalk/wg-stream-proxy/issues/21)) | exists |

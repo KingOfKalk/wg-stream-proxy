@@ -106,6 +106,18 @@ Kodi cannot play MP3 radio streams through `inputstream.adaptive`. With the glob
 
 An empty value removes a key set by a lower layer for `headers`, `attrs` and `extra` (spec 5.4).
 
+## When a channel fails
+
+An HLS channel (one listed with `.m3u8`) that fails to start plays a short error clip instead of Kodi's "Playback failed" dialog: about 5 s of a dark still with one line of text, then playback stops ([spec 3.4](spec.md)).
+
+| Text | Meaning | Look at |
+|---|---|---|
+| Tunnel not reachable | The channel's tunnel did not start: no handshake within `connect_timeout` | The tunnel file, the VPN endpoint, `tunnel start failed` in the log |
+| Channel blocked by configuration | The private-range guard or the tunnel's `AllowedIPs` refused the address | `[upstream.allow_private]`, `AllowedIPs` |
+| Channel not available | Everything else: DNS, connect, TLS or timeout errors, an upstream error status (geo-block `403`, `404`, `5xx`), a playlist the proxy refused | The `warn` line of the request, with its `reason` and `clip` |
+
+Radio and other channels listed without `.m3u8` still get an HTTP error, as do segment requests during playback. `[clips] error = false` in `config.toml` turns the clips off (applies on reload).
+
 ## Monitoring
 
 `/metrics` serves the timing histograms and the other `wsp_` metrics ([spec 7.3](spec.md)). Prometheus scrape config, useful queries (timing, error ratio, tunnel starts), example alerts and the Grafana dashboard: [observability.md](observability.md).

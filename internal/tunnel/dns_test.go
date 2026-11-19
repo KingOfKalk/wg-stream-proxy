@@ -782,3 +782,26 @@ func TestParseResponseTTL(t *testing.T) {
 		})
 	}
 }
+
+// TestLookupOutsideAllowedIPs: a name whose addresses all lie outside
+// AllowedIPs fails like an unknown name and wraps ErrNotAllowed, so the
+// server can tell the viewer the configuration blocks it (docs/clips.md
+// 3.2).
+func TestLookupOutsideAllowedIPs(t *testing.T) {
+	peer := tunneltest.Start(t, tunneltest.Options{
+		AllowedIPs: []netip.Prefix{netip.PrefixFrom(tunneltest.ServerAddr4, 32)},
+	})
+	peer.SetHost("outside.test", netip.MustParseAddr("198.51.100.1"))
+	tun, _ := startedTunnel(t, peer)
+	for _, host := range []string{"outside.test", "198.51.100.1"} {
+		_, err := tun.LookupNetIP(t.Context(), host)
+		var de *net.DNSError
+		if !errors.As(err, &de) || !de.IsNotFound || !errors.Is(err, ErrNotAllowed) {
+			t.Errorf("LookupNetIP(%q): err = %v, want not-found *net.DNSError wrapping ErrNotAllowed", host, err)
+		}
+	}
+	// A name the DNS server does not know is not a configuration matter.
+	if _, err := tun.LookupNetIP(t.Context(), "missing.test"); errors.Is(err, ErrNotAllowed) {
+		t.Errorf("unknown name: err = %v wraps ErrNotAllowed", err)
+	}
+}

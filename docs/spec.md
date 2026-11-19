@@ -55,7 +55,7 @@ wg-stream-proxy
 - Lifecycle:
   - Lazy start on the first request; concurrent first requests share one start.
   - Closed after `[tunnels] idle_timeout` (default `60m`) without activity. Activity = any in-flight request or open stream; the idle time runs from the end of the last one. Pooled idle upstream connections are not activity and close with the tunnel; the next request starts it again.
-  - Start failure or no handshake within `[upstream] connect_timeout`: request fails with `502`; the next request retries. Start, tunnel DNS and connect share one `connect_timeout` deadline.
+  - Start failure or no handshake within `[upstream] connect_timeout`: request fails with `502` (or an error clip, 3.4); the next request retries. Start, tunnel DNS and connect share one `connect_timeout` deadline.
   - On shutdown, reload removal or cool-down (7.1): drain in-flight requests for max 30s, then close.
 - `direct` uses a plain `http.Transport` on the host network with the same settings.
 
@@ -117,6 +117,12 @@ Resources under `/r/` use the same detection (steps 2.2-2.4): playlists are rewr
   - `connect_timeout` covers DNS lookup and TCP connect of one connection; running out counts as a connection error (`502`), like a tunnel without handshake (2.1).
   - `header_timeout` runs from the start of the request until the final response headers, across redirects; `504`.
   - `read_timeout` runs only while waiting for upstream data, not while the client is slow to accept it; `504` if it fires before the response starts, else the stream ends.
+- Error clips (`[clips] error`, default on, 5.3; design: [clips.md 6.2](clips.md#62-error-clips)): a `GET` of `/c/` of an HLS channel (listed with `.m3u8`, 6) answers a failure with a short video instead of an HTTP error, so the player shows the error as text and stops instead of a failure dialog.
+  - Failures: every `502` and `504` of this section, of the tunnel start (2.1), of the playlist checks (3.2, 3.3) and of the guard (3.5), and an upstream `4xx`.
+  - Answer: `200`, `Content-Type: application/vnd.apple.mpegurl`, `Cache-Control: no-store`, a VOD media playlist (`#EXT-X-VERSION:3`, `#EXT-X-TARGETDURATION:1`, `#EXT-X-MEDIA-SEQUENCE:0`, `#EXT-X-PLAYLIST-TYPE:VOD`, `#EXT-X-ENDLIST`) that lists the clip's segment 5 times (`#EXTINF:0.960,`, 4.8 s) as `/clip/{name}/{n}.ts` with `n` = 0-4 (7.1), absolute like resource URLs.
+  - Clip per failure: `tunnel-unreachable` ("Tunnel not reachable") when the tunnel did not start (start failure, no handshake within `connect_timeout`, a start cancelled by a reload); `channel-blocked` ("Channel blocked by configuration") for a guard refusal (3.5) or an upstream address outside the tunnel's `AllowedIPs` (5.5, also when a name resolves only to such addresses); `channel-not-available` ("Channel not available") for everything else: DNS, connect, TLS, redirects, size, timeouts, upstream statuses, rejected and refused playlists.
+  - Unchanged: `HEAD`, `/r/`, channels listed without `.m3u8` and `error = false` keep the statuses above; an unknown or disabled channel stays `404`.
+  - Logs and metrics count the failure as they do without a clip; its `warn` line gets `clip=<name>`. An upstream `4xx` answered with a clip gets the `upstream error status` line of a `5xx`. Served clips count in `error_clips_total` (7.3).
 
 ### 3.5 Private-range guard
 
@@ -185,6 +191,11 @@ idle_timeout = "60m"
 
 [reload]
 watch_interval = "2s"                 # how often the config files are checked for changes (5.6); "0" turns it off
+
+[clips]
+error = true                          # error clips instead of 502/504 on GET /c/ of HLS channels (3.4)
+inflight = false                      # in-flight clips while a channel starts: not built yet, only validated
+grace = "1s"                          # wait before an in-flight clip starts: not used yet
 
 [epg]
 url = "https://epg.example.org/epg/epg.xml.gz"  # optional, no default
@@ -269,7 +280,7 @@ url = "https://live.example.net/daserste/live/hls/de/master.m3u8"
 
 - `SIGHUP` reloads all files; the new config is validated completely (tunnel files included), an invalid one is rejected with all errors logged and the old one keeps serving. Reloads run one at a time.
 - File watching: unless `reload.watch_interval` (5.3) is `"0"`, the proxy checks the files a reload reads (`config.toml`, `channels.d/*.toml` with `_defaults.toml`, `<tunnels-dir>/*.conf`) every interval by path, size and modification time; other files do not count. Added, changed and removed files all count. A change triggers the same reload as `SIGHUP` once the files have stayed the same for one further interval, so an editor that writes in several steps causes one reload. Nothing is reloaded while the files are unchanged; a rejected config is logged once and not tried again until the files change. `SIGHUP` works either way. Polling works on every file system (bind mounts, network shares); a change made without touching size and modification time is not seen.
-- Requests in flight finish with the config they started with; new requests use the new one.
+- Requests in flight finish with the config they started with; new requests use the new one. This includes `[clips]`: a changed `error` applies to the next `/c/` request.
 - Unchanged tunnels (same parsed content; comments and formatting do not count) keep running; changed or removed tunnels are drained (2.1) and recreated lazily.
 - A route (`direct` or a tunnel) keeps its pooled upstream connections only if its network, its `allow_private` entries and the whole `[upstream]` block are unchanged; otherwise new requests use a new route and the old route's idle connections are closed, while an unchanged tunnel keeps running.
 - A reload that changes or removes a tunnel which is still starting cancels the start; requests waiting for it get `502`; the new tunnel starts lazily on the next request.
@@ -303,6 +314,7 @@ http://wsp.lan:2349/c/ert-world.m3u8
 | `GET/HEAD /c/{id}`, `/c/{id}.m3u8` | Channel entry |
 | `GET/HEAD /r/{channel}/{sig}/{b64url}/{name}` | Signed resource |
 | `GET/HEAD /logos/{file}` | Local logo, flat directory, no traversal (5.4) |
+| `GET/HEAD /clip/{name}/{n}.ts` | Built-in clip segment (3.4): `{name}` a clip of `internal/clips` (`tunnel-unreachable`, `channel-blocked`, `channel-not-available`, and the in-flight texts), `{n}` the position, 0-63 in decimal without leading zeros. PTS, DTS and PCR are shifted by 10 s + `n` × 0.96 s and the continuity counters continued, so positions 0, 1, … play as one stream. `video/mp2t`, unsigned; no upstream request. Anything else under `/clip/`: `404` |
 | `GET /healthz` | 200 while serving; body: version and source URL (AGPL section 13) |
 | `GET /metrics` | Prometheus |
 
@@ -316,11 +328,11 @@ Served only on their own listener `debug.listen` (5.3), off by default and never
 | Path | Description |
 |---|---|
 | `/debug/pprof/…` | Go profiler (`net/http/pprof`: index, `profile`, `heap`, `goroutine`, `trace`, …) |
-| `GET /debug/requests` | JSON `{"requests": [...]}`: the last 256 finished `/c/` and `/r/` requests, newest first |
+| `GET /debug/requests` | JSON `{"requests": [...]}`: the last 256 finished `/c/`, `/r/` and `/clip/` requests, newest first |
 | `GET /debug/tunnels` | JSON `{"tunnels": [...]}`: per configured tunnel, sorted by name |
 | `POST /debug/tunnels/{name}/stop` | Cool-down of a tunnel |
 
-- `/debug/requests`: the fields of the debug line (8): `id`, `time` (start of the request, RFC 3339), `method`, `channel`, `route`, `kind`, `status`, `bytes`, `client_gone`, `upstream_status` and `reason` (omitted without), `tunnel_start_ms` (only if the request waited for a tunnel start), `dns_ms`, `connect_ms`, `connect_attempts`, `tls_ms`, `ttfb_ms`, `total_ms`, `conn_reused`, `redirects`, `url`. Durations in milliseconds, to the microsecond; `url` as in the log (8: scheme, host, file name). A request is recorded when it ends (a stream: when it closes), at every log level, while the debug listener is on; the buffer has a fixed size and never grows.
+- `/debug/requests`: the fields of the debug line (8): `id`, `time` (start of the request, RFC 3339), `method`, `channel`, `route`, `kind`, `status`, `bytes`, `client_gone`, `upstream_status` and `reason` (omitted without), `tunnel_start_ms` (only if the request waited for a tunnel start), `dns_ms`, `connect_ms`, `connect_attempts`, `tls_ms`, `ttfb_ms`, `total_ms`, `conn_reused`, `redirects`, `url`. Durations in milliseconds, to the microsecond; `url` as in the log (8: scheme, host, file name). A `/clip/` request has `kind` `clip`, empty `channel` and `route`, and its path as `url`. A request is recorded when it ends (a stream: when it closes), at every log level, while the debug listener is on; the buffer has a fixed size and never grows.
 - `/debug/tunnels`: `name`, `state` (`stopped`, `starting`, `running`, `draining`), `started_at` (first handshake of the running device) and `last_handshake` (RFC 3339, omitted while no device runs), `active_requests`.
 - Cool-down: the tunnel is drained like a reload removal (2.1: open streams finish, or the 30s drain timeout cuts them; requests arriving meanwhile use the running device), then its device stops, the route's pooled connections close and its DNS cache is emptied; `tunnel closed reason=cooldown` is logged and the next request starts it cold. The answer comes when the tunnel is stopped: `200` with `{"name": "<name>", "was_running": true}`; for a tunnel that was not running nothing changes and `was_running` is `false`. Unknown tunnel (also `direct`): `404`; other methods: `405`.
 
@@ -378,11 +390,12 @@ The EPG commands (`epg ids`, `epg match`, `import --match-epg`) download `epg.ur
 - `active_requests{channel,kind}`: in-flight requests incl. open raw streams; `kind` = `playlist`, `segment`, `raw`.
 - `upstream_requests_total{channel,kind,code}`: `code` = upstream status, or `error`.
 - `upstream_errors_total{channel,reason}`: `reason` = `connect`, `timeout`, `guard`, `tls`, `redirects`, `size`, `unsupported`, `other`.
+- `error_clips_total{clip}`: error clips served instead of an HTTP error (3.4), by clip name (`tunnel-unreachable`, `channel-blocked`, `channel-not-available`; each starts at 0). The failure behind it counts as without a clip.
 - `tunnel_start_seconds{tunnel}` (histogram): one observation per successful tunnel start, the time from the start request until the first handshake completed (device up included). Observed where the tunnel starts, once per start however many requests waited for it; a failed start is not observed (the start failure line, spec 8, logs it).
 - `upstream_phase_seconds{route,phase}` (histogram): where the time of the upstream requests of `/c/` and `/r/` goes, per route (`direct` or a tunnel name), `phase` = `dns` (host lookups), `connect` (connection setup, Happy-Eyeballs fallback included), `tls` (TLS handshakes), `first_byte` (start of the upstream request until the first response byte); the same definitions as the debug line (`dns`, `connect`, `tls`, `ttfb`, spec 8), without a tunnel start wait (that is `tunnel_start_seconds`).
 - Buckets of both histograms, in seconds: `0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 15` (classic histograms).
 
-Only `/c/` and `/r/` requests of enabled channels count; `channel` is the channel id, never a URL.
+Only `/c/` and `/r/` requests of enabled channels count; `channel` is the channel id, never a URL. `/clip/` requests count in no metric.
 
 - `kind`: `playlist` if the response is detected as a playlist (3.1) or refused as one (3.3), else `raw` for `/c/` and `segment` for `/r/`. Until the type is detected, and if it never is (error, non-`2xx` status), an `hls` channel and, without a configured type, an upstream path ending in `.m3u8` or `.m3u` count as `playlist`.
 - `upstream_requests_total` counts every upstream request, the refetch of a partial playlist (3.4) included.
@@ -396,7 +409,7 @@ Only `/c/` and `/r/` requests of enabled channels count; `channel` is the channe
 
 - Intended for LAN use; exposure to the internet needs an authenticating reverse proxy.
 - WireGuard keys only in tunnel files and never logged; upstream URLs (in log lines and in error messages) are logged as scheme, host and file name only, e.g. `https://cdn.example.com/…/7.m3u8`: no user info, query string, fragment or other path segment, because CDNs put session ids and tokens there. The file name is reduced like `{name}` (spec 4); a URL without path shows scheme and host only.
-- Debug log (`log_level = "debug"`): one `request` line per `/c/` and `/r/` request when it ends, with request id, channel, route, kind, client status and bytes, client disconnect, upstream status and error reason, and where the time went: `tunnel_start` (only if the request waited for a tunnel start), `dns`, `connect` (Happy-Eyeballs fallback included), `tls`, `ttfb` (first upstream byte), `total`; drain waits and retired tunnels; wireguard-go's own events (handshakes, keepalives, retries) with the peer shown by tunnel name. Tunnel start (with handshake), start failure and close lines carry their durations at every level. The log never contains keys, key fragments, query strings or upstream paths beyond the file name. Above debug the debug lines cost only a level check; the timing behind them is collected at every level for the timing metrics (7.3).
+- Debug log (`log_level = "debug"`): one `request` line per `/c/`, `/r/` and `/clip/` request when it ends, with request id, channel, route, kind, client status and bytes, client disconnect, upstream status and error reason, and where the time went: `tunnel_start` (only if the request waited for a tunnel start), `dns`, `connect` (Happy-Eyeballs fallback included), `tls`, `ttfb` (first upstream byte), `total`; drain waits and retired tunnels; wireguard-go's own events (handshakes, keepalives, retries) with the peer shown by tunnel name. Tunnel start (with handshake), start failure and close lines carry their durations at every level. The log never contains keys, key fragments, query strings or upstream paths beyond the file name. Above debug the debug lines cost only a level check; the timing behind them is collected at every level for the timing metrics (7.3).
 - Debug endpoints (7.1): off by default, on their own listener, without authentication. They answer only requests addressed by IP or `localhost`, so a web page cannot reach them by rebinding its own name to the debug address. Bind them to loopback (e.g. `127.0.0.1:2350`, used through `docker exec … tunnel`) or at most the LAN, never beyond: the profiler exposes process internals (memory, goroutine stacks, command line), and whoever reaches the port can cool tunnels down. `/debug/requests` holds no keys, tokens, query strings or upstream paths beyond the file name (the same reduction as the log).
 - Container: non-root, read-only root filesystem, all capabilities dropped, single replica. Details: [deploy.md](deploy.md).
 
@@ -404,7 +417,7 @@ Only `/c/` and `/r/` requests of enabled channels count; `channel` is the channe
 
 - Layout: `cmd/wg-stream-proxy/`, `internal/{config,tunnel,route,hls,playlist,server,importer,epg,metrics,clips}`, `examples/config/`, `testdata/`, `deploy/`, `docs/`.
 - Dependencies: stdlib `net/http`, `log/slog`, `wireguard-go`, gVisor netstack, a TOML parser, Prometheus client. No web framework.
-- `internal/clips` embeds the built-in clip segments (design: [clips.md](clips.md)): six 0.96 s MPEG-TS files in `internal/clips/segments/`, rendered by `internal/clips/generate.sh` (pinned image, Inter 4.1 by version and checksum) and committed. Change a text by editing the script, rerunning it and committing the result. Only rendered pixels ship, not the font (SIL OFL 1.1).
+- `internal/clips` embeds the built-in clip segments (design: [clips.md](clips.md)): six 0.96 s MPEG-TS files in `internal/clips/segments/`, rendered by `internal/clips/generate.sh` (pinned image, Inter 4.1 by version and checksum) and committed. Change a text by editing the script, rerunning it and committing the result. Only rendered pixels ship, not the font (SIL OFL 1.1). `clips.Repeat` shifts the timestamps and continues the continuity counters of a segment for its position in a stream of copies (7.1).
 - gVisor stays at the version in `wireguard-go`'s `go.mod` and is only updated together with it (excluded from automatic bumps).
 - `internal/tunnel/netstack` is a trimmed copy of `wireguard-go`'s `tun/netstack` (MIT, licence kept) with one change: a packet gVisor sends after `Close` is dropped instead of sent on a closed channel, which would crash the process (#47). The copy names the upstream commit it was taken from and is updated together with `wireguard-go`: on every `wireguard-go` update, compare upstream `tun/netstack` with the copy and port relevant changes.
 - Injected for tests: `Dialer` per route, private-range guard allowlist, clock.

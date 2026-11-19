@@ -481,6 +481,7 @@ func (t *Tunnel) LookupNetIP(ctx context.Context, host string) ([]netip.Addr, er
 			addrs = append(addrs, ip.Unmap())
 		}
 	}
+	resolved := len(addrs)
 	addrs = slices.DeleteFunc(addrs, func(a netip.Addr) bool { return t.check(a) != nil })
 	// IPv4 first: a provider's IPv6 is more often broken than its IPv4.
 	slices.SortStableFunc(addrs, func(a, b netip.Addr) int {
@@ -493,7 +494,13 @@ func (t *Tunnel) LookupNetIP(ctx context.Context, host string) ([]netip.Addr, er
 		return 1
 	})
 	if len(addrs) == 0 {
-		return nil, &net.DNSError{Err: "no address reachable through tunnel " + strconv.Quote(t.cfg.Name), Name: host, IsNotFound: true}
+		de := &net.DNSError{Err: "no address reachable through tunnel " + strconv.Quote(t.cfg.Name), Name: host, IsNotFound: true}
+		if resolved > 0 {
+			// Only addresses outside AllowedIPs: the configuration blocks
+			// the name.
+			de.UnwrapErr = ErrNotAllowed
+		}
+		return nil, de
 	}
 	return addrs, nil
 }

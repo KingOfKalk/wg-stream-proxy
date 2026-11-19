@@ -5,6 +5,7 @@ package route
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/netip"
@@ -350,12 +351,19 @@ func TestDialLookupHonoursConnectTimeout(t *testing.T) {
 	}
 }
 
-// blockingLookupNet blocks every lookup until ctx is done.
-type blockingLookupNet struct{ started chan struct{} }
+// blockingLookupNet blocks every lookup until ctx is done; then it fails
+// with ctx.Err(), wrapped in err if set.
+type blockingLookupNet struct {
+	started chan struct{}
+	err     error
+}
 
 func (n *blockingLookupNet) LookupNetIP(ctx context.Context, _ string) ([]netip.Addr, error) {
 	close(n.started)
 	<-ctx.Done()
+	if n.err != nil {
+		return nil, fmt.Errorf("%w: %w", n.err, ctx.Err())
+	}
 	return nil, ctx.Err()
 }
 
@@ -404,5 +412,60 @@ func TestInterleave(t *testing.T) {
 		if !slices.Equal(gotS, tt.want) {
 			t.Errorf("interleave(%q) = %q, want %q", tt.in, gotS, tt.want)
 		}
+	}
+}
+
+// errNetworkDown stands for a network error that explains a connect
+// timeout, like a tunnel whose start did not finish (tunnel.ErrUnavailable).
+var errNetworkDown = errors.New("fake: network not started")
+
+// TestDialConnectTimeoutKeepsNetworkError: when connect_timeout ends a
+// lookup or dial that waited for the network, the error is still a
+// connect timeout and also carries the network's own error, so the server
+// can tell a tunnel that did not start (docs/clips.md 3.2).
+func TestDialConnectTimeoutKeepsNetworkError(t *testing.T) {
+	down := func(ctx context.Context) (net.Conn, error) {
+		<-ctx.Done()
+		return nil, fmt.Errorf("%w: start not finished: %w", errNetworkDown, ctx.Err())
+	}
+	tests := []struct {
+		name string
+		n    Network
+		addr string
+	}{
+		{
+			name: "lookup",
+			n:    &blockingLookupNet{started: make(chan struct{}), err: errNetworkDown},
+			addr: "slow-dns.example.com:80",
+		},
+		{
+			name: "dial",
+			n:    &fakeNet{dials: map[string]dialFunc{"203.0.113.1:80": down}, started: make(chan string, 1)},
+			addr: "203.0.113.1:80",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			clk := newFakeClock()
+			r := testRoute(tt.n, clk)
+			res := dialAsync(r, context.Background(), "tcp", tt.addr)
+			switch n := tt.n.(type) {
+			case *blockingLookupNet:
+				<-n.started
+			case *fakeNet:
+				<-n.started
+			}
+			clk.Advance(testUpstream.ConnectTimeout)
+			out := <-res
+			if !errors.Is(out.err, ErrConnectTimeout) || !errors.Is(out.err, errNetworkDown) {
+				t.Fatalf("dial error = %v, want ErrConnectTimeout and the network's error", out.err)
+			}
+			if got := Classify(out.err); got != ReasonConnect {
+				t.Errorf("Classify = %q, want %q", got, ReasonConnect)
+			}
+			if got := ErrorStatus(out.err); got != 502 {
+				t.Errorf("ErrorStatus = %d, want 502", got)
+			}
+		})
 	}
 }

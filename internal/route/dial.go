@@ -108,13 +108,23 @@ func (r *Route) dialAddr(ctx context.Context, network, address string) (net.Conn
 	return c, nil
 }
 
-// timeoutCause returns ErrConnectTimeout if ctx ended because of it, else
-// err.
+// timeoutCause returns err, wrapped in ErrConnectTimeout if ctx ended
+// because of connect_timeout. err is kept: a network that made the
+// request wait says why (a tunnel whose start did not finish wraps
+// tunnel.ErrUnavailable), and the server tells the viewer (spec 3.4).
 func timeoutCause(ctx context.Context, err error) error {
-	if errors.Is(context.Cause(ctx), ErrConnectTimeout) {
-		return ErrConnectTimeout
+	if cause := context.Cause(ctx); errors.Is(cause, ErrConnectTimeout) {
+		return wrapCause(cause, err)
 	}
 	return err
+}
+
+// wrapCause returns err wrapped in cause, unless err wraps it already.
+func wrapCause(cause, err error) error {
+	if errors.Is(err, cause) {
+		return err
+	}
+	return fmt.Errorf("%w: %w", cause, err)
 }
 
 // dialParallel connects to the first reachable candidate (RFC 8305,
@@ -198,7 +208,22 @@ func (r *Route) dialParallel(ctx context.Context, cands []netip.AddrPort) (net.C
 				return nil, started, firstErr
 			}
 		case <-ctx.Done():
-			return nil, started, context.Cause(ctx)
+			// The attempts return promptly once ctx is done (Network): wait
+			// for them, so the error of a network that made the dial wait
+			// (a tunnel start) is kept with the cause.
+			for finished < started {
+				res := <-results
+				finished++
+				if res.c != nil {
+					_ = res.c.Close()
+				} else if firstErr == nil {
+					firstErr = res.err
+				}
+			}
+			if firstErr == nil {
+				return nil, started, context.Cause(ctx)
+			}
+			return nil, started, wrapCause(context.Cause(ctx), firstErr)
 		}
 	}
 }

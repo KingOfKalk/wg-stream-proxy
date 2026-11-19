@@ -16,6 +16,11 @@ direct = []
 [tunnels]
 idle_timeout = "60m"
 
+[clips]
+error = true
+inflight = false
+grace = "1s"
+
 [epg]
 url = "https://epg.example.org/epg/epg.xml.gz"
 

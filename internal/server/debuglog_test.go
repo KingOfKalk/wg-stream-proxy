@@ -281,7 +281,7 @@ url = "http://` + closed + `/broken/` + idToken + `/seg.ts?token=secret-token"
 	for i, tt := range []struct {
 		path   string
 		status int
-	}{{"/c/hls", http.StatusOK}, {"/c/raw", http.StatusOK}, {"/c/gone", http.StatusBadGateway}, {"/c/broken", http.StatusBadGateway}} {
+	}{{"/c/hls", http.StatusOK}, {"/c/raw", http.StatusOK}, {"/c/gone", http.StatusOK}, {"/c/broken", http.StatusBadGateway}} {
 		if resp, _ := do(t, e.client, http.MethodGet, e.url+tt.path, nil); resp.StatusCode != tt.status {
 			t.Fatalf("GET %s: status %d, want %d", tt.path, resp.StatusCode, tt.status)
 		}

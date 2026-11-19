@@ -2,10 +2,10 @@
 
 // Package server is the HTTP side of wg-stream-proxy (spec 7.1): the
 // channel list, channel entries under /c/, signed resources under /r/,
-// logos under /logos/, /healthz and /metrics, plus the debug endpoints on
-// their own listener ([debug] listen, off by default). Upstream requests go
-// through the channel's route (internal/route); playlists are rewritten
-// with internal/hls.
+// error clip segments under /clip/, logos under /logos/, /healthz and
+// /metrics, plus the debug endpoints on their own listener ([debug]
+// listen, off by default). Upstream requests go through the channel's route
+// (internal/route); playlists are rewritten with internal/hls.
 package server
 
 import (
@@ -19,6 +19,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/KingOfKalk/wg-stream-proxy/internal/clips"
 	"github.com/KingOfKalk/wg-stream-proxy/internal/config"
 	"github.com/KingOfKalk/wg-stream-proxy/internal/hls"
 	"github.com/KingOfKalk/wg-stream-proxy/internal/metrics"
@@ -92,6 +93,7 @@ func New(opts Options) (*Server, error) {
 	if s.metrics == nil {
 		s.metrics = metrics.New(metrics.Options{})
 	}
+	s.metrics.DeclareErrorClips(clips.Errors()...)
 	if opts.RecentRequests > 0 {
 		s.recent = newRecentRequests(opts.RecentRequests)
 	}
@@ -105,6 +107,7 @@ func New(opts Options) (*Server, error) {
 	s.mux.HandleFunc("GET /r/", s.handleResource)
 	s.mux.HandleFunc("GET /healthz", s.handleHealth)
 	s.mux.HandleFunc("GET /logos/{file}", s.handleLogo)
+	s.mux.HandleFunc("GET /clip/{name}/{file}", s.handleClip)
 	// No authentication, like the rest: LAN use (spec 8).
 	s.mux.Handle("GET /metrics", s.metrics.Handler())
 	return s, nil

@@ -15,6 +15,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/KingOfKalk/wg-stream-proxy/internal/clips"
 	"github.com/KingOfKalk/wg-stream-proxy/internal/route"
 )
 
@@ -493,9 +494,11 @@ func TestPlaylistPartialContent(t *testing.T) {
 
 func TestDetection(t *testing.T) {
 	e := newTVEnv(t)
-	// Configured raw: a playlist is refused, not piped (spec 3.3).
+	// Configured raw: a playlist is refused, not piped (spec 3.3). The
+	// channel is listed with .m3u8 (spec 6), so the refusal is an error
+	// clip (spec 3.4).
 	resp, body := e.get(t, "/c/forced-raw", nil)
-	if resp.StatusCode != http.StatusBadGateway || strings.Contains(body, "index.m3u8") {
+	if resp.StatusCode != http.StatusOK || body != wantErrorPlaylist(e.proxy.URL, clips.ChannelNotAvailable) {
 		t.Errorf("forced raw playlist: status %d, body %q", resp.StatusCode, body)
 	}
 	// Configured raw: a stream is piped whatever the Content-Type.
@@ -667,9 +670,12 @@ func TestProductionGuard(t *testing.T) {
 	// No allow_private: the loopback fixture is blocked (spec 3.5).
 	e := newDirectEnv(t, "", channelsTOML)
 	hlsFixture(e.up, e.upURL)
-	resp, _ := e.get(t, "/c/news.m3u8", nil)
-	if resp.StatusCode != http.StatusBadGateway {
-		t.Errorf("status %d, want 502", resp.StatusCode)
+	resp, body := e.get(t, "/c/news.m3u8", nil)
+	if resp.StatusCode != http.StatusOK || body != wantErrorPlaylist(e.proxy.URL, clips.ChannelBlocked) {
+		t.Errorf("status %d, body %q; want the channel-blocked error clip", resp.StatusCode, body)
+	}
+	if resp, _ := e.get(t, e.signer.Path("news", e.upURL+"/cdn/v1/high/seg7.ts"), nil); resp.StatusCode != http.StatusBadGateway {
+		t.Errorf("resource: status %d, want 502", resp.StatusCode)
 	}
 	if n := len(e.up.requests()); n != 0 {
 		t.Errorf("upstream saw %d requests, want none", n)
