@@ -177,9 +177,7 @@ jobs:
       - name: Prune old versions
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Dry run until the first plans on main have been checked (#56);
-          # then remove this line to delete for real.
-          DRY_RUN: "1"
+          # Deletes for real; set DRY_RUN: "1" to only print the plan.
         run: .github/scripts/prune-ghcr.sh
       - name: Log out
         if: always()
