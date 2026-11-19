@@ -8,10 +8,11 @@
 # the tunnel files and signing.key.
 #
 #   docker compose up -d
-#   docker compose kill -s HUP wg-stream-proxy   # reload config and channels
+#   # config changes are picked up within seconds (spec 5.6); to reload at once:
+#   docker compose kill -s HUP wg-stream-proxy
 services:
   wg-stream-proxy:
-    image: ghcr.io/kingofkalk/wg-stream-proxy:0.2.0 # x-release-please-version
+    image: ghcr.io/kingofkalk/wg-stream-proxy:0.2.1 # x-release-please-version
     restart: unless-stopped
     read_only: true
     cap_drop: [ALL]

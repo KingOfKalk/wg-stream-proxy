@@ -7,7 +7,7 @@ to try wg-stream-proxy and for the container smoke test.
 |---|---|
 | `config.toml` | All settings with their defaults (spec 5.3) |
 | `channels.d/_defaults.toml` | Global defaults for all channel files: `inputstream.adaptive` for Kodi (spec 5.4) |
-| `channels.d/greek-tv.toml` | The example channels of spec 5.4: one through the tunnel `gr`, one `direct` |
+| `channels.d/tv.toml` | The example channels of spec 5.4: one through the tunnel `gr`, one `direct` |
 | `channels.d/radio.toml` | A radio channel (`direct`): `attrs = { radio = "true" }` puts it into Kodi's Radio section; `"inputstream" = ""` removes the global `inputstream.adaptive` |
 | `tunnels/gr.conf` | **Example only**: test-only keys, endpoint `vpn.example.com`; it connects nowhere |
 

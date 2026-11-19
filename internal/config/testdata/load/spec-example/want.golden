@@ -18,7 +18,7 @@
   },
   "MaxPlaylistSize": 8388608,
   "AllowPrivate": {},
-  "EPGURL": "https://ext.greektv.app/epg/epg.xml.gz",
+  "EPGURL": "https://epg.example.org/epg/epg.xml.gz",
   "Tunnels": [
     {
       "Name": "gr",
@@ -30,14 +30,14 @@
       "File": "testdata/load/spec-example/config/channels.d/greek-tv.toml",
       "ID": "ert-world",
       "Name": "ERT World",
-      "URL": "https://ertflix-ertworld.siliconweb.com/mpegts/618618_3479286/master_mpegts.m3u8",
+      "URL": "https://live.example.com/mpegts/100100_200200/master_mpegts.m3u8",
       "Route": "gr",
       "Group": "Greek TV",
       "Enabled": true,
       "Type": "auto",
       "Header": {
         "Referer": [
-          "https://www.ertflix.gr/"
+          "https://www.example.org/"
         ],
         "User-Agent": [
           "OKHTTP"
@@ -67,7 +67,7 @@
       "File": "testdata/load/spec-example/config/channels.d/greek-tv.toml",
       "ID": "das-erste",
       "Name": "Das Erste",
-      "URL": "https://daserste-live.ard-mcdn.de/daserste/live/hls/de/master.m3u8",
+      "URL": "https://live.example.net/daserste/live/hls/de/master.m3u8",
       "Route": "direct",
       "Group": "Greek TV",
       "Enabled": true,

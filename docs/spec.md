@@ -1,10 +1,10 @@
 # wg-stream-proxy - Specification
 
-> Route individual IPTV streams through userspace WireGuard tunnels and serve them as one M3U8 playlist for Kodi, VLC and others.
+> Route each IPTV and internet radio channel through its own userspace WireGuard tunnel (or direct) and serve them as one M3U playlist for Kodi, VLC and other players. Proxies HLS (TS, fMP4, AES-128) and raw/ICY audio streams; no root, no TUN device, fails closed.
 
 - Repository: `github.com/KingOfKalk/wg-stream-proxy`, Go, AGPL-3.0-or-later
-- Status: Draft v3
-- Related: [architecture.md](architecture.md), [deploy.md](deploy.md), [testing.md](testing.md)
+- Status: binding for the latest [release](https://github.com/KingOfKalk/wg-stream-proxy/releases); the roadmap (section 10) lists what is released and what is planned
+- Related: [architecture.md](architecture.md), [deploy.md](deploy.md), [testing.md](testing.md), [observability.md](observability.md)
 
 ## 1. Scope
 
@@ -12,7 +12,7 @@
 
 - Route each channel through a chosen WireGuard tunnel, or explicitly `direct`. Nothing else on the host is affected.
 - Multiple tunnels in one process, fully in userspace (no TUN device, no root, no kernel module).
-- One extended M3U8 channel list for Kodi (IPTV Simple Client), VLC and other players.
+- One extended M3U channel list (`/playlist.m3u8`) for Kodi (IPTV Simple Client), VLC and other players.
 - HLS passthrough with playlist rewriting; raw passthrough for radio and MPEG-TS.
 - Fail closed: a channel never silently bypasses its tunnel.
 - Migration from an existing M3U file via `import`.
@@ -22,12 +22,13 @@
 
 - Decryption, DRM licenses or keys inside the proxy (permanent). AES-128 HLS keys are only passed through.
 - Transcoding, restreaming, Widevine passthrough, Kodi add-on, web UI, Xtream Codes, multi-user.
-- DASH in v0.1; DASH without DRM is planned for v0.4 (spec 10).
+- DASH: not supported (DASH without DRM planned for v0.4, spec 10).
 
 ### 1.3 Platforms
 
-- `linux/amd64`, `linux/arm64`, `darwin/arm64`; `CGO_ENABLED=0`; container image `linux/amd64` + `linux/arm64`.
-- LibreELEC 12+ uses an aarch64 userland on Raspberry Pi 4/5 (since 12.0, May 2024), so `linux/arm64` binaries and containers (Docker add-on) run on default installs. Only 32-bit images (Raspberry Pi 2/3, Allwinner H3/R40, Rockchip RK3288) would need `linux/arm`, which is deferred.
+- Build targets (cross-compiled in CI): `linux/amd64`, `linux/arm64`, `darwin/arm64`; `CGO_ENABLED=0`.
+- Distribution: the container image (`linux/amd64` + `linux/arm64`). Binaries: build from source or `go install`; release binaries are planned (Later, spec 10).
+- LibreELEC 12+ uses an aarch64 userland on Raspberry Pi 4/5 (since 12.0, May 2024), so the `linux/arm64` container (Docker add-on) runs on default installs. Only 32-bit images (Raspberry Pi 2/3, Allwinner H3/R40, Rockchip RK3288) would need `linux/arm`, which is deferred.
 
 ## 2. Architecture
 
@@ -68,9 +69,9 @@ wg-stream-proxy
    2. `Content-Type` is `application/vnd.apple.mpegurl` or `application/x-mpegurl` (case-insensitive, parameters ignored): HLS.
    3. Body starts with `#EXTM3U` (after optional UTF-8 BOM and whitespace, within the first 512 bytes): HLS.
    4. Otherwise: raw.
-3. HLS: rewrite (3.2) and return. Raw: pipe (3.3).
+3. HLS: rewrite (3.2) and return. Raw: pipe (3.3), unless it is a playlist the proxy does not rewrite (refused, 3.3).
 
-Resources under `/r/` use the same detection (steps 2.2-2.4): playlists are rewritten, everything else is streamed with `io.Copy`.
+Resources under `/r/` use the same detection (steps 2.2-2.4): playlists are rewritten, playlists the proxy does not rewrite are refused (3.3), everything else is streamed with `io.Copy`.
 
 ### 3.2 HLS rewriting
 
@@ -90,6 +91,11 @@ Resources under `/r/` use the same detection (steps 2.2-2.4): playlists are rewr
 ### 3.3 Raw passthrough
 
 - Upstream body piped with `io.Copy` and flush; no size or total time limit.
+- Fail closed: a playlist the proxy does not rewrite is refused with `502` instead of piped, on `raw` and `auto` channels and `/r/` resources, because the player would fetch the URLs in it directly, past the tunnel. Checked on `GET` responses with a `2xx` status (`HEAD` and other statuses send no playlist); `hls` channels are always rewritten (3.2). Detected, after the HLS detection of 3.1:
+  - by `Content-Type` (case-insensitive, parameters ignored; not on `raw` channels, whose configured type overrides it): PLS `audio/x-scpls`, `audio/scpls`, `application/pls+xml`; M3U `audio/x-mpegurl`, `audio/mpegurl`; DASH `application/dash+xml`; XSPF `application/xspf+xml`; ASX `video/x-ms-asx`, `audio/x-ms-asx`, `video/x-ms-wvx`, `audio/x-ms-wax`;
+  - by the start of the body (first 512 bytes, after optional UTF-8 BOM and whitespace): `[playlist]` (PLS) or `[Reference]` (ASX reference file), case-insensitive; `#EXTM3U` (reaches this check only on `raw` channels); a first line that is neither blank nor a `#` comment and is an absolute URL (`scheme://`, scheme of two or more characters) or a scheme-relative one (`//`) without control characters (plain M3U); an XML root element `MPD`, `playlist` or `ASX` (case-insensitive, namespace prefix ignored, after XML declaration, comments and doctype).
+  - Media (MPEG-TS, fMP4, MP3, AAC, Ogg, ICY streams) matches none of these. A `warn` log line names channel, route, URL (8) and format (`pls`, `m3u`, `dash`, `xspf`, `asx`); metrics reason `unsupported` (7.3).
+  - Rewriting PLS and plain M3U (internet radio) is a possible later feature; DASH is planned for v0.4 (10).
 - Shoutcast v1 servers answer `ICY 200 OK`; the raw route's connection wrapper rewrites a leading `ICY ` status line to `HTTP/1.0 ` before Go's HTTP parser sees it.
   - Used for `/c/` requests of `raw` and `auto` channels (the type of `auto` is only known from the response; the wrapper leaves `HTTP/` responses unchanged). These connections are not reused (one request per connection); `hls` channels and `/r/` resources use the normal pool.
   - Only the first bytes of each connection are checked, so a connection carries one request: an ICY response has no length and ends with its connection, and a server may answer one port with ICY or HTTP per path. Over `https` the wrapper sees TLS records and changes nothing (Shoutcast v1 has no TLS).
@@ -177,14 +183,17 @@ direct = []
 [tunnels]
 idle_timeout = "60m"
 
+[reload]
+watch_interval = "2s"                 # how often the config files are checked for changes (5.6); "0" turns it off
+
 [epg]
-url = "https://ext.greektv.app/epg/epg.xml.gz"  # optional, no default
+url = "https://epg.example.org/epg/epg.xml.gz"  # optional, no default
 
 [debug]
 listen = ""                           # off; e.g. "127.0.0.1:2350" (7.1)
 ```
 
-Unknown keys and wrong value types are config errors. Values are validated: `listen` is `[host]:port` with a numeric port; `debug.listen` is empty or of the same form, with a port other than the one of `listen` (as in effect after flag and environment); durations are positive; `max_playlist_size` is a whole number directly followed by `B`, `KiB` or `MiB`, positive and at most `32MiB`; `public_base_url` and `epg.url` are empty or absolute `http(s)` URLs; `user_agent` has no line breaks; `allow_private` keys are `direct` or existing tunnel names, values are CIDR prefixes without host bits.
+Unknown keys and wrong value types are config errors. Values are validated: `listen` is `[host]:port` with a numeric port; `debug.listen` is empty or of the same form, with a port other than the one of `listen` (as in effect after flag and environment); durations are positive (`reload.watch_interval` also accepts `"0"`, which turns watching off); `max_playlist_size` is a whole number directly followed by `B`, `KiB` or `MiB`, positive and at most `32MiB`; `public_base_url` and `epg.url` are empty or absolute `http(s)` URLs; `user_agent` has no line breaks; `allow_private` keys are `direct` or existing tunnel names, values are CIDR prefixes without host bits.
 
 ### 5.4 Channel files (`channels.d/*.toml`)
 
@@ -200,7 +209,7 @@ attrs = { parent-code = "1234" }
 
 [[channel]]
 name = "ERT World"                    # required
-url = "https://ertflix-ertworld.siliconweb.com/mpegts/618618_3479286/master_mpegts.m3u8"  # required
+url = "https://live.example.com/mpegts/100100_200200/master_mpegts.m3u8"  # required
 id = "ert-world"                      # optional, default: slug of name
 tunnel = "gr"                         # optional
 group = "Greek TV"                    # optional
@@ -208,7 +217,7 @@ enabled = true
 
 [channel.upstream]
 type = "auto"                         # auto | hls | raw
-headers = { Referer = "https://www.ertflix.gr/" }
+headers = { Referer = "https://www.example.org/" }
 
 [channel.playlist]
 tvg_id = "ertworld"
@@ -221,7 +230,7 @@ attrs = { tvg-chno = "5" }
 [[channel]]
 name = "Das Erste"
 tunnel = "direct"
-url = "https://daserste-live.ard-mcdn.de/daserste/live/hls/de/master.m3u8"
+url = "https://live.example.net/daserste/live/hls/de/master.m3u8"
 ```
 
 - Sub-tables apply to the `[[channel]]` directly above.
@@ -259,11 +268,12 @@ url = "https://daserste-live.ard-mcdn.de/daserste/live/hls/de/master.m3u8"
 ### 5.6 Reload
 
 - `SIGHUP` reloads all files; the new config is validated completely (tunnel files included), an invalid one is rejected with all errors logged and the old one keeps serving. Reloads run one at a time.
+- File watching: unless `reload.watch_interval` (5.3) is `"0"`, the proxy checks the files a reload reads (`config.toml`, `channels.d/*.toml` with `_defaults.toml`, `<tunnels-dir>/*.conf`) every interval by path, size and modification time; other files do not count. Added, changed and removed files all count. A change triggers the same reload as `SIGHUP` once the files have stayed the same for one further interval, so an editor that writes in several steps causes one reload. Nothing is reloaded while the files are unchanged; a rejected config is logged once and not tried again until the files change. `SIGHUP` works either way. Polling works on every file system (bind mounts, network shares); a change made without touching size and modification time is not seen.
 - Requests in flight finish with the config they started with; new requests use the new one.
 - Unchanged tunnels (same parsed content; comments and formatting do not count) keep running; changed or removed tunnels are drained (2.1) and recreated lazily.
 - A route (`direct` or a tunnel) keeps its pooled upstream connections only if its network, its `allow_private` entries and the whole `[upstream]` block are unchanged; otherwise new requests use a new route and the old route's idle connections are closed, while an unchanged tunnel keeps running.
 - A reload that changes or removes a tunnel which is still starting cancels the start; requests waiting for it get `502`; the new tunnel starts lazily on the next request.
-- Restart required for: `listen`, `debug.listen`, `log_format`, signing key, tunnels dir location. A reload that changes one of them logs a warning and keeps the old value.
+- Restart required for: `listen`, `debug.listen`, `log_format`, `reload.watch_interval`, signing key, tunnels dir location. A reload that changes one of them logs a warning and keeps the old value.
 - A successful reload logs one info line `reloaded` with the channel and tunnel counts, `channels_added`, `channels_changed` and `channels_removed` (counts; changed means any difference of the merged channel config, comments, formatting and order do not count) and `tunnels_added`, `tunnels_changed` and `tunnels_removed` (names); a reload that changes nothing logs the same line with zeros. At debug level a second line lists the ids of the added, changed and removed channels; no line contains URLs.
 
 ## 6. Channel list
@@ -277,7 +287,7 @@ url = "https://daserste-live.ard-mcdn.de/daserste/live/hls/de/master.m3u8"
 - `#KODIPROP` and other `extra` lines appear only here, never in playlists under `/c/` or `/r/`.
 
 ```
-#EXTM3U x-tvg-url="https://ext.greektv.app/epg/epg.xml.gz" url-tvg="https://ext.greektv.app/epg/epg.xml.gz"
+#EXTM3U x-tvg-url="https://epg.example.org/epg/epg.xml.gz" url-tvg="https://epg.example.org/epg/epg.xml.gz"
 #KODIPROP:inputstream.adaptive.manifest_type=hls
 #EXTINF:-1 tvg-id="ertworld" tvg-name="ERT World" tvg-logo="EPTWORLD" group-title="Greek TV" parent-code="1234" tvg-chno="5",ERT World
 http://wsp.lan:2349/c/ert-world.m3u8
@@ -326,7 +336,10 @@ wg-stream-proxy healthcheck           # GET /healthz on the listen address, exit
 wg-stream-proxy tunnel list           # tunnels and their state, from the debug endpoints (7.1)
 wg-stream-proxy tunnel stop <name>    # cool-down of a tunnel (7.1)
 wg-stream-proxy version               # print version and source URL (AGPL section 13)
+wg-stream-proxy help [command]        # description and command list, or the flags of a command
 ```
+
+`help`: `wg-stream-proxy help`, `-h` and `--help` print a one-line description, the usage line and the list of commands with one line each, to stdout, exit 0. `help <command>` (`help epg ids`) and `<command> -h` (also after other flags, `serve --listen :1 -h`) print the usage, description and flags of that command to stdout, exit 0; for `epg` and `tunnel` they list the subcommands. Only a first argument `-h` or `--help` is the help of the program, so `serve -h` stays the help of `serve`. An unknown command, also for `help <unknown>`, prints one error line and the command list to stderr and exits 2. A flag error prints the flag package's message and a pointer to `help <command>` to stderr and exits 2. Without any argument the program runs `serve`; it prints no help.
 
 `serve` stops on `SIGINT` or `SIGTERM`: it accepts no new connections, gives in-flight requests up to 30s (2.1), then closes the remaining connections and the tunnels; a second signal exits at once.
 
@@ -364,16 +377,16 @@ The EPG commands (`epg ids`, `epg match`, `import --match-epg`) download `epg.ur
 - `tunnel_last_handshake_timestamp_seconds{tunnel}`: `0` while the tunnel is not running or has no handshake yet.
 - `active_requests{channel,kind}`: in-flight requests incl. open raw streams; `kind` = `playlist`, `segment`, `raw`.
 - `upstream_requests_total{channel,kind,code}`: `code` = upstream status, or `error`.
-- `upstream_errors_total{channel,reason}`: `reason` = `connect`, `timeout`, `guard`, `tls`, `redirects`, `size`, `other`.
+- `upstream_errors_total{channel,reason}`: `reason` = `connect`, `timeout`, `guard`, `tls`, `redirects`, `size`, `unsupported`, `other`.
 - `tunnel_start_seconds{tunnel}` (histogram): one observation per successful tunnel start, the time from the start request until the first handshake completed (device up included). Observed where the tunnel starts, once per start however many requests waited for it; a failed start is not observed (the start failure line, spec 8, logs it).
 - `upstream_phase_seconds{route,phase}` (histogram): where the time of the upstream requests of `/c/` and `/r/` goes, per route (`direct` or a tunnel name), `phase` = `dns` (host lookups), `connect` (connection setup, Happy-Eyeballs fallback included), `tls` (TLS handshakes), `first_byte` (start of the upstream request until the first response byte); the same definitions as the debug line (`dns`, `connect`, `tls`, `ttfb`, spec 8), without a tunnel start wait (that is `tunnel_start_seconds`).
 - Buckets of both histograms, in seconds: `0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 15` (classic histograms).
 
 Only `/c/` and `/r/` requests of enabled channels count; `channel` is the channel id, never a URL.
 
-- `kind`: `playlist` if the response is detected as a playlist (3.1), else `raw` for `/c/` and `segment` for `/r/`. Until the type is detected, and if it never is (error, non-`2xx` status), an `hls` channel and, without a configured type, an upstream path ending in `.m3u8` or `.m3u` count as `playlist`.
+- `kind`: `playlist` if the response is detected as a playlist (3.1) or refused as one (3.3), else `raw` for `/c/` and `segment` for `/r/`. Until the type is detected, and if it never is (error, non-`2xx` status), an `hls` channel and, without a configured type, an upstream path ending in `.m3u8` or `.m3u` count as `playlist`.
 - `upstream_requests_total` counts every upstream request, the refetch of a partial playlist (3.4) included.
-- `upstream_errors_total` counts failures before the response (with `code="error"`) and after it: playlist body or sniff read errors, a rejected playlist or a second `206` (`other`), a stream ended by an upstream error. Upstream statuses count only in `upstream_requests_total`.
+- `upstream_errors_total` counts failures before the response (with `code="error"`) and after it: playlist body or sniff read errors, a rejected playlist or a second `206` (`other`), a refused playlist format (`unsupported`, 3.3), a stream ended by an upstream error. Upstream statuses count only in `upstream_requests_total`.
 - A request the client gave up counts neither as error nor, if no response came, as upstream request.
 - Timing histograms: labels are the route or tunnel name and the phase only, never a channel or URL. They are collected for every `/c/` and `/r/` request at every log level and recorded when the request ends (a stream: when it closes). A request observes only the phases that happened: no `dns` for an IP literal or a pooled connection, no `connect` for a pooled connection, no `tls` for plain HTTP, no `first_byte` without a response; phases that failed (a refused connect, a failed handshake) count with their duration. `first_byte` is observed once per request, for the last upstream response (a refetch, 3.4, does not count twice). Requests the client gave up observe what happened before.
 
@@ -400,8 +413,8 @@ Only `/c/` and `/r/` requests of enabled channels count; `channel` is the channe
 
 ## 10. Roadmap
 
-- **v0.1 Core** (released as v0.1.0): everything in this spec, plus Dockerfile, Compose file and the v0.1 test layers in [testing.md](testing.md). Publishes the container image `ghcr.io/kingofkalk/wg-stream-proxy` (`linux/amd64` + `linux/arm64`, public package): tag `edge` on every push to `main`, version tags on release.
-- **v0.2 Observability:** timing histograms, debug endpoints with profiles, recent requests and cool-down.
+- **v0.1 Core** (released as v0.1.0): the core of this spec (config, tunnels, routes and guard, HLS and raw/ICY streams, channel list, `SIGHUP` reload, metrics, `import`, `epg`), plus Dockerfile, Compose file and the v0.1 test layers in [testing.md](testing.md). Publishes the container image `ghcr.io/kingofkalk/wg-stream-proxy` (`linux/amd64` + `linux/arm64`, public package): tag `edge` on every push to `main`, version tags on release.
+- **v0.2 Observability** (released as v0.2.0): timing histograms, debug endpoints with profiles, recent requests and cool-down.
 - **v0.3 Experience:** placeholder and error clips with seamless switchover (design: [clips.md](clips.md)), per-request prefetch, file-watch reload.
 - **v0.4 Content:** DASH without DRM, EPG proxy mode, logo proxying, ad-hoc proxy endpoint.
 - **Later:** distribution (GoReleaser, systemd unit, launchd plist, Kustomize), 32-bit ARM, scaling beyond 3 viewers, per-tunnel overrides.

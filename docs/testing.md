@@ -37,7 +37,7 @@ Test every rule of SPEC 3.1-3.5, 4, 5 and 6, table-driven, with golden files in 
 
 ## L2 Fuzz
 
-Targets: HLS rewriter, M3U importer, XMLTV channel parser, wg-quick parser, `/r/` URL decoding, ICY status line wrapper.
+Targets: HLS rewriter, M3U importer, XMLTV channel parser, wg-quick parser, `/r/` URL decoding, ICY status line wrapper, playlist format sniffer (spec 3.3).
 
 Invariants:
 - No panic.
@@ -50,7 +50,7 @@ Invariants:
 Proxy in-process with a test config dir, fixture upstreams as `httptest.Server`s, tunnel harness from the principles.
 
 - HLS: master with variants, demuxed audio and subtitle renditions, AES-128 key, fMP4 init segment, sliding live window advancing over time, VOD with `ENDLIST`, gzip-compressed playlist.
-- HTTP edge cases: `HEAD` on `/c` and `/r`, `Range` passthrough on segments, `Range` not forwarded for `.m3u8`, `Content-Length` absent after decompression, `ICY 200 OK` raw stream, `Icy-MetaData` forwarding, 4xx and 5xx mapping, timeouts, 10 redirects ok and 11 fail.
+- HTTP edge cases: `HEAD` on `/c` and `/r`, `Range` passthrough on segments, `Range` not forwarded for `.m3u8`, `Content-Length` absent after decompression, `ICY 200 OK` raw stream, `Icy-MetaData` forwarding, 4xx and 5xx mapping, timeouts, 10 redirects ok and 11 fail, playlists the proxy does not rewrite refused with `502` on `auto` and `raw` channels and `/r/` while media (MPEG-TS, fMP4, MP3, AAC, Ogg) streams.
 - Routing and leaks:
   - Tunnel channel requests arrive at the server peer with the tunnel source address.
   - A recording direct dialer sees zero dials for tunnel channels, including segments, keys and redirects.
@@ -63,6 +63,10 @@ Proxy in-process with a test config dir, fixture upstreams as `httptest.Server`s
 - Reload: valid change applied, invalid change rejected while the old config keeps serving, removed tunnel drained, changed tunnel recreated, unchanged tunnel keeps running, reload during a tunnel start.
 - Security: unsigned or tampered `/r/` and disabled channel give `404`, logo path traversal rejected.
 - Capacity: 3 simulated viewers on different channels; 30s on push, 5 minutes nightly; no stalls, no goroutine or memory growth.
+- Observability (v0.2):
+  - Timing histograms (`wsp_tunnel_start_seconds`, `wsp_upstream_phase_seconds`): the phases of direct and tunnel requests are observed and served on `/metrics`; the Grafana dashboard only uses metrics the registry has.
+  - Debug log: one `request` line per `/c/` and `/r/` request; logs never contain upstream paths.
+  - Debug endpoints: off by default, on their own listener (never on the main one), recent requests, profiles, tunnel state and cool-down (`POST /debug/tunnels/{name}/stop`); requests addressed by a host name are rejected (DNS rebinding). The `tunnel list` and `tunnel stop` commands run against a fake debug server.
 
 ## L4 Player
 

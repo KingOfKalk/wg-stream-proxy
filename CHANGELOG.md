@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.2.1](https://github.com/KingOfKalk/wg-stream-proxy/compare/v0.2.0...v0.2.1) (2026-11-19)
+
+
+### Bug Fixes
+
+* **server:** refuse playlists the proxy can't rewrite instead of bypassing the tunnel ([#111](https://github.com/KingOfKalk/wg-stream-proxy/issues/111)) ([b9cc97a](https://github.com/KingOfKalk/wg-stream-proxy/commit/b9cc97aeeb1d97d7aae56b02b64c751b8eb33530))
+
+
+### Build System
+
+* **container:** let Prune delete old image versions ([#103](https://github.com/KingOfKalk/wg-stream-proxy/issues/103)) ([7825072](https://github.com/KingOfKalk/wg-stream-proxy/commit/782507248c31f320c0ad070fa778b4c2e8bfd254))
+
 ## [0.2.0](https://github.com/KingOfKalk/wg-stream-proxy/compare/v0.1.0...v0.2.0) (2026-11-19)
 
 
