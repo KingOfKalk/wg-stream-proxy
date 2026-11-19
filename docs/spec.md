@@ -182,6 +182,9 @@ direct = []
 [tunnels]
 idle_timeout = "60m"
 
+[reload]
+watch_interval = "2s"                 # how often the config files are checked for changes (5.6); "0" turns it off
+
 [epg]
 url = "https://ext.greektv.app/epg/epg.xml.gz"  # optional, no default
 
@@ -189,7 +192,7 @@ url = "https://ext.greektv.app/epg/epg.xml.gz"  # optional, no default
 listen = ""                           # off; e.g. "127.0.0.1:2350" (7.1)
 ```
 
-Unknown keys and wrong value types are config errors. Values are validated: `listen` is `[host]:port` with a numeric port; `debug.listen` is empty or of the same form, with a port other than the one of `listen` (as in effect after flag and environment); durations are positive; `max_playlist_size` is a whole number directly followed by `B`, `KiB` or `MiB`, positive and at most `32MiB`; `public_base_url` and `epg.url` are empty or absolute `http(s)` URLs; `user_agent` has no line breaks; `allow_private` keys are `direct` or existing tunnel names, values are CIDR prefixes without host bits.
+Unknown keys and wrong value types are config errors. Values are validated: `listen` is `[host]:port` with a numeric port; `debug.listen` is empty or of the same form, with a port other than the one of `listen` (as in effect after flag and environment); durations are positive (`reload.watch_interval` also accepts `"0"`, which turns watching off); `max_playlist_size` is a whole number directly followed by `B`, `KiB` or `MiB`, positive and at most `32MiB`; `public_base_url` and `epg.url` are empty or absolute `http(s)` URLs; `user_agent` has no line breaks; `allow_private` keys are `direct` or existing tunnel names, values are CIDR prefixes without host bits.
 
 ### 5.4 Channel files (`channels.d/*.toml`)
 
@@ -264,11 +267,12 @@ url = "https://daserste-live.ard-mcdn.de/daserste/live/hls/de/master.m3u8"
 ### 5.6 Reload
 
 - `SIGHUP` reloads all files; the new config is validated completely (tunnel files included), an invalid one is rejected with all errors logged and the old one keeps serving. Reloads run one at a time.
+- File watching: unless `reload.watch_interval` (5.3) is `"0"`, the proxy checks the files a reload reads (`config.toml`, `channels.d/*.toml` with `_defaults.toml`, `<tunnels-dir>/*.conf`) every interval by path, size and modification time; other files do not count. Added, changed and removed files all count. A change triggers the same reload as `SIGHUP` once the files have stayed the same for one further interval, so an editor that writes in several steps causes one reload. Nothing is reloaded while the files are unchanged; a rejected config is logged once and not tried again until the files change. `SIGHUP` works either way. Polling works on every file system (bind mounts, network shares); a change made without touching size and modification time is not seen.
 - Requests in flight finish with the config they started with; new requests use the new one.
 - Unchanged tunnels (same parsed content; comments and formatting do not count) keep running; changed or removed tunnels are drained (2.1) and recreated lazily.
 - A route (`direct` or a tunnel) keeps its pooled upstream connections only if its network, its `allow_private` entries and the whole `[upstream]` block are unchanged; otherwise new requests use a new route and the old route's idle connections are closed, while an unchanged tunnel keeps running.
 - A reload that changes or removes a tunnel which is still starting cancels the start; requests waiting for it get `502`; the new tunnel starts lazily on the next request.
-- Restart required for: `listen`, `debug.listen`, `log_format`, signing key, tunnels dir location. A reload that changes one of them logs a warning and keeps the old value.
+- Restart required for: `listen`, `debug.listen`, `log_format`, `reload.watch_interval`, signing key, tunnels dir location. A reload that changes one of them logs a warning and keeps the old value.
 - A successful reload logs one info line `reloaded` with the channel and tunnel counts, `channels_added`, `channels_changed` and `channels_removed` (counts; changed means any difference of the merged channel config, comments, formatting and order do not count) and `tunnels_added`, `tunnels_changed` and `tunnels_removed` (names); a reload that changes nothing logs the same line with zeros. At debug level a second line lists the ids of the added, changed and removed channels; no line contains URLs.
 
 ## 6. Channel list
