@@ -8,7 +8,8 @@ Guidance for AI coding agents working on this repository.
   tunnels and serves them as one M3U8 playlist for Kodi, VLC and others.
 - Spec (binding): [docs/spec.md](docs/spec.md). Deployment:
   [docs/deploy.md](docs/deploy.md). Testing:
-  [docs/testing.md](docs/testing.md).
+  [docs/testing.md](docs/testing.md). Monitoring:
+  [docs/observability.md](docs/observability.md).
 - Git workflow, labels, issue lifecycle, releases:
   [CONTRIBUTING.md](CONTRIBUTING.md).
 

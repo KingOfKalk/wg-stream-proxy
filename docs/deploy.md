@@ -89,28 +89,9 @@ Kodi cannot play MP3 radio streams through `inputstream.adaptive`. With the glob
 
 An empty value removes a key set by a lower layer for `headers`, `attrs` and `extra` (spec 5.4).
 
-## Timing
+## Monitoring
 
-`/metrics` has two histograms for timing trends over days, for example in Grafana (definitions in [spec 7.3](spec.md)):
-
-- `wsp_tunnel_start_seconds{tunnel}`: how long a tunnel start takes, device up including the first handshake. One observation per successful start; the tunnel starts on the first request after it was idle, so `rate(wsp_tunnel_start_seconds_count[1h])` also shows how often tunnels cold-start.
-- `wsp_upstream_phase_seconds{route,phase}`: where the time of an upstream request goes, `phase` = `dns`, `connect`, `tls`, `first_byte`. `route` is `direct` or a tunnel name, never a channel. A phase that did not happen (pooled connection, IP literal, plain HTTP) is not observed, so `connect` has fewer samples than `first_byte`.
-
-Buckets are 10 ms to 15 s. Values above 15 s, or tails inside a bucket, show only as the bucket bound, so read quantiles as estimates.
-
-```promql
-# Median and 95th percentile of the first upstream byte per route, over 1 hour
-histogram_quantile(0.5, sum by (le, route) (rate(wsp_upstream_phase_seconds_bucket{phase="first_byte"}[1h])))
-histogram_quantile(0.95, sum by (le, route) (rate(wsp_upstream_phase_seconds_bucket{phase="first_byte"}[1h])))
-
-# 95th percentile per route and phase
-histogram_quantile(0.95, sum by (le, route, phase) (rate(wsp_upstream_phase_seconds_bucket[1h])))
-
-# 95th percentile of tunnel starts per tunnel
-histogram_quantile(0.95, sum by (le, tunnel) (rate(wsp_tunnel_start_seconds_bucket[6h])))
-```
-
-A request that streams (a radio channel, a TS stream) is recorded when it closes, so its phases show up after the stream ends.
+`/metrics` serves the timing histograms and the other `wsp_` metrics ([spec 7.3](spec.md)). Prometheus scrape config, useful queries (timing, error ratio, tunnel starts), example alerts and the Grafana dashboard: [observability.md](observability.md).
 
 ## Debug endpoints
 
