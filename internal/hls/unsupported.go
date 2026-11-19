@@ -120,7 +120,7 @@ func Unsupported(contentType string, prefix []byte, configured Type) string {
 		return FormatUnknown
 	case urlList(body):
 		return FormatM3U
-	case text && len(prefix) > maxBinaryTextLen && !bytes.HasPrefix(body, []byte("WEBVTT")):
+	case text && len(prefix) > maxBinaryTextLen && !webVTT(prefix):
 		// Text that is no format the proxy handles is never a media
 		// stream; a player's parser could find a playlist in it.
 		return FormatUnknown
@@ -170,8 +170,10 @@ func textLike(prefix []byte) bool {
 }
 
 // hasMPDTag reports whether b contains "<mpd" or ":mpd" (any case)
-// followed by whitespace, '>', '/' or the end of b: the start of an MPD
-// element, also with a namespace prefix.
+// followed by a byte that cannot continue an XML name ([A-Za-z0-9._:-])
+// or the end of b: the start of an MPD element, also with a namespace
+// prefix. Lighter parsers end a name at any such byte ("<MPD=a" is an
+// MPD element for them).
 func hasMPDTag(b []byte) bool {
 	for i := 0; i+4 <= len(b); i++ {
 		if b[i] != '<' && b[i] != ':' || !strings.EqualFold(string(b[i+1:i+4]), "mpd") {
@@ -180,12 +182,19 @@ func hasMPDTag(b []byte) bool {
 		if i+4 == len(b) {
 			return true
 		}
-		switch b[i+4] {
-		case ' ', '\t', '\r', '\n', '>', '/':
+		if c := b[i+4]; !isLetter(c) && (c < '0' || c > '9') && strings.IndexByte("._:-", c) < 0 {
 			return true
 		}
 	}
 	return false
+}
+
+func isLetter(c byte) bool { return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' }
+
+// webVTT reports whether a body prefix is WebVTT: "WEBVTT" after any
+// number of UTF-8 byte order marks and whitespace.
+func webVTT(prefix []byte) bool {
+	return bytes.HasPrefix(bytes.TrimLeft(stripBOMs(prefix), " \t\r\n\v\f"), []byte("WEBVTT"))
 }
 
 // hasPrefixFold reports whether b starts with the ASCII string prefix,
@@ -281,25 +290,25 @@ func xmlStart(prefix []byte) bool {
 	return len(body) > 0 && body[0] == '<'
 }
 
-// XMLSniffLen is how much of a body Sniff reads when it starts like XML
-// but its root element does not start within the first SniffLen bytes
-// (a long comment or doctype).
+// XMLSniffLen is how much of a text body Sniff reads when it starts like
+// XML or WebVTT.
 const XMLSniffLen = 64 << 10
 
 // Sniff returns the start of a body for Detect and Unsupported (spec
 // 3.1, 3.3): SniffLen bytes, or the whole body if it is shorter; if it
-// starts like XML, up to XMLSniffLen bytes. rest reads the whole body,
-// the returned bytes included; the caller reads from rest only. A read
-// error other than io.EOF is returned.
+// is text that starts like XML or WebVTT, up to XMLSniffLen bytes. rest
+// reads the whole body, the returned bytes included; the caller reads
+// from rest only. A read error other than io.EOF is returned.
 func Sniff(body *bufio.Reader) (prefix []byte, rest *bufio.Reader, err error) {
 	prefix, err = body.Peek(SniffLen)
 	if err != nil && !errors.Is(err, io.EOF) {
 		return nil, body, err
 	}
-	if len(prefix) < SniffLen || !xmlStart(prefix) || !textLike(prefix) {
+	if len(prefix) < SniffLen || !xmlStart(prefix) && !webVTT(prefix) || !textLike(prefix) {
 		return prefix, body, nil
 	}
-	// XML is classified by the whole document if it fits (Unsupported).
+	// XML is classified by the whole document if it fits (Unsupported);
+	// WebVTT, the one text format streamed, is searched for an MPD tag.
 	rest = bufio.NewReaderSize(body, XMLSniffLen)
 	prefix, err = rest.Peek(XMLSniffLen)
 	if err != nil && !errors.Is(err, io.EOF) {

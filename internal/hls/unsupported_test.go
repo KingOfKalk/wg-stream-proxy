@@ -169,6 +169,7 @@ func FuzzUnsupported(f *testing.F) {
 		"<!---><MPD></MPD>--><x/>", "<?p a><MPD></MPD><q ?><x/>", "\x00<\x00?\x00x", "<\x00?\x00x\x00",
 		"<x/><MPD></MPD>", ttml, "<tt><!---></tt><MPD/>--></tt>",
 		"x<MPD>", "\ufeff\ufeff<MPD>", "#c\n<MPD/>", "\u00a0<MPD>", "\x00<mpd:MPD/>", "WEBVTT\n\n", "plain text, no playlist",
+		"\x00\x01\x02\xff<MPD=a=\"b\">", "\x00<MPD!", "WEBVTT\n\n" + strings.Repeat("x", 600) + "<MPD>",
 	} {
 		f.Add("", []byte(s), uint8(Auto))
 		f.Add("audio/x-scpls", []byte(s), uint8(Raw))
@@ -324,5 +325,42 @@ func TestUnsupportedLeadingText(t *testing.T) {
 				t.Errorf("Unsupported = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+// TestUnsupportedMPDTag: an MPD start tag is found whatever ends its
+// name for lighter parsers (round 5 of the review: "<MPD=a" ends the
+// name at '=' for tXml and cml-xml), and in WebVTT bodies longer than
+// SniffLen.
+func TestUnsupportedMPDTag(t *testing.T) {
+	const rest = `a="b" xmlns="urn:mpeg:dash:schema:mpd:2011"><BaseURL>http://a.example/</BaseURL></MPD>`
+	for _, term := range []string{"=", " ", ">", "/", "\"", "'", "\x00", "\xff", "!", "(", ";", ","} {
+		body := "\x00\x01\x02\xff<MPD" + term + rest
+		prefix, _, err := Sniff(bufio.NewReaderSize(strings.NewReader(body), SniffLen))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := Unsupported("text/xml", prefix, Auto); got != FormatDASH {
+			t.Errorf("terminator %q: Unsupported = %q, want dash", term, got)
+		}
+	}
+	for _, name := range []string{"<mpdx ", "<mpd-x>", "<mpd.x>", "<mpd_x>", "<mpd1>", "<mpd:x>"} {
+		if got := Unsupported("", []byte("\x00\x01\x02\xff"+name), Auto); got != "" {
+			t.Errorf("%q is no MPD tag: Unsupported = %q", name, got)
+		}
+	}
+	if got := Unsupported("", []byte("\x00\x01\x02\xff<MPD"), Auto); got != FormatDASH {
+		t.Errorf("tag at the end of the prefix: %q, want dash", got)
+	}
+	vtt := "WEBVTT\n\n" + strings.Repeat("00:00.000 --> 00:02.000\nHello\n\n", 30) + `<MPD><BaseURL>http://a.example/</BaseURL></MPD>`
+	prefix, _, err := Sniff(bufio.NewReaderSize(strings.NewReader(vtt), SniffLen))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(prefix) != len(vtt) {
+		t.Errorf("Sniff read %d bytes of a %d-byte WebVTT body, want all", len(prefix), len(vtt))
+	}
+	if got := Unsupported("text/vtt", prefix, Auto); got != FormatDASH {
+		t.Errorf("MPD after 512 bytes of WebVTT: %q, want dash", got)
 	}
 }

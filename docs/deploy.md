@@ -106,6 +106,8 @@ Kodi cannot play MP3 radio streams through `inputstream.adaptive`. With the glob
 
 An empty value removes a key set by a lower layer for `headers`, `attrs` and `extra` (spec 5.4).
 
+HLS content steering and interstitials (`EXT-X-CONTENT-STEERING`, asset lists of `EXT-X-DATERANGE`) do not work through the proxy: their JSON documents carry URLs the player would fetch directly, so the proxy refuses them (spec 3.3).
+
 ## DASH channels in Kodi
 
 Kodi plays MPEG-DASH through `inputstream.adaptive`. A channel is DASH if its URL path contains `.mpd` or it has `upstream.type = "dash"`; the channel list then points to `/c/<id>.mpd` (spec 6). A channel file for DASH channels:
