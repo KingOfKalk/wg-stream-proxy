@@ -17,7 +17,7 @@ direct = []
 idle_timeout = "60m"
 
 [epg]
-url = "https://ext.greektv.app/epg/epg.xml.gz"
+url = "https://epg.example.org/epg/epg.xml.gz"
 
 [debug]
 listen = ""                           # off; e.g. "127.0.0.1:2350"

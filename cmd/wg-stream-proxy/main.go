@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-// Command wg-stream-proxy routes IPTV streams through userspace WireGuard
-// tunnels and serves them as one M3U8 playlist.
+// Command wg-stream-proxy routes each IPTV and internet radio channel
+// through its own userspace WireGuard tunnel (or direct) and serves them as
+// one M3U playlist for Kodi, VLC and other players. It proxies HLS (TS,
+// fMP4, AES-128) and raw/ICY audio streams; no root, no TUN device, fails
+// closed.
 package main
 
 import (
@@ -27,7 +30,7 @@ const usage = `usage: wg-stream-proxy [command] [args]
 commands:
   serve        run the proxy (default)
   check        validate the config
-  import       convert an M3U file to channel files
+  import       convert an M3U file to one channel file
   epg          list or match EPG ids
   healthcheck  query /healthz on the listen address
   tunnel       list tunnels or stop one (needs [debug] listen)

@@ -63,6 +63,10 @@ Proxy in-process with a test config dir, fixture upstreams as `httptest.Server`s
 - Reload: valid change applied, invalid change rejected while the old config keeps serving, removed tunnel drained, changed tunnel recreated, unchanged tunnel keeps running, reload during a tunnel start.
 - Security: unsigned or tampered `/r/` and disabled channel give `404`, logo path traversal rejected.
 - Capacity: 3 simulated viewers on different channels; 30s on push, 5 minutes nightly; no stalls, no goroutine or memory growth.
+- Observability (v0.2):
+  - Timing histograms (`wsp_tunnel_start_seconds`, `wsp_upstream_phase_seconds`): the phases of direct and tunnel requests are observed and served on `/metrics`; the Grafana dashboard only uses metrics the registry has.
+  - Debug log: one `request` line per `/c/` and `/r/` request; logs never contain upstream paths.
+  - Debug endpoints: off by default, on their own listener (never on the main one), recent requests, profiles, tunnel state and cool-down (`POST /debug/tunnels/{name}/stop`); requests addressed by a host name are rejected (DNS rebinding). The `tunnel list` and `tunnel stop` commands run against a fake debug server.
 
 ## L4 Player
 

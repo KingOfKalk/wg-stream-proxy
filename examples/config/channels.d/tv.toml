@@ -12,7 +12,7 @@ attrs = { parent-code = "1234" }
 
 [[channel]]
 name = "ERT World"                    # required
-url = "https://ertflix-ertworld.siliconweb.com/mpegts/618618_3479286/master_mpegts.m3u8"  # required
+url = "https://live.example.com/mpegts/100100_200200/master_mpegts.m3u8"  # required
 id = "ert-world"                      # optional, default: slug of name
 tunnel = "gr"                         # optional
 group = "Greek TV"                    # optional
@@ -20,7 +20,7 @@ enabled = true
 
 [channel.upstream]
 type = "auto"                         # auto | hls | raw
-headers = { Referer = "https://www.ertflix.gr/" }
+headers = { Referer = "https://www.example.org/" }
 
 [channel.playlist]
 tvg_id = "ertworld"
@@ -33,4 +33,4 @@ attrs = { tvg-chno = "5" }
 [[channel]]
 name = "Das Erste"
 tunnel = "direct"
-url = "https://daserste-live.ard-mcdn.de/daserste/live/hls/de/master.m3u8"
+url = "https://live.example.net/daserste/live/hls/de/master.m3u8"
