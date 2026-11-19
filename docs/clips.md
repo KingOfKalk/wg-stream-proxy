@@ -2,9 +2,9 @@
 
 Design for the v0.3 clips ([spec 10](spec.md#10-roadmap), [#83](https://github.com/KingOfKalk/wg-stream-proxy/issues/83), [#105](https://github.com/KingOfKalk/wg-stream-proxy/issues/105)). Companion to [spec.md](spec.md), [architecture.md](architecture.md) and [observability.md](observability.md).
 
-- Status: proposal. Nothing here is implemented. Spec sentences come with the implementation PRs.
+- Status: decided design (section 10), not implemented yet. Spec sentences come with the implementation PRs (section 11).
 - Findings are from ffmpeg and VLC in throwaway containers (section 4) and from the Kodi sources (section 5). Kodi itself was not run.
-- The owner decides the open points in [section 10](#10-decisions-for-the-owner).
+- Decisions: [section 10](#10-decisions); implementation plan: [section 11](#11-implementation-plan).
 
 ## Contents
 
@@ -17,7 +17,8 @@ Design for the v0.3 clips ([spec 10](spec.md#10-roadmap), [#83](https://github.c
 7. [Distribution](#7-distribution)
 8. [Is the in-flight clip worth it?](#8-is-the-in-flight-clip-worth-it)
 9. [Manual test on the Raspberry Pi](#9-manual-test-on-the-raspberry-pi)
-10. [Decisions for the owner](#10-decisions-for-the-owner)
+10. [Decisions](#10-decisions)
+11. [Implementation plan](#11-implementation-plan)
 
 ## 1. Summary
 
@@ -26,7 +27,7 @@ Design for the v0.3 clips ([spec 10](spec.md#10-roadmap), [#83](https://github.c
 - The switchover works in ffmpeg (libavformat, Kodi's default HLS path) and VLC when clip and stream are both MPEG-TS and the clip has an audio track. It fails with fMP4 streams in both players, and ffmpeg loses the audio when the clip has none.
 - Kodi's `inputstream.adaptive` reopens all decoders at every discontinuity; its maintainers call discontinuities "not well supported", and a Raspberry Pi 4 user reports a permanent stall there (November 2026). Only a test on the Pi tells.
 - The clip costs time: the real picture comes about 3 s after the upstream is ready (the clip segments the player already holds). It pays off only when cold starts are long.
-- Recommendation: error clips first; in-flight clips only for MPEG-TS channels, behind a switch that is off by default, once the v0.2 timing data shows long cold starts (section 8) and the Pi test (section 9) passes.
+- Decided: error clips first; in-flight clips only for MPEG-TS channels, built but off by default until the Pi test (section 9) passes; the v0.2 timing data (section 8) shows where they help.
 
 ## 2. Terms
 
@@ -321,7 +322,7 @@ sequenceDiagram
 - When the upstream master arrives: pick the variant (highest `BANDWIDTH`), fetch its media playlist. Only then switch.
 - Append, never rewrite ([RFC 8216 6.2.1](https://www.rfc-editor.org/rfc/rfc8216#section-6.2.1)): after the last listed clip segment, `#EXT-X-DISCONTINUITY`, then the last 3 upstream segments (the player's own start point), as rewritten `/r/` URLs.
 - Every later reload: fetch the upstream media playlist, rewrite it, renumber: session sequence = upstream sequence + the offset fixed at the switch. `#EXT-X-DISCONTINUITY-SEQUENCE` = 1 once the tag has left the window, plus the upstream's own increments.
-- `#EXT-X-TARGETDURATION` becomes the upstream's value. RFC 8216 6.2.1 says it "MUST NOT change"; ffmpeg and VLC accept it (4.3), ISA keeps its 1 s reload interval. The compliant alternative is decision 12.
+- `#EXT-X-TARGETDURATION` becomes the upstream's value. RFC 8216 6.2.1 says it "MUST NOT change"; ffmpeg and VLC accept it (4.3), ISA keeps its 1 s reload interval. The compliant alternative, a fixed 10 from the start, would cost up to 10 s of latency (decision 12).
 - The real segments are streamed unchanged through `/r/` (spec 4); prefetch (#84) applies to them as to any `/r/` request.
 
 **Failure during a session**
@@ -392,12 +393,12 @@ Bounded labels only (clip names are fixed, no channel ids on new series):
 ### 6.9 Spec changes (with the implementation)
 
 - 3.2: stateless except clip sessions. 3.4: error clips instead of `502`/`504` on `GET /c/` of HLS channels.
-- 5.3: `[clips]` (e.g. `error = true`, `inflight = false`, `grace = "1s"`). 7.1: `/s/…` and `/clip/…`. 7.3: the metrics of 6.6. 9: package `internal/clips`.
+- 5.3: `[clips]` with `error = true`, `inflight = false`, `grace = "1s"`. 7.1: `/s/…` and `/clip/…`. 7.3: the metrics of 6.6. 9: package `internal/clips`.
 - testing.md: L1 for the timestamp rewrite and the session playlist (injected clock), L2 fuzz target for the TS rewrite, L4 with ffmpeg: in-flight switch and error clip against the fixture server.
 
 ## 7. Distribution
 
-Proposed by the owner:
+Decided (decision 6):
 
 - A generator script, `internal/clips/generate.sh`, like [`testdata/media/generate.sh`](../testdata/media/generate.sh): it re-runs itself in a pinned image (`alpine:3.24.4` with `ffmpeg=8.1.3-r0` today) and renders all clips.
 - Font: Inter 4.1 ([release](https://github.com/rsms/inter/releases/tag/v4.1)), fetched by version: `Inter-4.1.zip`, SHA-256 `9883fdd4a49d4fb66bd8177ba6625ef9a64aa45899767dde3d36aa425756b11e`; the script uses `extras/ttf/Inter-Regular.ttf` (SHA-256 `40d692fce188e4471e2b3cba937be967878f631ad3ebbbdcd587687c7ebe0c82`) and checks both.
@@ -406,7 +407,7 @@ Proposed by the owner:
 - Font licence: only rendered pixels ship, not the font. The SIL OFL allows that without conditions ([OFL-FAQ 1.1](https://openfontlicense.org/ofl-faq/): "video titling" is named; artwork is not restricted; acknowledgement not required). The docs credit Inter anyway.
 - Repo rules: AGENTS.md and CONTRIBUTING.md do not forbid committed generated files, and `testdata/media` (828 KB, rendered by its script) is the precedent. The output is not byte-reproducible across ffmpeg versions, which is why it is committed rather than rendered at build time.
 
-Alternatives:
+Rejected alternatives:
 
 | Option | Against |
 |---|---|
@@ -488,51 +489,44 @@ and in `config.toml`: `[upstream.allow_private] direct = ["192.168.1.0/24"]`. Ad
 
 Note Kodi, ISA and LibreELEC versions. A stall under 2 s with ISA and no "Period … not found" is a pass.
 
-## 10. Decisions for the owner
+## 10. Decisions
 
-Status: **Decided** (owner input), **Proposed** (owner proposal, to confirm), **Open**.
+All decided by the owner on 2026-11-19, following the recommendations of the first draft.
 
-1. **Names** — Decided: "in-flight clips" while a channel starts, "error clips" for failures.
-2. **Look** — Decided: Full HD still, near-black, one centered English text, no animation. Font, Proposed:
-   - Inter 4.1 (Recommended): tested here, compact for long texts.
-   - Noto Sans: wider script coverage, not needed for fixed English texts.
-3. **Texts** — Proposed: "Starting tunnel…", "Connecting to channel…", "Waiting for stream…"; "Tunnel not reachable", "Channel not available", "Channel blocked by configuration". Recommended as listed: each maps to one failure class or phase (3.2, 6.3).
-4. **Audio** — Proposed, test result:
-   - Silent AAC stereo 48 kHz track (Recommended): without one, ffmpeg loses the stream's audio after the switch (case 6).
-   - No audio track: smaller by 1 KB per segment, but breaks the ffmpeg path.
-5. **Status per phase** — Proposed: one segment per phase, chosen when the player asks. Recommended with 0.96 s segments: the text lags 1-2 s; shorter phases may never show, which is harmless.
-6. **Distribution** — Proposed:
-   - Generator script, committed segments, `go:embed` (Recommended): no setup, reproducible from the script, 82 KB.
-   - Render at build time: ffmpeg in every build, not reproducible.
-   - Config dir: setup for every user; keep as a later add-on for own clips.
-7. **Scope and order** — Open:
-   - Error clips now; in-flight clips behind `inflight = false` once the data (section 8) and the Pi test (section 9) say yes (Recommended): error clips are stateless and safe, in-flight clips carry the ISA risk.
-   - Both now: more code before the risk is known.
-   - Error clips only: if the Pi test fails or cold starts are short.
-8. **Which failures get an error clip** — Open:
-   - Every failure of `GET /c/` on HLS channels (Recommended): one message instead of Kodi's generic dialog; metrics and logs keep the cause.
-   - Only proxy-side failures (tunnel, guard), upstream statuses stay HTTP: keeps `403`/`404` visible to tools, but Kodi shows its dialog again.
-   - `HEAD`, `/r/` and non-HLS channels keep HTTP errors in both options.
-9. **Channels the clip cannot precede (fMP4, separate audio)** — Open:
-   - Per-channel memory of the last start; no in-flight clip without it (Recommended): never shows a clip that cannot switch; the first start after a restart has no clip.
-   - Optimistic: try, end with `ENDLIST` if unsuitable: the viewer must start the channel again.
-   - Opt-in per channel in the config: more config to maintain.
-10. **Variant in a session** — Open:
-    - Highest `BANDWIDTH` (Recommended): household LAN, one variant for the whole viewing anyway.
-    - First listed: what the broadcaster put first, often not the best.
-11. **Grace before a clip session** — Open:
-    - 1 s, configurable (Recommended): fast starts stay stateless and gain no latency.
-    - 0 s: every start gets a session and 3 s more latency.
-    - From the data: same as 1 s with a tuned value; possible later.
-12. **Target duration of the session playlist** — Open:
-    - 1 during the clip, the upstream's after the switch (Recommended): fast reloads, worked in ffmpeg and VLC; deviates from RFC 8216 6.2.1.
-    - Fixed 10 from the start: RFC-conform, but players reload every 10 s and need 10 s of clip ahead: up to 10 s more latency.
-13. **Radio** — Proposed: no in-flight clips for raw and ICY. Error stream:
-    - Endless silent MP3 with `StreamTitle`, for channels with `radio = "true"`, after the video clips (Recommended): VLC and Kodi's Shoutcast path show the title; ending it makes VLC reconnect in a loop (4.5).
-    - Plain HTTP errors: no change, no information for the listener.
-14. **Configuration** — Open:
-    - Global `[clips]` with `error = true`, `inflight = false`, `grace = "1s"` (Recommended): one switch each, defaults safe.
-    - Also per channel or file: needed only if some channels misbehave; can follow.
-15. **Sessions across restarts** — Open:
-    - In memory, lost on restart (Recommended): the player stops and the viewer restarts the channel; restarts are rare.
-    - Persisted: state on disk for a rare case, against the read-only container (deploy.md).
+1. **Names**: "in-flight clips" while a channel starts, "error clips" for failures.
+2. **Look**: Full HD still, near-black, one centered English text, no animation, font Inter 4.1 (tested here, compact for long texts).
+3. **Texts**: "Starting tunnel…", "Connecting to channel…", "Waiting for stream…"; "Tunnel not reachable", "Channel not available", "Channel blocked by configuration". Each maps to one phase or failure class (3.2, 6.3).
+4. **Audio**: silent AAC-LC stereo 48 kHz track. Without one, ffmpeg loses the stream's audio after the switch (case 6).
+5. **Status per phase**: one 0.96 s segment per phase, chosen when the player asks. The text lags 1-2 s; phases shorter than a segment may not show.
+6. **Distribution**: generator script, committed segments, `go:embed` (section 7). Clips in the config dir may come later as an add-on.
+7. **Scope and order**: error clips first. In-flight clips are built but off (`inflight = false`) until the Pi test (section 9) passes with `inputstream.adaptive` and with Kodi's default player.
+8. **Error clips**: only for `GET /c/` of HLS channels, all failure classes of 3.2. `HEAD`, `/r/` and raw channels keep their HTTP errors; logs and metrics keep the cause.
+9. **Unsuitable channels**: per-channel memory of the last start's format. fMP4, a separate audio rendition or no memory yet: no in-flight clip.
+10. **Variant in a session**: highest `BANDWIDTH`. One variant for the whole viewing anyway.
+11. **Grace**: 1 s, configurable. Fast starts stay stateless and gain no latency.
+12. **Target duration**: 1 s during the clip, the upstream's value after the switch. Deviates from RFC 8216 6.2.1; worked in ffmpeg and VLC; the Pi test confirms it for Kodi.
+13. **Radio**: no in-flight clips for raw and ICY channels. An endless silent MP3 with `StreamTitle` for `radio = "true"` channels comes later, after the video clips.
+14. **Configuration**: one global `[clips]` table: `error = true`, `inflight = false`, `grace = "1s"`.
+15. **Sessions**: in memory, lost on restart; the player stops and the viewer starts the channel again.
+
+## 11. Implementation plan
+
+Three steps, one issue and PR each, in this order:
+
+```mermaid
+flowchart LR
+    s1["1 Clip assets<br/>generator, go:embed"] --> s2["2 Error clips<br/>/c/, [clips], metrics"] --> s3["3 In-flight clips<br/>sessions, switch<br/>inflight = false"]
+```
+
+1. **Clip assets**
+   - `internal/clips/generate.sh` (section 7): pinned image, Inter 4.1 by version and SHA-256, renders the six phase segments (6.4); checks every output with `ffprobe` (24 video frames, 45 AAC frames, IDR first, same SPS/PPS).
+   - Committed segments, embedded with `go:embed` in package `internal/clips`; credit for Inter in the docs.
+   - Go test on the embedded files, no ffmpeg: valid TS packets, PIDs, PTS/DTS range and duration 0.96 s, audio and video packet counts, IDR at the start. Spec 9 (layout) updated.
+2. **Error clips**
+   - `GET /c/` of HLS channels answers a VOD playlist with the error segment 5 times (6.2), class per 3.2; segments under `/clip/{name}/{n}.ts`.
+   - TS timestamp and continuity-counter rewrite (6.3) with L1 tests and an L2 fuzz target.
+   - `[clips]` table with `error`, `inflight`, `grace` (spec 5.3); metrics and log fields of 6.6; spec 3.4, 7.1, 7.3; L4 player test: ffmpeg plays the error clip and exits 0.
+3. **In-flight clips** (behind `inflight = false`)
+   - Per-channel format memory, grace, master playlist to `/s/{session}/index.m3u8`, phase segments from the request trace, switch with renumbering and discontinuity sequence, target duration 1 s then the upstream's, failure during a session, session expiry (6.3).
+   - Spec 3.2 and 7.1; L1 with an injected clock; L4: ffmpeg against the fixture server through a slow route plays clip and stream.
+   - Pi test instructions (section 9) in deploy.md; the owner runs them before `inflight` may default to `true`.
