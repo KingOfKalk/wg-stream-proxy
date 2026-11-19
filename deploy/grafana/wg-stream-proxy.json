@@ -1170,7 +1170,7 @@
       "id": 19,
       "type": "timeseries",
       "title": "Errors by reason",
-      "description": "Upstream failures per second by reason: connect, timeout, guard, tls, redirects, size, other (wsp_upstream_errors_total).",
+      "description": "Upstream failures per second by reason: connect, timeout, guard, tls, redirects, size, unsupported, other (wsp_upstream_errors_total).",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
