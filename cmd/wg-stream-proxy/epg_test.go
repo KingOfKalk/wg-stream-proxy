@@ -78,7 +78,7 @@ func epgConfigDir(t *testing.T, configTOML string) string {
 // server.
 func epgCLI() (*cli, *syncBuffer, *syncBuffer) {
 	c, out, errOut := testCLI(nil)
-	c.epgAllowPrivate = map[string][]netip.Prefix{"direct": {netip.MustParsePrefix("127.0.0.0/8")}}
+	c.allowPrivate = map[string][]netip.Prefix{"direct": {netip.MustParsePrefix("127.0.0.0/8")}}
 	return c, out, errOut
 }
 
@@ -179,7 +179,7 @@ func TestEPGErrors(t *testing.T) {
 			dir := epgConfigDir(t, tt.config)
 			c, out, errOut := epgCLI()
 			if !tt.allow {
-				c.epgAllowPrivate = nil
+				c.allowPrivate = nil
 			}
 			code := c.run(append(tt.args[:1:1], append(tt.args[1:], "--config-dir", dir)...))
 			if code != tt.wantCode {
