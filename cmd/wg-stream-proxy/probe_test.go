@@ -3,7 +3,10 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -315,5 +318,213 @@ func TestProbeTunnelDown(t *testing.T) {
 
 	if code != 1 || !strings.Contains(out.String(), "result: failed") {
 		t.Errorf("exit code = %d, stdout:\n%s\nstderr:\n%s; want 1 and a failed result", code, out, errOut)
+	}
+}
+
+// fakeProbeDebug is a debug listener stand-in for POST /debug/probe: it
+// records the requests and answers with status and body.
+type fakeProbeDebug struct {
+	*httptest.Server
+	mu      sync.Mutex
+	reqs    []string // method, request URI and body
+	headers []http.Header
+}
+
+func newFakeProbeDebug(t *testing.T, status int, body string) *fakeProbeDebug {
+	t.Helper()
+	f := &fakeProbeDebug{}
+	f.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		f.mu.Lock()
+		f.reqs = append(f.reqs, r.Method+" "+r.RequestURI+" "+string(b))
+		f.headers = append(f.headers, r.Header.Clone())
+		f.mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(f.Close)
+	return f
+}
+
+func (f *fakeProbeDebug) requests() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.reqs...)
+}
+
+// proxyReport is what the running proxy answers for a raw stream.
+const proxyReport = `{"mode":"proxy","route":"gr","ok":true,"steps":[{"role":"url","url":"https://cdn.example.com/…/live.ts","status":200,"content_type":"video/mp2t","format":"raw","streaming":true,"ok":true,"timing":{"tunnel_start_ms":812.5,"ttfb_ms":40.2,"total_ms":41}}]}` + "\n"
+
+// TestProbeModeSelection: a running proxy with a debug listener makes the
+// probe; without one, or without anything listening, the command runs
+// standalone and says so on stderr; --standalone forces that.
+func TestProbeModeSelection(t *testing.T) {
+	up := httptest.NewServer(&probeUpstream{})
+	t.Cleanup(up.Close)
+	closed, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	closedAddr := closed.Addr().String()
+	_ = closed.Close()
+	target := up.URL + "/radio?token=secret"
+
+	tests := []struct {
+		name       string
+		debug      string // [debug] listen; "fake" is the fake listener, "" none
+		args       []string
+		wantStdout string
+		wantStderr string
+		fakeCalls  int
+	}{
+		{"debug listener answers", "fake", nil, "route gr (via running proxy)", "", 1},
+		{"debug listener answers, json", "fake", []string{"--json"}, `"mode": "proxy"`, "", 1},
+		{"no debug listener", "", nil, "route direct (standalone)", "[debug] listen is not set, running standalone", 0},
+		{"nothing listens", closedAddr, nil, "route direct (standalone)", "nothing listens on [debug] listen " + closedAddr + ", running standalone", 0},
+		{"forced standalone", "fake", []string{"--standalone"}, "route direct (standalone)", "", 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newFakeProbeDebug(t, http.StatusOK, proxyReport)
+			cfg := "[upstream.allow_private]\ndirect = [\"127.0.0.0/8\"]\n"
+			switch tt.debug {
+			case "fake":
+				cfg += "[debug]\nlisten = \"" + f.Listener.Addr().String() + "\"\n"
+			case "":
+			default:
+				cfg += "[debug]\nlisten = \"" + tt.debug + "\"\n"
+			}
+			dir := writeDir(t, map[string]string{"config.toml": cfg})
+			c, out, errOut := testCLI(nil)
+			args := append([]string{"probe", "--config-dir", dir}, tt.args...)
+			args = append(args, target)
+
+			code := c.run(args)
+
+			if code != 0 {
+				t.Fatalf("exit code = %d, want 0 (stderr %q)", code, errOut)
+			}
+			if !strings.Contains(out.String(), tt.wantStdout) {
+				t.Errorf("stdout lacks %q:\n%s", tt.wantStdout, out)
+			}
+			if tt.wantStderr == "" && errOut.String() != "" || !strings.Contains(errOut.String(), tt.wantStderr) {
+				t.Errorf("stderr = %q, want %q", errOut, tt.wantStderr)
+			}
+			if got := f.requests(); len(got) != tt.fakeCalls {
+				t.Fatalf("debug requests = %v, want %d", got, tt.fakeCalls)
+			}
+		})
+	}
+}
+
+// TestProbeViaProxyRequest: the URL and headers go in the body of a POST,
+// never in the request line.
+func TestProbeViaProxyRequest(t *testing.T) {
+	f := newFakeProbeDebug(t, http.StatusOK, proxyReport)
+	dir := debugConfig(t, f.Listener.Addr().String())
+	c, _, errOut := testCLI(nil)
+
+	code := c.run([]string{"probe", "--config-dir", dir, "--route", "gr", "--header", "Referer=https://ref.example/", "https://cdn.example.com/live/a.ts?token=secret"})
+
+	if code != 0 {
+		t.Fatalf("exit code = %d (stderr %q)", code, errOut)
+	}
+	want := `POST /debug/probe {"route":"gr","url":"https://cdn.example.com/live/a.ts?token=secret","headers":{"Referer":"https://ref.example/"}}`
+	if got := f.requests(); len(got) != 1 || got[0] != want {
+		t.Errorf("requests = %q, want %q", got, want)
+	}
+	if ct := f.headers[0].Get("Content-Type"); ct != "application/json" {
+		t.Errorf("Content-Type = %q, want application/json", ct)
+	}
+}
+
+// TestProbeProxyErrors: an error of the debug listener is reported, not
+// worked around by a standalone probe.
+func TestProbeProxyErrors(t *testing.T) {
+	tests := []struct {
+		name   string
+		status int
+		body   string
+		code   int
+		want   string
+	}{
+		{"unknown route", http.StatusNotFound, `{"error":"unknown route \"nope\""}`, 2, `the running proxy: unknown route "nope"`},
+		{"bad request", http.StatusBadRequest, `{"error":"invalid header name \"X Y\""}`, 2, "the running proxy: invalid header name"},
+		{"older proxy", http.StatusNotFound, "404 page not found\n", 1, "does not know POST /debug/probe"},
+		{"server error", http.StatusInternalServerError, "boom\n", 1, "answered status 500"},
+		{"error text", http.StatusServiceUnavailable, `{"error":"shutting down"}`, 1, "the running proxy: shutting down"},
+		{"invalid answer", http.StatusOK, "not json", 1, "invalid answer"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newFakeProbeDebug(t, tt.status, tt.body)
+			dir := debugConfig(t, f.Listener.Addr().String())
+			c, out, errOut := testCLI(nil)
+
+			code := c.run([]string{"probe", "--config-dir", dir, "http://a.example/x?token=secret"})
+
+			if code != tt.code || out.String() != "" || !strings.Contains(errOut.String(), tt.want) {
+				t.Errorf("exit code %d, stdout %q, stderr %q; want %d, nothing, %q", code, out, errOut, tt.code, tt.want)
+			}
+			if strings.Contains(errOut.String(), "running standalone") || strings.Contains(errOut.String(), "secret") {
+				t.Errorf("stderr falls back or leaks the URL: %q", errOut)
+			}
+			if len(f.requests()) != 1 {
+				t.Errorf("debug requests = %v, want 1", f.requests())
+			}
+		})
+	}
+}
+
+// TestProbeViaRunningProxy: the whole path against a real serve: the
+// probe goes through the running proxy, whose own config (guard
+// exception for loopback) decides.
+func TestProbeViaRunningProxy(t *testing.T) {
+	up := httptest.NewServer(&probeUpstream{})
+	t.Cleanup(up.Close)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	debugAddr := ln.Addr().String()
+	_ = ln.Close()
+	dir := writeDir(t, map[string]string{"config.toml": "[debug]\nlisten = \"" + debugAddr + "\"\n[upstream.allow_private]\ndirect = [\"127.0.0.0/8\"]\n"})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	srv, _, srvLog := testCLI(map[string]string{"WG_STREAM_PROXY_LISTEN": "127.0.0.1:0"})
+	srv.ctx = ctx
+	var code int
+	var out, errOut *syncBuffer
+	srv.debugListening = func(net.Addr) {
+		go func() {
+			defer cancel()
+			// No guard exception of its own: only the proxy's config counts.
+			var c *cli
+			c, out, errOut = testCLI(nil)
+			code = c.run([]string{"probe", "--config-dir", dir, "--json", up.URL + "/live/master.m3u8?token=secret"})
+		}()
+	}
+	if got := srv.run([]string{"--config-dir", dir}); got != 0 {
+		t.Fatalf("serve exit code = %d; logs:\n%s", got, srvLog)
+	}
+
+	if code != 0 || errOut.String() != "" {
+		t.Fatalf("probe exit code %d, stderr %q, stdout:\n%s", code, errOut, out)
+	}
+	var rep probeJSON
+	if err := json.Unmarshal([]byte(out.String()), &rep); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, out)
+	}
+	if !rep.OK || len(rep.Steps) != 3 || !strings.Contains(out.String(), `"mode": "proxy"`) {
+		t.Errorf("report = %+v\n%s", rep, out)
+	}
+	logs := srvLog.String()
+	if !strings.Contains(logs, "msg=probe route=direct url="+up.URL+"/…/master.m3u8") {
+		t.Errorf("proxy log lacks the probe line:\n%s", logs)
+	}
+	if strings.Contains(logs, "secret") || strings.Contains(logs, "/live/") {
+		t.Errorf("proxy log leaks the query or path:\n%s", logs)
 	}
 }

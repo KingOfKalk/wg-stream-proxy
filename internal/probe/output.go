@@ -28,7 +28,7 @@ var roleTitles = map[string]string{
 // and a last line with the outcome.
 func (r *Report) WriteText(w io.Writer) error {
 	var b strings.Builder
-	fmt.Fprintf(&b, "route %s\n", r.Route)
+	fmt.Fprintf(&b, "route %s%s\n", r.Route, r.modeNote())
 	for _, s := range r.Steps {
 		fmt.Fprintf(&b, "%s: %s\n", roleTitles[s.Role], s.URL)
 		field := func(name, value string) { fmt.Fprintf(&b, "  %-13s %s\n", name, value) }
@@ -109,4 +109,15 @@ func (t Timing) describe() string {
 		out += " (connection reused)"
 	}
 	return out
+}
+
+// modeNote returns the mode for the first line of the text form.
+func (r *Report) modeNote() string {
+	switch r.Mode {
+	case ModeProxy:
+		return " (via running proxy)"
+	case ModeStandalone:
+		return " (standalone)"
+	}
+	return ""
 }

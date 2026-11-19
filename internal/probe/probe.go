@@ -25,6 +25,16 @@ import (
 	"github.com/KingOfKalk/wg-stream-proxy/internal/tunnel"
 )
 
+// Modes of a probe.
+const (
+	// ModeProxy: the running proxy made the requests, through its own
+	// tunnel (POST /debug/probe, spec 7.1).
+	ModeProxy = "proxy"
+	// ModeStandalone: the command made the requests itself and started
+	// the tunnel of the route itself.
+	ModeStandalone = "standalone"
+)
+
 // Roles of a step.
 const (
 	// RoleURL is the URL that was asked for.
@@ -72,6 +82,8 @@ type Options struct {
 
 // Report is the result of a probe.
 type Report struct {
+	// Mode tells where the probe ran: ModeProxy or ModeStandalone.
+	Mode string `json:"mode,omitempty"`
 	// Route is the name of the route.
 	Route string `json:"route"`
 	// OK: the proxy would serve the URL.

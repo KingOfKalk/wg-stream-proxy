@@ -167,6 +167,7 @@ func newDebugHandler(d *debugHandler) http.Handler {
 	mux.HandleFunc("GET /debug/requests", d.handleRequests)
 	mux.HandleFunc("GET /debug/tunnels", d.handleTunnels)
 	mux.HandleFunc("POST /debug/tunnels/{name}/stop", d.handleStop)
+	mux.HandleFunc("POST /debug/probe", d.handleProbe)
 	return debugHostGuard(http.NewCrossOriginProtection().Handler(mux))
 }
 

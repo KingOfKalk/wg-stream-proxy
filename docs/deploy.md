@@ -120,7 +120,7 @@ Radio and other channels listed without `.m3u8` still get an HTTP error, as do s
 
 ## Testing a channel URL
 
-`probe` fetches a URL through a route the way the proxy does and says whether it would serve it, before you add a channel ([spec 7.2](spec.md)). It needs no shell: run it in the container like `tunnel list`, or in a throwaway container with the same config.
+`probe` fetches a URL through a route the way the proxy does and says whether it would serve it, before you add a channel ([spec 7.2](spec.md)). It needs no shell: run it in the container like `tunnel list`. With `[debug] listen` set (see Debug endpoints below) the running proxy makes the requests, through its running tunnel: it works while the proxy plays channels and starts no second WireGuard device. The output says `via running proxy`. The proxy uses its loaded config, so after changing a channel, tunnel or `[upstream]` setting wait for the reload (file watching, or `SIGHUP`).
 
 ```bash
 docker exec wg-stream-proxy /wg-stream-proxy probe --route gr 'https://cdn.example.com/live/master.m3u8'
@@ -131,7 +131,7 @@ docker exec wg-stream-proxy /wg-stream-proxy probe --route gr --header 'Referer=
 - Exit code `0`: the proxy would serve it; `1`: it would not (the last lines say why: `guard`, `timeout`, `tls`, `status` for a `403` or `404`, `unsupported` for a playlist format the proxy refuses); `2`: wrong usage.
 - Per request you see the format (HLS master or media playlist with the number of variants or segments, raw or ICY stream, refused playlist) and where the time went: tunnel start, DNS, connect, TLS, first byte. For HLS the first variant and the first segment are fetched too, which finds geo-blocks that only hit the segments.
 - `--header Name=Value` is the same as `upstream.headers` of a channel (`User-Agent`, `Referer`, `Cookie`); once it works, copy the headers into the channel file.
-- The probe starts the route's tunnel itself and stops it at the end. While the proxy has that tunnel up, the second device with the same key makes the provider's server switch to the new endpoint, so a stream on that tunnel can stall until the next handshake: probe when nothing plays on it, or use `tunnel stop <name>` first (needs `[debug] listen`).
+- Without `[debug] listen`, or if nothing listens there, the probe runs standalone (`standalone` in the output, one line on stderr says so): it starts the route's tunnel itself and stops it at the end. That is a second device with the key of the tunnel, so while a proxy has that tunnel up, the provider's server switches to the new endpoint and a stream on that tunnel can stall until the next handshake. Prefer the debug listener; `--standalone` forces this mode (for a config the running proxy has not loaded yet, with no stream on that tunnel).
 
 ## Monitoring
 

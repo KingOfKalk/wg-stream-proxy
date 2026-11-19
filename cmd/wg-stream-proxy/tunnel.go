@@ -3,11 +3,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"text/tabwriter"
@@ -32,11 +34,20 @@ const tunnelUsage = "usage: wg-stream-proxy tunnel list | tunnel stop <name> [--
 type statusError struct {
 	method, target string
 	code           int
+	// msg is the "error" of a JSON error body, if there is one.
+	msg string
 }
 
 func (e *statusError) Error() string {
 	return fmt.Sprintf("%s %s: status %d", e.method, e.target, e.code)
 }
+
+// dialError: the connection to the debug listener could not be made, for
+// example because nothing listens there.
+type dialError struct{ err error }
+
+func (e *dialError) Error() string { return e.err.Error() }
+func (e *dialError) Unwrap() error { return e.err }
 
 // tunnelCmd lists the tunnels or cools one down through the debug
 // endpoints of the running proxy (spec 7.2). It reads [debug] listen
@@ -122,7 +133,7 @@ func (c *cli) tunnelList(opts config.Options) int {
 			ActiveRequests int       `json:"active_requests"`
 		} `json:"tunnels"`
 	}
-	if err := c.debugCall(http.MethodGet, base+"/debug/tunnels", tunnelListTimeout, &resp); err != nil {
+	if err := c.debugCall(http.MethodGet, base+"/debug/tunnels", tunnelListTimeout, nil, &resp); err != nil {
 		return c.tunnelFail(1, err.Error())
 	}
 	when := func(t time.Time) string {
@@ -152,7 +163,7 @@ func (c *cli) tunnelStop(opts config.Options, name string) int {
 	var resp struct {
 		WasRunning bool `json:"was_running"`
 	}
-	err = c.debugCall(http.MethodPost, base+"/debug/tunnels/"+name+"/stop", tunnelStopTimeout, &resp)
+	err = c.debugCall(http.MethodPost, base+"/debug/tunnels/"+name+"/stop", tunnelStopTimeout, nil, &resp)
 	var se *statusError
 	switch {
 	case errors.As(err, &se) && se.code == http.StatusNotFound:
@@ -167,18 +178,30 @@ func (c *cli) tunnelStop(opts config.Options, name string) int {
 	return 0
 }
 
-// debugCall sends a request to the debug listener and decodes a 200 JSON
-// answer into v; another status gives a *statusError. Redirects are not
+// debugCall sends a request to the debug listener, with body (if not nil)
+// as JSON, and decodes a 200 JSON answer into v; another status gives a
+// *statusError, a failed connection a *dialError. Redirects are not
 // followed.
-func (c *cli) debugCall(method, target string, timeout time.Duration, v any) error {
+func (c *cli) debugCall(method, target string, timeout time.Duration, body, v any) error {
 	if c.tunnelTimeout > 0 {
 		timeout = c.tunnelTimeout
 	}
 	ctx, cancel := context.WithTimeout(c.ctx, timeout)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, method, target, nil)
+	var reqBody io.Reader
+	if body != nil {
+		b, err := json.Marshal(body)
+		if err != nil {
+			return err
+		}
+		reqBody = bytes.NewReader(b)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, target, reqBody)
 	if err != nil {
 		return err
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
 	}
 	client := &http.Client{
 		Transport: &http.Transport{DisableKeepAlives: true},
@@ -189,15 +212,26 @@ func (c *cli) debugCall(method, target string, timeout time.Duration, v any) err
 	defer client.CloseIdleConnections()
 	resp, err := client.Do(req)
 	if err != nil {
+		var oe *net.OpError
+		if errors.As(err, &oe) && oe.Op == "dial" {
+			return &dialError{err}
+		}
 		return err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	body := io.LimitReader(resp.Body, maxDebugBody)
+	answer := io.LimitReader(resp.Body, maxDebugBody)
 	if resp.StatusCode != http.StatusOK {
-		_, _ = io.Copy(io.Discard, body)
-		return &statusError{method: method, target: target, code: resp.StatusCode}
+		se := &statusError{method: method, target: target, code: resp.StatusCode}
+		var e struct {
+			Error string `json:"error"`
+		}
+		if json.NewDecoder(answer).Decode(&e) == nil {
+			se.msg = e.Error
+		}
+		_, _ = io.Copy(io.Discard, answer)
+		return se
 	}
-	if err := json.NewDecoder(body).Decode(v); err != nil {
+	if err := json.NewDecoder(answer).Decode(v); err != nil {
 		return fmt.Errorf("%s %s: invalid answer: %w", method, target, err)
 	}
 	return nil
