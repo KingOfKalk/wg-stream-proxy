@@ -43,6 +43,9 @@ func (e *statusError) Error() string {
 // like healthcheck reads listen, so it works through docker exec in an
 // image without shell or curl.
 func (c *cli) tunnelCmd(args []string) int {
+	if len(args) > 0 && isHelpFlag(args[0]) {
+		return c.help("tunnel")
+	}
 	if len(args) == 0 {
 		return c.tunnelUsage()
 	}

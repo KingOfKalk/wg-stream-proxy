@@ -336,7 +336,10 @@ wg-stream-proxy healthcheck           # GET /healthz on the listen address, exit
 wg-stream-proxy tunnel list           # tunnels and their state, from the debug endpoints (7.1)
 wg-stream-proxy tunnel stop <name>    # cool-down of a tunnel (7.1)
 wg-stream-proxy version               # print version and source URL (AGPL section 13)
+wg-stream-proxy help [command]        # description and command list, or the flags of a command
 ```
+
+`help`: `wg-stream-proxy help`, `-h` and `--help` print a one-line description, the usage line and the list of commands with one line each, to stdout, exit 0. `help <command>` (`help epg ids`) and `<command> -h` (also after other flags, `serve --listen :1 -h`) print the usage, description and flags of that command to stdout, exit 0; for `epg` and `tunnel` they list the subcommands. Only a first argument `-h` or `--help` is the help of the program, so `serve -h` stays the help of `serve`. An unknown command, also for `help <unknown>`, prints one error line and the command list to stderr and exits 2. A flag error prints the flag package's message and a pointer to `help <command>` to stderr and exits 2. Without any argument the program runs `serve`; it prints no help.
 
 `serve` stops on `SIGINT` or `SIGTERM`: it accepts no new connections, gives in-flight requests up to 30s (2.1), then closes the remaining connections and the tunnels; a second signal exits at once.
 

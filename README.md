@@ -18,6 +18,7 @@ Route each IPTV and internet radio channel through its own userspace WireGuard t
 - Binary: there are no release binaries yet; `go install github.com/KingOfKalk/wg-stream-proxy/cmd/wg-stream-proxy@<version>` or build from source.
 - Config: copy [`examples/config`](examples/config) (it connects nowhere until you add your own tunnel file), run `wg-stream-proxy check --config-dir <dir>`, then `wg-stream-proxy serve --config-dir <dir>`.
 - Point the player at `http://<host>:2349/playlist.m3u8`.
+- Commands and flags: `wg-stream-proxy help` and `wg-stream-proxy help <command>`.
 
 ## Non-goals
 
