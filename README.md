@@ -38,6 +38,7 @@ Route each IPTV and internet radio channel through its own userspace WireGuard t
 - [Architecture](docs/architecture.md): how it works
 - [Deployment](docs/deploy.md): standalone, Docker, Compose, Kodi settings
 - [Observability](docs/observability.md): metrics, Prometheus, Grafana dashboard
+- [Clips](docs/clips.md): in-flight and error clips (design)
 - [Testing](docs/testing.md)
 - [Contributing](CONTRIBUTING.md) and [AGENTS.md](AGENTS.md)
 
