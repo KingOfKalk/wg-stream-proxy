@@ -386,12 +386,61 @@ jobs:
           key: go-player-${{ runner.os }}-${{ steps.go.outputs.version }}-${{ hashFiles('go.sum', '.github/workflows/ci.yml') }}
           restore-keys: |
             go-player-${{ runner.os }}-${{ steps.go.outputs.version }}-
-      # The runner image does not ship ffmpeg; use the distribution's.
-      - name: Install ffmpeg
+      # The runner image does not ship ffmpeg; use the distribution's. The
+      # mirror is sometimes very slow (about 50 KB/s for the 66 MB of
+      # packages), so the .deb files are cached per runner image and apt
+      # retries with a time limit per attempt. Finished downloads stay in
+      # the cache directory, so a retry continues where the last one stopped.
+      - name: apt cache key
+        id: apt
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ffmpeg
+          {
+            echo "dir=$RUNNER_TEMP/apt-archives"
+            echo "image=$ImageOS-$ImageVersion"
+          } >> "$GITHUB_OUTPUT"
+      - name: Restore apt packages
+        id: apt-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.apt.outputs.dir }}
+          key: apt-ffmpeg-${{ runner.os }}-${{ runner.arch }}-${{ steps.apt.outputs.image }}
+          restore-keys: |
+            apt-ffmpeg-${{ runner.os }}-${{ runner.arch }}-
+      - name: Install ffmpeg
+        timeout-minutes: 13
+        env:
+          APT_DIR: ${{ steps.apt.outputs.dir }}
+        run: |
+          mkdir -p "$APT_DIR/partial"
+          apt_opts=(
+            -o "Dir::Cache::Archives=$APT_DIR"
+            -o APT::Keep-Downloaded-Packages=true
+            -o APT::Sandbox::User=root
+            -o Acquire::Retries=3
+            -o Acquire::http::Timeout=30
+            -o Acquire::https::Timeout=30
+          )
+          for attempt in 1 2 3; do
+            if sudo timeout 240 apt-get "${apt_opts[@]}" -q update &&
+              sudo timeout 240 apt-get "${apt_opts[@]}" -q install -y --no-install-recommends ffmpeg; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "::error::apt could not install ffmpeg in 3 attempts"
+              exit 1
+            fi
+            echo "::warning::apt attempt $attempt failed or timed out; retrying"
+            sleep 10
+          done
+          # actions/cache runs as the runner user: make the files readable.
+          sudo chown -R "$(id -u):$(id -g)" "$APT_DIR"
           ffmpeg -hide_banner -version | head -n 1
+      - name: Save apt packages
+        if: steps.apt-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.apt.outputs.dir }}
+          key: ${{ steps.apt-cache.outputs.cache-primary-key }}
       - name: go test
         env:
           WSP_PLAYER_TESTS: "1"
