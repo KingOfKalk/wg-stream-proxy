@@ -33,9 +33,9 @@ var dnsRetryDelays = []time.Duration{500 * time.Millisecond, time.Second, 2 * ti
 const (
 	// dnsWarmupDelay is the time from one attempt to the next, each to
 	// every server, until a server has answered since the tunnel started
-	// (spec 2.1): some VPN servers drop the traffic of a peer for several
-	// seconds after its handshake when its key was idle for a while
-	// (#127), and the next answer should come soon after that.
+	// (spec 2.1): the DNS servers of some VPN providers do not answer for
+	// several seconds after the handshake of a key that was idle for a
+	// while (#127), and the first answer should come soon after they do.
 	dnsWarmupDelay = 250 * time.Millisecond
 	// dnsWarmupRounds bounds the warm-up attempts of a query (8s); then
 	// it goes on with the last of dnsRetryDelays.

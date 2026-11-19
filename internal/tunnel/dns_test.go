@@ -239,7 +239,7 @@ func TestLookupWarmupEndsWithFirstAnswer(t *testing.T) {
 	peer.SetHost("other.test", upstream4)
 	tun, env := freshTunnel(t, peer)
 	// The first attempt and the first retry, to both servers, are lost,
-	// as while a VPN server drops traffic after the handshake.
+	// as while a VPN DNS server is silent after the handshake.
 	peer.DropDNS(4)
 
 	done := lookupAsync(t.Context(), tun, "upstream.test")
