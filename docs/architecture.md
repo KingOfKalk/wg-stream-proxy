@@ -772,7 +772,9 @@ flowchart LR
 - **`dnsClient`**: tunnel DNS over UDP and TCP inside the netstack, A and
   AAAA in parallel (only for families the tunnel has), first attempt to
   every `DNS` server at once, retries after 0.5s, 1s, 2s, then every 4s
-  on the next server, TCP after a truncated answer, IPv4 answers first
+  on the next server (until the first answer after a start: every 0.25s
+  to every server, for up to 8s, as some VPN servers drop traffic for
+  seconds after the handshake), TCP after a truncated answer, IPv4 answers first
   (spec 2.1). It replaces the netstack resolver, which retries only after
   5s. It lives in `running`: answers are cached by TTL (10s to 5min, 256
   entries) only while the device runs, concurrent lookups of a name share
