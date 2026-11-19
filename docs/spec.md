@@ -1,10 +1,10 @@
 # wg-stream-proxy - Specification
 
-> Route individual IPTV streams through userspace WireGuard tunnels and serve them as one M3U8 playlist for Kodi, VLC and others.
+> Route each IPTV and internet radio channel through its own userspace WireGuard tunnel (or direct) and serve them as one M3U playlist for Kodi, VLC and other players. Proxies HLS (TS, fMP4, AES-128) and raw/ICY audio streams; no root, no TUN device, fails closed.
 
 - Repository: `github.com/KingOfKalk/wg-stream-proxy`, Go, AGPL-3.0-or-later
-- Status: Draft v3
-- Related: [architecture.md](architecture.md), [deploy.md](deploy.md), [testing.md](testing.md)
+- Status: binding for the latest [release](https://github.com/KingOfKalk/wg-stream-proxy/releases); the roadmap (section 10) lists what is released and what is planned
+- Related: [architecture.md](architecture.md), [deploy.md](deploy.md), [testing.md](testing.md), [observability.md](observability.md)
 
 ## 1. Scope
 
@@ -12,7 +12,7 @@
 
 - Route each channel through a chosen WireGuard tunnel, or explicitly `direct`. Nothing else on the host is affected.
 - Multiple tunnels in one process, fully in userspace (no TUN device, no root, no kernel module).
-- One extended M3U8 channel list for Kodi (IPTV Simple Client), VLC and other players.
+- One extended M3U channel list (`/playlist.m3u8`) for Kodi (IPTV Simple Client), VLC and other players.
 - HLS passthrough with playlist rewriting; raw passthrough for radio and MPEG-TS.
 - Fail closed: a channel never silently bypasses its tunnel.
 - Migration from an existing M3U file via `import`.
@@ -22,12 +22,13 @@
 
 - Decryption, DRM licenses or keys inside the proxy (permanent). AES-128 HLS keys are only passed through.
 - Transcoding, restreaming, Widevine passthrough, Kodi add-on, web UI, Xtream Codes, multi-user.
-- DASH in v0.1; DASH without DRM is planned for v0.4 (spec 10).
+- DASH: not supported (DASH without DRM planned for v0.4, spec 10).
 
 ### 1.3 Platforms
 
-- `linux/amd64`, `linux/arm64`, `darwin/arm64`; `CGO_ENABLED=0`; container image `linux/amd64` + `linux/arm64`.
-- LibreELEC 12+ uses an aarch64 userland on Raspberry Pi 4/5 (since 12.0, May 2024), so `linux/arm64` binaries and containers (Docker add-on) run on default installs. Only 32-bit images (Raspberry Pi 2/3, Allwinner H3/R40, Rockchip RK3288) would need `linux/arm`, which is deferred.
+- Build targets (cross-compiled in CI): `linux/amd64`, `linux/arm64`, `darwin/arm64`; `CGO_ENABLED=0`.
+- Distribution: the container image (`linux/amd64` + `linux/arm64`). Binaries: build from source or `go install`; release binaries are planned (Later, spec 10).
+- LibreELEC 12+ uses an aarch64 userland on Raspberry Pi 4/5 (since 12.0, May 2024), so the `linux/arm64` container (Docker add-on) runs on default installs. Only 32-bit images (Raspberry Pi 2/3, Allwinner H3/R40, Rockchip RK3288) would need `linux/arm`, which is deferred.
 
 ## 2. Architecture
 
@@ -178,7 +179,7 @@ direct = []
 idle_timeout = "60m"
 
 [epg]
-url = "https://ext.greektv.app/epg/epg.xml.gz"  # optional, no default
+url = "https://epg.example.org/epg/epg.xml.gz"  # optional, no default
 
 [debug]
 listen = ""                           # off; e.g. "127.0.0.1:2350" (7.1)
@@ -200,7 +201,7 @@ attrs = { parent-code = "1234" }
 
 [[channel]]
 name = "ERT World"                    # required
-url = "https://ertflix-ertworld.siliconweb.com/mpegts/618618_3479286/master_mpegts.m3u8"  # required
+url = "https://live.example.com/mpegts/100100_200200/master_mpegts.m3u8"  # required
 id = "ert-world"                      # optional, default: slug of name
 tunnel = "gr"                         # optional
 group = "Greek TV"                    # optional
@@ -208,7 +209,7 @@ enabled = true
 
 [channel.upstream]
 type = "auto"                         # auto | hls | raw
-headers = { Referer = "https://www.ertflix.gr/" }
+headers = { Referer = "https://www.example.org/" }
 
 [channel.playlist]
 tvg_id = "ertworld"
@@ -221,7 +222,7 @@ attrs = { tvg-chno = "5" }
 [[channel]]
 name = "Das Erste"
 tunnel = "direct"
-url = "https://daserste-live.ard-mcdn.de/daserste/live/hls/de/master.m3u8"
+url = "https://live.example.net/daserste/live/hls/de/master.m3u8"
 ```
 
 - Sub-tables apply to the `[[channel]]` directly above.
@@ -277,7 +278,7 @@ url = "https://daserste-live.ard-mcdn.de/daserste/live/hls/de/master.m3u8"
 - `#KODIPROP` and other `extra` lines appear only here, never in playlists under `/c/` or `/r/`.
 
 ```
-#EXTM3U x-tvg-url="https://ext.greektv.app/epg/epg.xml.gz" url-tvg="https://ext.greektv.app/epg/epg.xml.gz"
+#EXTM3U x-tvg-url="https://epg.example.org/epg/epg.xml.gz" url-tvg="https://epg.example.org/epg/epg.xml.gz"
 #KODIPROP:inputstream.adaptive.manifest_type=hls
 #EXTINF:-1 tvg-id="ertworld" tvg-name="ERT World" tvg-logo="EPTWORLD" group-title="Greek TV" parent-code="1234" tvg-chno="5",ERT World
 http://wsp.lan:2349/c/ert-world.m3u8
@@ -400,8 +401,8 @@ Only `/c/` and `/r/` requests of enabled channels count; `channel` is the channe
 
 ## 10. Roadmap
 
-- **v0.1 Core** (released as v0.1.0): everything in this spec, plus Dockerfile, Compose file and the v0.1 test layers in [testing.md](testing.md). Publishes the container image `ghcr.io/kingofkalk/wg-stream-proxy` (`linux/amd64` + `linux/arm64`, public package): tag `edge` on every push to `main`, version tags on release.
-- **v0.2 Observability:** timing histograms, debug endpoints with profiles, recent requests and cool-down.
+- **v0.1 Core** (released as v0.1.0): the core of this spec (config, tunnels, routes and guard, HLS and raw/ICY streams, channel list, `SIGHUP` reload, metrics, `import`, `epg`), plus Dockerfile, Compose file and the v0.1 test layers in [testing.md](testing.md). Publishes the container image `ghcr.io/kingofkalk/wg-stream-proxy` (`linux/amd64` + `linux/arm64`, public package): tag `edge` on every push to `main`, version tags on release.
+- **v0.2 Observability** (released as v0.2.0): timing histograms, debug endpoints with profiles, recent requests and cool-down.
 - **v0.3 Experience:** placeholder and error clips with seamless switchover (own design doc), per-request prefetch, file-watch reload.
 - **v0.4 Content:** DASH without DRM, EPG proxy mode, logo proxying, ad-hoc proxy endpoint.
 - **Later:** distribution (GoReleaser, systemd unit, launchd plist, Kustomize), 32-bit ARM, scaling beyond 3 viewers, per-tunnel overrides.
