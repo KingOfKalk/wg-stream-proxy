@@ -34,7 +34,7 @@ FROM gcr.io/distroless/static:nonroot@sha256:aafe993665bf6200db38a02c11a9351e782
 ARG VERSION=dev
 ARG REVISION=
 LABEL org.opencontainers.image.title="wg-stream-proxy" \
-      org.opencontainers.image.description="Route each IPTV and internet radio channel through its own userspace WireGuard tunnel (or direct) and serve them as one M3U playlist for Kodi, VLC and other players. Proxies HLS (TS, fMP4, AES-128) and raw/ICY audio streams; no root, no TUN device, fails closed." \
+      org.opencontainers.image.description="Route each IPTV and internet radio channel through its own userspace WireGuard tunnel (or direct) and serve them as one M3U playlist for Kodi, VLC and other players. Proxies HLS (TS, fMP4, AES-128), MPEG-DASH without DRM and raw/ICY audio streams; no root, no TUN device, fails closed." \
       org.opencontainers.image.source="https://github.com/KingOfKalk/wg-stream-proxy" \
       org.opencontainers.image.url="https://github.com/KingOfKalk/wg-stream-proxy" \
       org.opencontainers.image.documentation="https://github.com/KingOfKalk/wg-stream-proxy/blob/main/docs/deploy.md" \
