@@ -102,6 +102,8 @@ func (c *cli) serve(args []string) int {
 		defer signal.Stop(ch)
 		hangup = ch
 	}
+	// Before loading, so a write in between counts as a change.
+	initial := config.Fingerprint(opts.Paths)
 	cfg, err := config.Load(opts)
 	if err != nil {
 		c.printErrors(err)
@@ -176,6 +178,28 @@ func (c *cli) serve(args []string) int {
 	})
 	defer wg.Wait()
 	defer close(done)
+	// Polling the config files (spec 5.6); it ends with the shutdown or
+	// when Run fails.
+	if interval := cfg.WatchInterval(); interval > 0 {
+		watchCtx, stopWatch := context.WithCancel(ctx)
+		defer stopWatch()
+		wg.Go(func() {
+			server.Watch(watchCtx, server.WatchOptions{
+				Interval:    interval,
+				Clock:       c.clock,
+				Initial:     initial,
+				Fingerprint: func() string { return config.Fingerprint(opts.Paths) },
+				Reload: func() error {
+					err := reloader.Reload()
+					if c.reloaded != nil && !errors.Is(err, server.ErrNotServing) {
+						c.reloaded(err)
+					}
+					return err
+				},
+				Log: log,
+			})
+		})
+	}
 
 	err = server.Run(ctx, server.RunOptions{
 		Config:        cfg,

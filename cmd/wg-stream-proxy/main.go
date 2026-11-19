@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/KingOfKalk/wg-stream-proxy/internal/config"
+	"github.com/KingOfKalk/wg-stream-proxy/internal/route"
 	"github.com/KingOfKalk/wg-stream-proxy/internal/server"
 )
 
@@ -62,6 +63,8 @@ type cli struct {
 	hangup chan os.Signal
 	// reloaded, if set, is called with the result of each reload.
 	reloaded func(error)
+	// clock schedules the config file checks; nil means the system clock.
+	clock route.Clock
 	// epgAllowPrivate adds private-range guard exceptions per route name
 	// for the EPG download (tests allow the loopback range).
 	epgAllowPrivate map[string][]netip.Prefix

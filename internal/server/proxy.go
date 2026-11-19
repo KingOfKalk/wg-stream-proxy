@@ -168,17 +168,26 @@ func (s *Server) respond(w http.ResponseWriter, r *http.Request, g *generation, 
 	}
 
 	body := bufio.NewReaderSize(resp.Body, hls.SniffLen)
-	typ := hls.Detect(resp.Header.Get("Content-Type"), nil, f.configured)
-	if typ != hls.HLS && f.configured == hls.Auto && r.Method != http.MethodHead {
-		// Look at the start of the body (spec 3.1 step 2.3). A HEAD
-		// request closes the upstream body unread (spec 3.4).
+	ctype := resp.Header.Get("Content-Type")
+	typ := hls.Detect(ctype, nil, f.configured)
+	if typ != hls.HLS && r.Method != http.MethodHead {
+		// Look at the start of the body: an auto channel or resource may
+		// be HLS (spec 3.1 step 2.3), and no channel may pipe a playlist
+		// the proxy does not rewrite (spec 3.3). A HEAD request closes
+		// the upstream body unread (spec 3.4); it sends no URLs.
 		prefix, err := body.Peek(hls.SniffLen)
 		if err != nil && !errors.Is(err, io.EOF) {
 			rq.Response(resp.StatusCode)
 			s.fail(w, r, ch, err, rq.Error)
 			return false
 		}
-		typ = hls.Detect(resp.Header.Get("Content-Type"), prefix, f.configured)
+		typ = hls.Detect(ctype, prefix, f.configured)
+		if typ != hls.HLS {
+			if format := hls.Unsupported(ctype, prefix, f.configured); format != "" {
+				s.refuse(w, ch, rq, resp, format)
+				return false
+			}
+		}
 	}
 	if typ != hls.HLS {
 		rq.SetKind(f.other)
@@ -201,6 +210,19 @@ func (s *Server) respond(w http.ResponseWriter, r *http.Request, g *generation, 
 	}
 	s.rewrite(w, r, g, ch, rq, resp, body)
 	return false
+}
+
+// refuse answers a playlist in a format the proxy does not rewrite with
+// 502 (spec 3.3): piped, it would hand the player upstream URLs to fetch
+// past the channel's tunnel. Nothing of the body reaches the client.
+func (s *Server) refuse(w http.ResponseWriter, ch config.Channel, rq *metrics.Request, resp *http.Response, format string) {
+	rq.SetKind(metrics.KindPlaylist)
+	rq.Response(resp.StatusCode)
+	s.log.Warn("unsupported playlist format refused", "channel", ch.ID(), "route", ch.Route(),
+		"url", route.LogURL(resp.Request.URL.String()), "format", format)
+	rq.Error(string(route.ReasonUnsupported))
+	recordOf(w).failed(route.ReasonUnsupported)
+	http.Error(w, http.StatusText(http.StatusBadGateway), http.StatusBadGateway)
 }
 
 // rewrite answers with the rewritten playlist (spec 3.2, 3.4): every URI

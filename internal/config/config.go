@@ -70,6 +70,7 @@ type Config struct {
 	upstream      Upstream
 	allowPrivate  map[string][]netip.Prefix
 	idleTimeout   time.Duration
+	watchInterval time.Duration
 	epgURL        string
 	tunnels       []Tunnel
 	channels      []Channel
@@ -113,6 +114,10 @@ func (c *Config) AllowPrivate() map[string][]netip.Prefix {
 
 // IdleTimeout returns [tunnels] idle_timeout.
 func (c *Config) IdleTimeout() time.Duration { return c.idleTimeout }
+
+// WatchInterval returns [reload] watch_interval, how often the config
+// files are checked for changes (spec 5.6); 0 means watching is off.
+func (c *Config) WatchInterval() time.Duration { return c.watchInterval }
 
 // EPGURL returns [epg] url, or "".
 func (c *Config) EPGURL() string { return c.epgURL }

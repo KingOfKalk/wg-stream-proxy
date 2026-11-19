@@ -129,6 +129,8 @@ wsp_upstream_requests_total{channel="news",code="200",kind="segment"} 1
 				hlsFixture(e.up, e.upURL)
 				e.up.add("/radio", file{ctype: "audio/mpeg", body: "radio"})
 				e.up.add("/odd/playlist.bin", file{ctype: "application/octet-stream", body: "#EXTM3U\n#EXTINF:4,\nseg1.ts\n"})
+				// A stream behind a playlist Content-Type: raw pipes it.
+				e.up.add("/cdn/v1/master.m3u8", file{ctype: "application/vnd.apple.mpegurl", body: "\x47\x40\x00\x10 not a playlist"})
 				for _, p := range []string{"/c/radio", "/c/forced-raw", "/c/forced-hls"} {
 					if resp, _ := e.get(t, p, nil); resp.StatusCode != http.StatusOK {
 						t.Errorf("GET %s: status %d", p, resp.StatusCode)
@@ -288,6 +290,32 @@ wsp_upstream_requests_total{channel="radio",code="200",kind="playlist"} 1
 			errs: `
 wsp_upstream_errors_total{channel="news",reason="size"} 1
 wsp_upstream_errors_total{channel="radio",reason="other"} 1
+`,
+		},
+		{
+			name:   "unsupported playlists",
+			config: allowLoopback,
+			run: func(t *testing.T, e *directEnv) {
+				// Spec 3.3: refused on an auto channel, a raw channel
+				// and a resource, before anything is streamed.
+				hlsFixture(e.up, e.upURL)
+				e.up.add("/radio", file{ctype: "audio/x-scpls", body: "[playlist]\nFile1=http://radio.example/s\n"})
+				e.up.add("/cdn/seg.ts", file{ctype: "application/dash+xml", body: "<MPD/>"})
+				for _, p := range []string{"/c/radio", "/c/forced-raw", e.signer.Path("news", e.upURL+"/cdn/seg.ts")} {
+					if resp, _ := e.get(t, p, nil); resp.StatusCode != http.StatusBadGateway {
+						t.Errorf("GET %s: status %d, want 502", p, resp.StatusCode)
+					}
+				}
+			},
+			requests: `
+wsp_upstream_requests_total{channel="forced-raw",code="200",kind="playlist"} 1
+wsp_upstream_requests_total{channel="news",code="200",kind="playlist"} 1
+wsp_upstream_requests_total{channel="radio",code="200",kind="playlist"} 1
+`,
+			errs: `
+wsp_upstream_errors_total{channel="forced-raw",reason="unsupported"} 1
+wsp_upstream_errors_total{channel="news",reason="unsupported"} 1
+wsp_upstream_errors_total{channel="radio",reason="unsupported"} 1
 `,
 		},
 		{
