@@ -63,7 +63,7 @@ var topics = map[string]topic{
 	},
 	"epg": {
 		usage: "epg ids | epg match [flags]",
-		desc: "List or match EPG ids from [epg] url of config.toml.\n\n" +
+		desc: "List or match EPG ids from an EPG source of config.toml: the [[epg.source]] named by --source, by default the first one, or [epg] url. A source on a tunnel starts that tunnel in this process.\n\n" +
 			"commands:\n" +
 			"  epg ids    list the id and display names of every EPG channel\n" +
 			"  epg match  suggest a tvg_id per channel as TOML, write nothing\n\n" +
@@ -71,13 +71,13 @@ var topics = map[string]topic{
 	},
 	"epg ids": {
 		usage: "epg ids [flags]",
-		desc:  "List the id and display names of every EPG channel from [epg] url, sorted by id.",
-		flags: func() *flag.FlagSet { fs, _ := configFlagSet("epg ids"); return fs },
+		desc:  "List the id and display names of every EPG channel of the EPG source, sorted by id.",
+		flags: func() *flag.FlagSet { fs, _, _ := epgFlagSet("epg ids"); return fs },
 	},
 	"epg match": {
 		usage: "epg match [flags]",
 		desc:  "Suggest a tvg_id per channel from the EPG as TOML snippets. Writes nothing.",
-		flags: func() *flag.FlagSet { fs, _ := configFlagSet("epg match"); return fs },
+		flags: func() *flag.FlagSet { fs, _, _ := epgFlagSet("epg match"); return fs },
 	},
 	"healthcheck": {
 		usage: "healthcheck [flags]",
@@ -145,7 +145,7 @@ func newImportFlags() *importFlags {
 	f.fset.Usage = func() {}
 	f.fset.StringVar(&f.opts.Tunnel, "tunnel", "", "tunnel name or direct, written at the top of the channel file")
 	f.fset.StringVar(&f.out, "out", "", "write to this new file instead of stdout (never overwritten)")
-	f.fset.BoolVar(&f.matchEPG, "match-epg", false, "keep tvg_id only if the EPG (epg.url in config.toml) has it, else suggest the best match in a comment")
+	f.fset.BoolVar(&f.matchEPG, "match-epg", false, "keep tvg_id only if the EPG (the first [[epg.source]] or [epg] url in config.toml) has it, else suggest the best match in a comment")
 	f.fset.StringVar(&f.configDir, "config-dir", "", "config directory for --match-epg (env "+config.EnvConfigDir+")")
 	return f
 }

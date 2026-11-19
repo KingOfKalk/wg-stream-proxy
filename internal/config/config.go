@@ -59,6 +59,14 @@ type Clips struct {
 	Error bool
 }
 
+// EPGSource is one [[epg.source]] of config.toml (spec 5.3): an XMLTV
+// file the proxy fetches through a route, filters and merges.
+type EPGSource struct {
+	Name  string // unique, [a-z0-9-]
+	URL   string // absolute http(s) URL
+	Route string // tunnel name, or RouteDirect
+}
+
 // Tunnel is a tunnel file found in the tunnels dir. Its content is not
 // parsed by this package.
 type Tunnel struct {
@@ -81,6 +89,8 @@ type Config struct {
 	watchInterval time.Duration
 	clips         Clips
 	epgURL        string
+	epgRefresh    time.Duration
+	epgSources    []EPGSource
 	tunnels       []Tunnel
 	channels      []Channel
 	byID          map[string]int
@@ -133,6 +143,14 @@ func (c *Config) WatchInterval() time.Duration { return c.watchInterval }
 
 // EPGURL returns [epg] url, or "".
 func (c *Config) EPGURL() string { return c.epgURL }
+
+// EPGSources returns the [[epg.source]] entries in config order (spec
+// 5.3); empty unless the proxy serves the EPG itself.
+func (c *Config) EPGSources() []EPGSource { return slices.Clone(c.epgSources) }
+
+// EPGRefresh returns [epg] refresh, the time between two fetches of an
+// EPG source.
+func (c *Config) EPGRefresh() time.Duration { return c.epgRefresh }
 
 // Tunnels returns the tunnel files, sorted by name.
 func (c *Config) Tunnels() []Tunnel { return slices.Clone(c.tunnels) }
@@ -207,6 +225,7 @@ type Channel struct {
 	typ     UpstreamType
 	header  http.Header
 	tvgID   string
+	epgSrc  string
 	logo    Logo
 	attrs   []Attr
 	extra   []Extra
@@ -244,6 +263,11 @@ func (ch Channel) Header() http.Header { return ch.header.Clone() }
 // TVGID returns the EPG id, possibly empty.
 func (ch Channel) TVGID() string { return ch.tvgID }
 
+// EPGSource returns the name of the EPG source the channel's guide comes
+// from ([channel.playlist] epg_source), or "" for the first source that
+// has its tvg_id (spec 5.4).
+func (ch Channel) EPGSource() string { return ch.epgSrc }
+
 // Logo returns the logo.
 func (ch Channel) Logo() Logo { return ch.logo }
 
@@ -255,14 +279,14 @@ func (ch Channel) Extra() []Extra { return slices.Clone(ch.extra) }
 
 // Equal reports whether ch and o have the same merged model: every
 // field a reload could change in what the proxy serves or lists (id,
-// name, URL, route, group, enabled, type, headers, tvg id, logo, attrs,
-// extra). The channel file does not count. Maps are compared by content
-// and attrs and extra are sorted, so the order in the files is
+// name, URL, route, group, enabled, type, headers, tvg id, EPG source,
+// logo, attrs, extra). The channel file does not count. Maps are compared
+// by content and attrs and extra are sorted, so the order in the files is
 // irrelevant.
 func (ch Channel) Equal(o Channel) bool {
 	return ch.id == o.id && ch.name == o.name && ch.url == o.url &&
 		ch.route == o.route && ch.group == o.group && ch.enabled == o.enabled &&
-		ch.typ == o.typ && ch.tvgID == o.tvgID && ch.logo == o.logo &&
+		ch.typ == o.typ && ch.tvgID == o.tvgID && ch.epgSrc == o.epgSrc && ch.logo == o.logo &&
 		maps.EqualFunc(ch.header, o.header, slices.Equal[[]string]) &&
 		slices.Equal(ch.attrs, o.attrs) && slices.Equal(ch.extra, o.extra)
 }

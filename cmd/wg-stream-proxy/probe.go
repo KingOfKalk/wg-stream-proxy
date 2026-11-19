@@ -203,7 +203,7 @@ func (c *cli) probeReport(rep *probe.Report, f *probeFlags) int {
 // route is loaded; it starts with the first request and stops when the
 // command ends.
 func (c *cli) probeStandalone(cfg *config.Config, f *probeFlags, target string) int {
-	tunnelFile, isTunnel := f.tunnelFile(cfg)
+	_, isTunnel := f.tunnelFile(cfg)
 	if f.route != config.RouteDirect && !isTunnel {
 		names := []string{config.RouteDirect}
 		for _, t := range cfg.Tunnels() {
@@ -212,33 +212,16 @@ func (c *cli) probeStandalone(cfg *config.Config, f *probeFlags, target string) 
 		return c.probeFail(2, fmt.Sprintf("unknown route %q (want one of: %s)", f.route, strings.Join(names, ", ")))
 	}
 
-	log := newLogger(c.stderr, cfg.LogFormat(), probeLogLevel(cfg))
-	nets := map[string]route.Network{}
-	activity := map[string]route.Activity{}
-	if isTunnel {
-		mgr, err := tunnel.Load([]config.Tunnel{tunnelFile}, tunnel.Options{
-			ConnectTimeout: cfg.Upstream().ConnectTimeout,
-			IdleTimeout:    cfg.IdleTimeout(),
-			Logger:         log,
-		})
-		if err != nil {
-			c.printErrors(err)
+	rt, closeRoute, err := c.standaloneRoute(cfg, f.route)
+	if err != nil {
+		var cerr configError
+		if errors.As(err, &cerr) {
+			c.printErrors(cerr.error)
 			return 1
 		}
-		defer func() { _ = mgr.Close() }()
-		t, _ := mgr.Tunnel(f.route)
-		nets[f.route], activity[f.route] = t, t
-	}
-	allow := cfg.AllowPrivate()
-	for name, prefixes := range c.allowPrivate {
-		allow[name] = append(allow[name], prefixes...)
-	}
-	set, err := route.NewSet(route.Host(), nets, route.Options{Upstream: cfg.Upstream(), AllowPrivate: allow, Activity: activity})
-	if err != nil {
 		return c.probeFail(1, err.Error())
 	}
-	defer set.CloseIdleConnections()
-	rt, _ := set.Route(f.route)
+	defer closeRoute()
 
 	rep := probe.Run(c.context(), target, probe.Options{Route: rt, Header: f.headers.h, MaxPlaylistSize: cfg.Upstream().MaxPlaylistSize})
 	rep.Mode = probe.ModeStandalone
@@ -264,4 +247,53 @@ func probeLogLevel(cfg *config.Config) slog.Level {
 		return slog.LevelDebug
 	}
 	return slog.LevelWarn
+}
+
+// configError is an invalid tunnel file found by standaloneRoute.
+type configError struct{ error }
+
+// standaloneRoute returns the route name (direct or a tunnel of cfg) in
+// this process, for commands that run without the proxy (probe
+// --standalone, epg). Only the tunnel of the route is loaded; it starts
+// with the first request. close stops it and closes the connections.
+// An invalid tunnel file gives a configError.
+func (c *cli) standaloneRoute(cfg *config.Config, name string) (rt *route.Route, closeRoute func(), err error) {
+	log := newLogger(c.stderr, cfg.LogFormat(), probeLogLevel(cfg))
+	nets := map[string]route.Network{}
+	activity := map[string]route.Activity{}
+	closeTunnel := func() {}
+	for _, tf := range cfg.Tunnels() {
+		if tf.Name != name {
+			continue
+		}
+		mgr, err := tunnel.Load([]config.Tunnel{tf}, tunnel.Options{
+			ConnectTimeout: cfg.Upstream().ConnectTimeout,
+			IdleTimeout:    cfg.IdleTimeout(),
+			Logger:         log,
+		})
+		if err != nil {
+			return nil, nil, configError{err}
+		}
+		closeTunnel = func() { _ = mgr.Close() }
+		t, _ := mgr.Tunnel(name)
+		nets[name], activity[name] = t, t
+	}
+	allow := cfg.AllowPrivate()
+	for n, prefixes := range c.allowPrivate {
+		allow[n] = append(allow[n], prefixes...)
+	}
+	set, err := route.NewSet(route.Host(), nets, route.Options{Upstream: cfg.Upstream(), AllowPrivate: allow, Activity: activity})
+	if err != nil {
+		closeTunnel()
+		return nil, nil, err
+	}
+	rt, ok := set.Route(name)
+	if !ok {
+		closeTunnel()
+		return nil, nil, fmt.Errorf("unknown route %q", name)
+	}
+	return rt, func() {
+		set.CloseIdleConnections()
+		closeTunnel()
+	}, nil
 }

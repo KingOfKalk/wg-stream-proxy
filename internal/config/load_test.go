@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 var update = flag.Bool("update", false, "rewrite golden files")
@@ -276,6 +277,24 @@ func TestLoadErrors(t *testing.T) {
 		{"reserved file name", map[string]string{"channels.d/_tv.toml": "tunnel = \"direct\"\n" + ch()}, []string{"_tv.toml: reserved file name: channels.d names starting with \"_\" are reserved"}},
 		{"reserved file name case", map[string]string{"channels.d/_Defaults.toml": ""}, []string{"_Defaults.toml: reserved file name"}},
 
+		// EPG sources (5.3, 5.4)
+		{"epg url and sources", map[string]string{"config.toml": "[epg]\nurl = \"https://epg.example.org/a.xml\"\n" + epgSource("gr", "")}, []string{"config.toml: epg.url: not allowed together with [[epg.source]]"}},
+		{"epg refresh", map[string]string{"config.toml": "[epg]\nrefresh = \"6\"\n"}, []string{"epg.refresh: invalid duration \"6\""}},
+		{"epg refresh zero", map[string]string{"config.toml": "[epg]\nrefresh = \"0s\"\n"}, []string{"epg.refresh: must be positive", "!at least"}},
+		{"epg refresh short", map[string]string{"config.toml": "[epg]\nrefresh = \"59s\"\n"}, []string{"epg.refresh: must be at least 1m0s"}},
+		{"epg source without name", map[string]string{"config.toml": "[[epg.source]]\nurl = \"https://epg.example.org/a.xml\"\n"}, []string{"config.toml: epg.source 1: name: required"}},
+		{"epg source name", map[string]string{"config.toml": epgSource("GR", "")}, []string{"epg.source 1: name: invalid name \"GR\": use [a-z0-9-], 1-48 characters"}},
+		{"epg source duplicate", map[string]string{"config.toml": epgSource("gr", "") + epgSource("gr", "")}, []string{"epg.source 2: name: duplicate source \"gr\""}},
+		{"epg source without url", map[string]string{"config.toml": "[[epg.source]]\nname = \"gr\"\n"}, []string{"epg.source 1 (\"gr\"): url: required"}},
+		{"epg source url", map[string]string{"config.toml": "[[epg.source]]\nname = \"gr\"\nurl = \"ftp://epg.example.org/a.xml\"\n"}, []string{"epg.source 1 (\"gr\"): url: must be an absolute http(s) URL"}},
+		{"epg source url too long", map[string]string{"config.toml": "[[epg.source]]\nname = \"gr\"\nurl = \"https://epg.example.org/" + strings.Repeat("a", 4100) + "\"\n"}, []string{"url: longer than 4096 bytes"}},
+		{"epg source tunnel", map[string]string{"config.toml": epgSource("gr", "gr")}, []string{"epg.source 1 (\"gr\"): tunnel: unknown tunnel \"gr\""}},
+		{"epg source unknown key", map[string]string{"config.toml": epgSource("gr", "") + "route = \"x\"\n"}, []string{"unknown key \"epg.source.route\""}},
+		{"epg_source unknown", map[string]string{"config.toml": epgSource("gr", ""), "channels.d/a.toml": "tunnel = \"direct\"\n" + ch("[channel.playlist]", "epg_source = \"de\"")}, []string{"channel 1 (\"Example\"): playlist.epg_source: unknown EPG source \"de\""}},
+		{"epg_source in link mode", map[string]string{"config.toml": "[epg]\nurl = \"https://epg.example.org/a.xml\"\n", "channels.d/a.toml": "tunnel = \"direct\"\n[defaults.playlist]\nepg_source = \"gr\"\n" + ch()}, []string{"defaults.playlist.epg_source: unknown EPG source \"gr\""}},
+		{"epg_source conflict", map[string]string{"config.toml": epgSource("gr", "") + epgSource("de", ""), "channels.d/a.toml": "tunnel = \"direct\"\n" +
+			"[[channel]]\nname = \"A\"\nurl = \"https://example.com/a\"\nplaylist = { tvg_id = \"x\", epg_source = \"gr\" }\n" +
+			"[[channel]]\nname = \"B\"\nurl = \"https://example.com/b\"\nplaylist = { tvg_id = \"x\", epg_source = \"de\" }\n"}, []string{"channel \"B\": playlist.epg_source: \"de\" differs from \"gr\" of channel \"A\" in ", "with the same tvg_id \"x\""}},
 		{"all errors reported", map[string]string{
 			"config.toml":       "log_level = \"x\"\n",
 			"channels.d/a.toml": "[[channel]]\nurl = \"https://example.com/\"\ntunnel = \"direct\"\n[[channel]]\nname = \"B\"\ntunnel = \"direct\"\n",
@@ -433,5 +452,71 @@ func TestExampleConfig(t *testing.T) {
 		if got := slices.Contains(c.Extra(), adaptive); got != want[c.ID()] {
 			t.Errorf("channel %s: inputstream.adaptive = %v, want %v (extra %v)", c.ID(), got, want[c.ID()], c.Extra())
 		}
+	}
+}
+
+// epgSource returns an [[epg.source]] table; tunnel "" omits the key.
+func epgSource(name, tunnel string) string {
+	s := "[[epg.source]]\nname = \"" + name + "\"\nurl = \"https://epg.example.org/" + name + ".xml.gz\"\n"
+	if tunnel != "" {
+		s += "tunnel = \"" + tunnel + "\"\n"
+	}
+	return s
+}
+
+func TestLoadEPGSources(t *testing.T) {
+	dir := writeConfigDir(t, map[string]string{
+		"config.toml":               "[epg]\nrefresh = \"90m\"\n" + epgSource("gr", "gr") + epgSource("de", "") + epgSource("at", "direct"),
+		"tunnels/gr.conf":           "",
+		"channels.d/_defaults.toml": "[defaults.playlist]\nepg_source = \"de\"\n",
+		"channels.d/a.toml": "tunnel = \"direct\"\n" +
+			"[[channel]]\nname = \"A\"\nurl = \"https://example.com/a\"\nplaylist.tvg_id = \"a\"\n" +
+			"[[channel]]\nname = \"B\"\nurl = \"https://example.com/b\"\nplaylist = { tvg_id = \"a\", epg_source = \"\" }\n" +
+			"[[channel]]\nname = \"C\"\nurl = \"https://example.com/c\"\nplaylist = { tvg_id = \"c\", epg_source = \"gr\" }\n",
+	})
+	cfg, err := loadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []EPGSource{
+		{Name: "gr", URL: "https://epg.example.org/gr.xml.gz", Route: "gr"},
+		{Name: "de", URL: "https://epg.example.org/de.xml.gz", Route: RouteDirect},
+		{Name: "at", URL: "https://epg.example.org/at.xml.gz", Route: RouteDirect},
+	}
+	if got := cfg.EPGSources(); !slices.Equal(got, want) {
+		t.Errorf("sources = %v, want %v", got, want)
+	}
+	if cfg.EPGRefresh() != 90*time.Minute || cfg.EPGURL() != "" {
+		t.Errorf("refresh %v url %q", cfg.EPGRefresh(), cfg.EPGURL())
+	}
+	var got []string
+	for _, ch := range cfg.Channels() {
+		got = append(got, ch.ID()+"="+ch.EPGSource())
+	}
+	if want := []string{"a=de", "b=", "c=gr"}; !slices.Equal(got, want) {
+		t.Errorf("epg_source = %v, want %v", got, want)
+	}
+	// epg_source counts for a reload (Equal).
+	one := func(src string) Channel {
+		cfg, err := loadDir(writeConfigDir(t, map[string]string{
+			"config.toml":       epgSource("gr", "") + epgSource("de", ""),
+			"channels.d/a.toml": "tunnel = \"direct\"\n" + ch("playlist = { tvg_id = \"a\", epg_source = \""+src+"\" }"),
+		}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return cfg.Channels()[0]
+	}
+	if one("gr").Equal(one("de")) || !one("gr").Equal(one("gr")) {
+		t.Error("Equal ignores epg_source")
+	}
+
+	// Defaults without [epg].
+	cfg, err = loadDir(writeConfigDir(t, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.EPGRefresh() != 6*time.Hour || len(cfg.EPGSources()) != 0 {
+		t.Errorf("defaults: refresh %v, sources %v", cfg.EPGRefresh(), cfg.EPGSources())
 	}
 }

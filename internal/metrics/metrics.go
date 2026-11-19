@@ -69,6 +69,9 @@ type Options struct {
 	// Tunnels returns the tunnels to report; it is called once per
 	// scrape. nil reports none.
 	Tunnels func() []Tunnel
+	// EPG returns the EPG sources to report (spec 7.3); it is called once
+	// per scrape. nil reports none.
+	EPG func() []EPGSource
 }
 
 // Metrics is a private registry with the wsp_ metrics. Its methods are
@@ -117,6 +120,7 @@ func New(opts Options) *Metrics {
 	m.reg.MustRegister(
 		m.active, m.requests, m.errors, m.tunnelStart, m.phases, m.errorClips,
 		tunnelCollector{tunnels: opts.Tunnels},
+		epgCollector{sources: opts.EPG},
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 	)
@@ -249,5 +253,73 @@ func (c tunnelCollector) Collect(ch chan<- prometheus.Metric) {
 		}
 		ch <- prometheus.MustNewConstMetric(tunnelUpDesc, prometheus.GaugeValue, up, t.Name())
 		ch <- prometheus.MustNewConstMetric(tunnelHandshakeDesc, prometheus.GaugeValue, hs, t.Name())
+	}
+}
+
+// EPGSource is the state of one EPG source (spec 7.3).
+type EPGSource struct {
+	Name string
+	// Fetches counts the fetches by result.
+	Fetches map[string]uint64
+	// Duration is the time of the last fetch.
+	Duration time.Duration
+	// Bytes is the XML size of the copy in use before filtering,
+	// FilteredBytes after it; 0 without a copy.
+	Bytes, FilteredBytes int64
+	// Updated is when the copy in use was fetched; zero without one.
+	Updated time.Time
+}
+
+// EPGResults are the result label values of wsp_epg_fetches_total; every
+// source reports all of them, so a rate sees the first increase.
+var EPGResults = []string{"ok", "connect", "timeout", "guard", "tls", "redirects", "size", "status", "invalid", "other"}
+
+var (
+	epgFetchesDesc = prometheus.NewDesc("wsp_epg_fetches_total",
+		"Fetches of an EPG source by result: ok or why it failed.",
+		[]string{"source", "result"}, nil)
+	epgDurationDesc = prometheus.NewDesc("wsp_epg_fetch_duration_seconds",
+		"Time of the last fetch of an EPG source, download and filter.",
+		[]string{"source"}, nil)
+	epgBytesDesc = prometheus.NewDesc("wsp_epg_source_bytes",
+		"XML size of the EPG source copy in use, before filtering (after decompression); 0 without a copy.",
+		[]string{"source"}, nil)
+	epgFilteredDesc = prometheus.NewDesc("wsp_epg_filtered_bytes",
+		"Size of what the proxy keeps of the EPG source copy in use; 0 without a copy.",
+		[]string{"source"}, nil)
+	epgUpdatedDesc = prometheus.NewDesc("wsp_epg_last_success_timestamp_seconds",
+		"Time the EPG source copy in use was fetched, 0 without a copy.",
+		[]string{"source"}, nil)
+)
+
+// epgCollector reads the EPG sources at scrape time.
+type epgCollector struct {
+	sources func() []EPGSource
+}
+
+func (c epgCollector) Describe(ch chan<- *prometheus.Desc) {
+	ch <- epgFetchesDesc
+	ch <- epgDurationDesc
+	ch <- epgBytesDesc
+	ch <- epgFilteredDesc
+	ch <- epgUpdatedDesc
+}
+
+func (c epgCollector) Collect(ch chan<- prometheus.Metric) {
+	if c.sources == nil {
+		return
+	}
+	for _, s := range c.sources() {
+		for _, r := range EPGResults {
+			ch <- prometheus.MustNewConstMetric(epgFetchesDesc, prometheus.CounterValue, float64(s.Fetches[r]), s.Name, r)
+		}
+		updated := 0.0
+		if !s.Updated.IsZero() {
+			updated = float64(s.Updated.UnixNano()) / 1e9
+		}
+		ch <- prometheus.MustNewConstMetric(epgDurationDesc, prometheus.GaugeValue, s.Duration.Seconds(), s.Name)
+		ch <- prometheus.MustNewConstMetric(epgBytesDesc, prometheus.GaugeValue, float64(s.Bytes), s.Name)
+		ch <- prometheus.MustNewConstMetric(epgFilteredDesc, prometheus.GaugeValue, float64(s.FilteredBytes), s.Name)
+		ch <- prometheus.MustNewConstMetric(epgUpdatedDesc, prometheus.GaugeValue, updated, s.Name)
 	}
 }

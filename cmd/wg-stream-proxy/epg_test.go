@@ -11,6 +11,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/KingOfKalk/wg-stream-proxy/internal/tunnel/tunneltest"
 )
 
 const epgFixture = "../../internal/epg/testdata/epg.xml"
@@ -169,7 +171,7 @@ func TestEPGErrors(t *testing.T) {
 		{"no subcommand", good, true, []string{"epg"}, 2, "want a subcommand: ids or match"},
 		{"unknown subcommand", good, true, []string{"epg", "bogus"}, 2, "want a subcommand: ids or match"},
 		{"extra argument", good, true, []string{"epg", "ids", "extra"}, 2, "unexpected arguments: extra"},
-		{"no epg url", "", true, []string{"epg", "ids"}, 1, "no [epg] url in config.toml"},
+		{"no epg url", "", true, []string{"epg", "ids"}, 1, "no [[epg.source]] or [epg] url in config.toml"},
 		{"not found", "[epg]\nurl = \"" + srv.URL + "/missing\"\n", true, []string{"epg", "ids"}, 1, "status 404"},
 		{"guard blocks loopback", good, false, []string{"epg", "ids"}, 1, "private address blocked"},
 		{"allow_private of direct applies", good + "[upstream.allow_private]\ndirect = [\"127.0.0.0/8\"]\n", false, []string{"epg", "ids"}, 0, ""},
@@ -190,6 +192,51 @@ func TestEPGErrors(t *testing.T) {
 			}
 			if tt.wantCode != 0 && out.String() != "" {
 				t.Errorf("stdout = %q, want empty", out)
+			}
+		})
+	}
+}
+
+// TestEPGSources: --source picks an [[epg.source]], by default the first
+// one; a source on a tunnel is read through that tunnel.
+func TestEPGSources(t *testing.T) {
+	srv := epgServer(t)
+	peer := tunneltest.Start(t, tunneltest.Options{Handler: http.FileServer(http.Dir("../../internal/epg/testdata"))})
+	peer.SetHost("epg.test", tunneltest.ServerAddr4)
+	sources := "[[epg.source]]\nname = \"gr\"\nurl = \"" + srv.URL + "/missing.xml\"\n" +
+		"[[epg.source]]\nname = \"de\"\nurl = \"" + srv.URL + "/epg.xml.gz\"\n" +
+		"[[epg.source]]\nname = \"vpn\"\nurl = \"http://epg.test/epg.xml\"\ntunnel = \"gr\"\n"
+	tests := []struct {
+		name, config string
+		args         []string
+		wantCode     int
+		wantOut      string
+		wantStderr   string
+	}{
+		{"first source by default", sources, []string{"ids"}, 1, "", "status 404"},
+		{"named source", sources, []string{"ids", "--source", "de"}, 0, wantIDs, ""},
+		{"named source for match", sources, []string{"match", "--source", "de"}, 0, wantMatch, ""},
+		{"source on a tunnel", sources, []string{"ids", "--source", "vpn"}, 0, wantIDs, `source "vpn" uses tunnel "gr": starting it in this process`},
+		{"unknown source", sources, []string{"ids", "--source", "nope"}, 2, "", `unknown EPG source "nope" (want one of: gr, de, vpn)`},
+		{"source in link mode", "[epg]\nurl = \"" + srv.URL + "/epg.xml.gz\"\n", []string{"match", "--source", "gr"}, 2, "", `unknown EPG source "gr": config.toml has no [[epg.source]]`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := writeDir(t, map[string]string{
+				"config.toml":           tt.config,
+				"channels.d/greek.toml": epgChannels,
+				"tunnels/gr.conf":       peer.ClientConfig(),
+			})
+			c, out, errOut := epgCLI()
+			code := c.run(append([]string{"epg"}, append(tt.args, "--config-dir", dir)...))
+			if code != tt.wantCode {
+				t.Fatalf("exit code = %d, want %d; stderr: %s", code, tt.wantCode, errOut)
+			}
+			if out.String() != tt.wantOut {
+				t.Errorf("stdout:\n%s\nwant:\n%s", out, tt.wantOut)
+			}
+			if !strings.Contains(errOut.String(), tt.wantStderr) {
+				t.Errorf("stderr = %q, want %q", errOut, tt.wantStderr)
 			}
 		})
 	}
@@ -282,7 +329,7 @@ func TestImportMatchEPG(t *testing.T) {
 		bare := epgConfigDir(t, "")
 		c, out, errOut := epgCLI()
 		code := c.run([]string{"import", in, "--match-epg", "--config-dir", bare})
-		if code != 1 || out.String() != "" || !strings.Contains(errOut.String(), "import: --match-epg: no [epg] url in config.toml") {
+		if code != 1 || out.String() != "" || !strings.Contains(errOut.String(), "import: --match-epg: no [[epg.source]] or [epg] url in config.toml") {
 			t.Errorf("code = %d, stdout %q, stderr %q", code, out, errOut)
 		}
 	})
