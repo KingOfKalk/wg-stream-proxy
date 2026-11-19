@@ -177,6 +177,10 @@ flowchart TB
 - `SIGHUP` reload (spec 5.6): the new config is validated completely. An
   invalid one is rejected and the old one keeps serving. Unchanged tunnels
   keep running; changed or removed tunnels are drained.
+- File watching (spec 5.6): a poll of path, size and modification time of
+  the files a reload reads, every `reload.watch_interval` (default `2s`).
+  A change that stayed the same for one more interval calls the same
+  reload as `SIGHUP`; no change, no reload.
 - Tunnel lifecycle: lazy start, idle close, drain (section 6).
 - Signing key: signs and verifies `/r/` URLs (spec 4). Changing it needs
   a restart, like `listen` and the tunnels dir location.
@@ -541,9 +545,9 @@ Requests go down the layers, responses travel back up.
 - **Data plane**: a player request goes down the layers and back. The
   route layer only knows the `route.Network` interface (resolve a host,
   dial an `ip:port`); `*tunnel.Tunnel` and `route.Host()` implement it.
-- **Control plane**: `cmd/wg-stream-proxy` turns `SIGHUP` into
-  `Reloader.Reload`. It loads all files (`config.Load`, `tunnel.Parse`);
-  if they are valid, `Manager.Apply` swaps the tunnel set,
+- **Control plane**: `cmd/wg-stream-proxy` turns `SIGHUP` and the changes
+  that `server.Watch` sees in the config files into `Reloader.Reload`. It
+  loads all files (`config.Load`, `tunnel.Parse`); if they are valid, `Manager.Apply` swaps the tunnel set,
   `route.Set.Next` builds the next routes (unchanged routes keep their
   pools), and the new generation is swapped in for new requests. Running
   requests finish on the old one. An invalid config changes nothing.
