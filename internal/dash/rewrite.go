@@ -3,8 +3,8 @@
 // Package dash rewrites MPEG-DASH manifests (MPD) for the proxy (spec
 // 3.6): every URL a player would fetch from the manifest goes through a
 // prefix-signed proxy URL (spec 4.1), DRM manifests are refused, and
-// everything else passes through byte for byte. It does no I/O; fetching,
-// size limits on reads and signing belong to the caller.
+// everything else but comments passes through byte for byte. It does no
+// I/O; fetching, size limits on reads and signing belong to the caller.
 package dash
 
 import (
@@ -60,7 +60,45 @@ type Options struct {
 const (
 	schemeHTTPISO = "urn:mpeg:dash:utc:http-iso:2014"
 	resolveToZero = "urn:mpeg:dash:resolve-to-zero:2013"
+	// schemeFontDownload is the DVB font download descriptor; players
+	// fetch its dvb:url themselves.
+	schemeFontDownload = "urn:dvb:dash:fontdownload:2014"
+	// xmlDecl is the declaration written for a manifest that had one.
+	xmlDecl = `<?xml version="1.0" encoding="UTF-8"?>`
 )
+
+// Scheme URIs are compared case-insensitively: the maps below hold
+// lower-case keys, see scheme.
+
+// keptEvents are the EventStream and InbandEventStream schemes that are
+// kept (lower-case); a scheme ending in ':' is a prefix. Their events
+// carry no URL a player fetches. Every other event stream is removed:
+// callback events (urn:mpeg:dash:event:callback:2015) make the player
+// call a URL, alternative MPD events load another manifest.
+var keptEvents = []string{
+	"urn:scte:scte35:",             // SCTE-35 splice signals
+	"https://aomedia.org/emsg/id3", // ID3 timed metadata
+	"https://developer.apple.com/streaming/emsg-id3",
+}
+
+// mpdEvents is the MPD event scheme; only its value 1 (the manifest
+// expires, reload it from the proxy URL) is kept. Values 2 and 3 carry an
+// MPD patch or a whole manifest.
+const mpdEvents = "urn:mpeg:dash:event:2012"
+
+// baseURLAttrs are the BaseURL attributes that are kept (lower-case
+// local names): the schema's, without byteRange (Annex E byte range
+// templates build URLs), and DVB's priority and weight. Namespace
+// declarations are kept too.
+var baseURLAttrs = map[string]bool{
+	"servicelocation":          true,
+	"availabilitytimeoffset":   true,
+	"availabilitytimecomplete": true,
+	"timeshiftbufferdepth":     true,
+	"rangeaccess":              true,
+	"priority":                 true,
+	"weight":                   true,
+}
 
 // directTiming are UTCTiming schemes whose value is the time itself: the
 // player contacts nobody.
@@ -109,10 +147,20 @@ var refAttrs = map[string][]string{
 //     resolves against the rewritten BaseURLs. Absolute, scheme-relative,
 //     rooted and dot-segment references become the prefix URL of their
 //     fixed directory plus the rest, template identifiers kept;
-//   - Location, PatchLocation, ContentSteering, Metrics and
-//     SupplementalProperty elements of MPD chaining or fallback are
-//     removed; UTCTiming elements other than direct ones point to TimeURL;
+//   - the dvb:url of DVB font download descriptors becomes a prefix URL
+//     like a reference that is not plain;
+//   - Location, PatchLocation, ContentSteering, Metrics,
+//     SupplementalProperty elements of MPD chaining or fallback, and
+//     EventStream and InbandEventStream elements of schemes other than
+//     those in keptEvents are removed; BaseURL attributes other than
+//     baseURLAttrs are dropped; UTCTiming elements other than direct
+//     ones point to TimeURL;
+//   - comments are dropped and the XML declaration is written as
+//     xmlDecl: players' parsers disagree with encoding/xml on where
+//     comments and processing instructions end;
 //   - all other bytes stay unchanged.
+//
+// The output is at most maxOutput(len(mpd)) bytes, else ErrTooLarge.
 //
 // Prefix URLs allow a query if the URL they stand for has one, and the
 // BaseURL ones also if a plain segment reference has one.
@@ -203,13 +251,19 @@ type scan struct {
 //     different case or namespace prefix; xml:base;
 //   - remote elements (any href attribute, xlink:href in practice) other
 //     than resolve-to-zero;
-//   - a BaseURL with child elements or processing instructions;
-//   - a segment reference or BaseURL with whitespace (other than around
-//     it), control bytes or a backslash;
-//   - a Representation id with whitespace, control bytes, ':' or '\', or
-//     starting with '/': $RepresentationID$ must not turn a relative
-//     reference into an absolute one;
+//   - a processing instruction other than the XML declaration as the
+//     first token (after a BOM), a CDATA section outside a BaseURL, '<'
+//     or '>' inside a start tag (in a quoted value): parsers that end
+//     these at the first '>' would read elements the rewriter did not;
+//   - a BaseURL with child elements;
+//   - a segment reference, font URL or BaseURL with whitespace (other
+//     than around it), control bytes, non-ASCII bytes or a backslash;
+//   - a Representation id with whitespace, control or non-ASCII bytes,
+//     ':' or '\', or starting with '/': $RepresentationID$ must not turn
+//     a relative reference into an absolute one;
 //   - an EssentialProperty of MPD chaining or fallback.
+//
+// Scheme URIs compare case-insensitively.
 //
 // Element and attribute names match by local name, case-insensitively,
 // whatever their namespace: some players compare names that way.
@@ -219,7 +273,7 @@ func checkManifest(in []byte) (scan, error) {
 	var stack []xml.Name
 	rootDone := false
 	inBase := 0 // depth of the open BaseURL element, 0 if none
-	for {
+	for n := 0; ; n++ {
 		t, raw, start, err := z.next()
 		if err == io.EOF {
 			break
@@ -227,11 +281,19 @@ func checkManifest(in []byte) (scan, error) {
 		if err != nil {
 			return sc, err
 		}
+		if n == 0 && start == 0 && bytes.Equal(raw, []byte("\ufeff")) {
+			n-- // the BOM does not count: the declaration may follow it
+			continue
+		}
 		switch t := t.(type) {
 		case xml.StartElement:
 			depth := len(stack) + 1
 			ln := strings.ToLower(t.Name.Local)
 			switch {
+			case bytes.IndexByte(raw[1:], '<') >= 0 || bytes.IndexByte(raw, '>') != len(raw)-1:
+				// Legal in quoted values, but parsers that end a tag
+				// at the first '>' would read another element there.
+				return sc, invalid("'<' or '>' inside a tag")
 			case rootDone:
 				return sc, invalid("content after the root element")
 			case inBase > 0:
@@ -265,6 +327,9 @@ func checkManifest(in []byte) (scan, error) {
 			stack = stack[:len(stack)-1]
 			rootDone = len(stack) == 0
 		case xml.CharData:
+			if inBase == 0 && bytes.HasPrefix(raw, []byte("<![CDATA[")) {
+				return sc, invalid("CDATA section outside BaseURL")
+			}
 			text := []byte(t)
 			if start == 0 {
 				text = bytes.TrimPrefix(text, []byte("\ufeff"))
@@ -273,8 +338,11 @@ func checkManifest(in []byte) (scan, error) {
 				return sc, invalid("text outside the root element")
 			}
 		case xml.ProcInst:
-			if inBase > 0 {
-				return sc, invalid("processing instruction inside BaseURL")
+			// Parsers end processing instructions at different places
+			// (some at the first '>'); only the declaration is allowed,
+			// and it is written again (see run).
+			if n != 0 || t.Target != "xml" {
+				return sc, invalid("processing instruction other than the XML declaration")
 			}
 		case xml.Directive:
 			return sc, invalid("DOCTYPE or other declaration")
@@ -293,7 +361,9 @@ func interpreted(ln string) []string {
 	case "utctiming":
 		return []string{"schemeiduri", "value"}
 	case "supplementalproperty", "essentialproperty":
-		return []string{"schemeiduri"}
+		return []string{"schemeiduri", "url"}
+	case "eventstream", "inbandeventstream":
+		return []string{"schemeiduri", "value"}
 	case "representation":
 		return []string{"id"}
 	}
@@ -323,10 +393,10 @@ func checkAttrs(ln string, attrs []xml.Attr, sc *scan) error {
 			return invalid("remote element (xlink:href)")
 		case ln == "representation" && an == "id" && !validRepresentationID(a.Value):
 			return invalid("Representation id that could change a URL")
-		case ln == "essentialproperty" && an == "schemeiduri" && chainingSchemes[strings.TrimSpace(a.Value)]:
+		case ln == "essentialproperty" && an == "schemeiduri" && chainingSchemes[lowerTrim(a.Value)]:
 			return invalid("EssentialProperty of MPD chaining")
 		}
-		if containsString(refAttrs[ln], an) {
+		if isRefAttr(ln, attrs, an) {
 			v, err := cleanURL(a.Value)
 			if err != nil {
 				return err
@@ -348,15 +418,53 @@ func containsString(list []string, s string) bool {
 	return false
 }
 
+// lowerTrim returns a scheme URI for comparison: trimmed and lower-case.
+func lowerTrim(v string) string { return strings.ToLower(strings.TrimSpace(v)) }
+
+// fontDownload reports whether a property element is a DVB font
+// download descriptor.
+func fontDownload(ln string, attrs []xml.Attr) bool {
+	if ln != "supplementalproperty" && ln != "essentialproperty" {
+		return false
+	}
+	v, _ := attr(attrs, "schemeiduri")
+	return lowerTrim(v) == schemeFontDownload
+}
+
+// isRefAttr reports whether attribute an (lower-case local name) of an
+// element holds a URL the player fetches: a segment reference or the
+// dvb:url of a font download descriptor.
+func isRefAttr(ln string, attrs []xml.Attr, an string) bool {
+	return containsString(refAttrs[ln], an) || an == "url" && fontDownload(ln, attrs)
+}
+
+// keptEvent reports whether an EventStream or InbandEventStream is kept
+// (see keptEvents).
+func keptEvent(attrs []xml.Attr) bool {
+	s, _ := attr(attrs, "schemeiduri")
+	s = lowerTrim(s)
+	if s == mpdEvents {
+		v, _ := attr(attrs, "value")
+		return strings.TrimSpace(v) == "1"
+	}
+	for _, k := range keptEvents {
+		if s == k || strings.HasSuffix(k, ":") && strings.HasPrefix(s, k) {
+			return true
+		}
+	}
+	return false
+}
+
 // validRepresentationID reports whether $RepresentationID$ can be
 // replaced by id without changing the scheme or authority of a relative
-// reference.
+// reference. Non-ASCII bytes are refused: some players trim Unicode
+// whitespace such as NBSP.
 func validRepresentationID(id string) bool {
 	if strings.HasPrefix(id, "/") {
 		return false
 	}
 	for i := 0; i < len(id); i++ {
-		if c := id[i]; c <= ' ' || c == 0x7f || c == ':' || c == '\\' {
+		if c := id[i]; c <= ' ' || c >= 0x7f || c == ':' || c == '\\' {
 			return false
 		}
 	}
@@ -364,13 +472,15 @@ func validRepresentationID(id string) bool {
 }
 
 // cleanURL trims XML whitespace around a URL value and rejects values
-// with whitespace, control bytes or backslashes inside: URL parsers
-// differ on those (browsers drop tabs and newlines and read '\' as '/').
+// with whitespace, control bytes, backslashes or non-ASCII bytes inside:
+// URL parsers differ on those (browsers drop tabs and newlines and read
+// '\' as '/'; JavaScript's trim also drops NBSP and other Unicode
+// whitespace).
 func cleanURL(v string) (string, error) {
 	v = strings.Trim(v, " \t\r\n")
 	for i := 0; i < len(v); i++ {
-		if c := v[i]; c <= ' ' || c == 0x7f || c == '\\' {
-			return "", invalid("URL with whitespace, control byte or backslash")
+		if c := v[i]; c <= ' ' || c >= 0x7f || c == '\\' {
+			return "", invalid("URL with whitespace, control, non-ASCII byte or backslash")
 		}
 	}
 	return v, nil
@@ -439,9 +549,16 @@ type rewriter struct {
 // run rewrites a manifest that passed checkManifest.
 func (rw *rewriter) run(in []byte) error {
 	z := newTokenizer(in)
+	limit := maxOutput(len(in))
 	for {
+		if len(rw.out) > limit {
+			return fmt.Errorf("%w: rewritten manifest larger than %d bytes", ErrTooLarge, limit)
+		}
 		t, raw, _, err := z.next()
 		if err == io.EOF {
+			if len(rw.out) > limit {
+				return fmt.Errorf("%w: rewritten manifest larger than %d bytes", ErrTooLarge, limit)
+			}
 			return nil
 		}
 		if err != nil {
@@ -476,13 +593,24 @@ func (rw *rewriter) run(in []byte) error {
 				continue
 			}
 			rw.out = append(rw.out, raw...)
-		default:
-			// Comments in a BaseURL are dropped with its text.
-			if rw.base == nil {
-				rw.out = append(rw.out, raw...)
-			}
+		case xml.ProcInst:
+			// The declaration (checkManifest allows no other processing
+			// instruction), written again: its original bytes could
+			// hide a tag from parsers that end it at the first '>'.
+			rw.out = append(rw.out, xmlDecl...)
 		}
+		// Comments are dropped: parsers disagree on where they end
+		// ("<!--->" ends at once for some), so a comment could hide an
+		// element from the rewriter but not from the player.
 	}
+}
+
+// maxOutput is the largest rewritten manifest for an input of n bytes:
+// 16 times the input, at least 1 MiB and at most 128 MiB. Every reference
+// that is not plain becomes a whole prefix URL, so without a limit a
+// small manifest could grow by orders of magnitude.
+func maxOutput(n int) int {
+	return min(max(16*n, 1<<20), 128<<20)
 }
 
 // start handles a start tag.
@@ -540,10 +668,12 @@ func (rw *rewriter) removed(ln string, attrs []xml.Attr) bool {
 	switch ln {
 	case "supplementalproperty":
 		v, _ := attr(attrs, "schemeiduri")
-		return chainingSchemes[strings.TrimSpace(v)]
+		return chainingSchemes[lowerTrim(v)]
 	case "utctiming":
 		v, _ := attr(attrs, "schemeiduri")
-		return rw.opts.TimeURL == "" && !directTiming[strings.TrimSpace(v)]
+		return rw.opts.TimeURL == "" && !directTiming[lowerTrim(v)]
+	case "eventstream", "inbandeventstream":
+		return !keptEvent(attrs)
 	}
 	return removedElements[ln]
 }
@@ -563,7 +693,7 @@ func attr(attrs []xml.Attr, an string) (string, bool) {
 // References resolve against base.
 func (rw *rewriter) rewriteAttrs(ln string, attrs []xml.Attr, base *url.URL) ([]xml.Attr, bool, error) {
 	if ln == "utctiming" {
-		if v, _ := attr(attrs, "schemeiduri"); directTiming[strings.TrimSpace(v)] {
+		if v, _ := attr(attrs, "schemeiduri"); directTiming[lowerTrim(v)] {
 			return attrs, false, nil
 		}
 		out := make([]xml.Attr, 0, len(attrs)+2)
@@ -585,20 +715,22 @@ func (rw *rewriter) rewriteAttrs(ln string, attrs []xml.Attr, base *url.URL) ([]
 		}
 		return out, true, nil
 	}
-	names := refAttrs[ln]
-	if names == nil {
+	font := fontDownload(ln, attrs)
+	if refAttrs[ln] == nil && !font {
 		return attrs, false, nil
 	}
 	var out []xml.Attr
 	for i, a := range attrs {
-		if !containsString(names, strings.ToLower(a.Name.Local)) {
+		if !isRefAttr(ln, attrs, strings.ToLower(a.Name.Local)) {
 			continue
 		}
 		v, err := cleanURL(a.Value)
 		if err != nil {
 			return nil, false, err
 		}
-		if plain(v) {
+		// A font URL may be relative to the BaseURL or not (DVB A168
+		// leaves it open to players): always make it absolute.
+		if plain(v) && !font {
 			continue
 		}
 		nv, err := rw.reference(v, base)
@@ -695,8 +827,20 @@ func (rw *rewriter) endBase() error {
 		return err
 	}
 	parent.own = append(parent.own, u)
-	rw.out = appendElement(rw.out, b.name, b.attrs, p+file)
+	rw.out = appendElement(rw.out, b.name, keptBaseURLAttrs(b.attrs), p+file)
 	return nil
+}
+
+// keptBaseURLAttrs returns the attributes of a BaseURL without those
+// not in baseURLAttrs; namespace declarations stay.
+func keptBaseURLAttrs(attrs []xml.Attr) []xml.Attr {
+	var out []xml.Attr
+	for _, a := range attrs {
+		if a.Name.Space == "xmlns" || a.Name.Space == "" && a.Name.Local == "xmlns" || baseURLAttrs[strings.ToLower(a.Name.Local)] {
+			out = append(out, a)
+		}
+	}
+	return out
 }
 
 // prefixURL returns the proxy URL of an upstream prefix, cached per
@@ -853,4 +997,25 @@ func hasDuplicate(attrs []xml.Attr) bool {
 		names[a.Name] = struct{}{}
 	}
 	return false
+}
+
+// Count returns the number of Period and AdaptationSet elements of a
+// manifest (local names, case-insensitive), for the probe command (spec
+// 7.2). A manifest that does not parse counts what was read before.
+func Count(mpd []byte) (periods, adaptationSets int) {
+	z := newTokenizer(mpd)
+	for {
+		t, _, _, err := z.next()
+		if err != nil {
+			return periods, adaptationSets
+		}
+		if se, ok := t.(xml.StartElement); ok {
+			switch strings.ToLower(se.Name.Local) {
+			case "period":
+				periods++
+			case "adaptationset":
+				adaptationSets++
+			}
+		}
+	}
 }

@@ -151,3 +151,68 @@ func TestUnsupportedPlaylists(t *testing.T) {
 		}
 	})
 }
+
+// TestSniffGap checks spec 3.1 and 3.3 for XML playlists whose root
+// element is not in the first 512 bytes, or that a short look misreads:
+// they are detected or refused, never piped with their URLs.
+func TestSniffGap(t *testing.T) {
+	const secret = "token-a1b2c3"
+	stream := "http://radio.example/" + secret + "/stream.mp3"
+	longComment := "<!--" + strings.Repeat("x", 1000) + "-->"
+	tests := []struct {
+		name, ctype, body string
+		// want per path: /c/auto, /c/raw, /r/
+		want [3]int
+	}{
+		{
+			name: "doctype with internal subset", ctype: "text/xml",
+			body: `<?xml version="1.0"?><!DOCTYPE MPD [<!ENTITY a "b">]><MPD><BaseURL>` + stream + `</BaseURL><Period/></MPD>`,
+			// auto and /r/ detect DASH, whose rewriter rejects the DOCTYPE.
+			want: [3]int{502, 502, 502},
+		},
+		{
+			name: "MPD after a long comment", ctype: "application/octet-stream",
+			body: longComment + `<MPD><BaseURL>` + stream + `</BaseURL><Period/></MPD>`,
+			want: [3]int{200, 502, 200},
+		},
+		{
+			name: "XSPF after a long comment", ctype: "application/octet-stream",
+			body: longComment + `<playlist><trackList><track><location>` + stream + `</location></track></trackList></playlist>`,
+			want: [3]int{502, 502, 502},
+		},
+		{
+			name: "no root within 64 KiB", ctype: "text/xml",
+			body: "<!--" + strings.Repeat("x", 70000) + `--><playlist><location>` + stream + `</location></playlist>`,
+			want: [3]int{502, 502, 502},
+		},
+		{
+			name: "UTF-16 MPD", ctype: "text/xml",
+			body: "\xff\xfe" + utf16le(`<MPD><BaseURL>`+stream+`</BaseURL></MPD>`),
+			want: [3]int{502, 502, 502},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e := newDirectEnv(t, allowLoopback, unsupportedTOML)
+			e.up.add("/list", file{ctype: tt.ctype, body: tt.body})
+			for i, p := range []string{"/c/auto", "/c/raw", e.signer.Path("auto", e.upURL+"/list")} {
+				resp, body := e.get(t, p, nil)
+				if resp.StatusCode != tt.want[i] {
+					t.Errorf("GET %s: status %d, want %d", p, resp.StatusCode, tt.want[i])
+				}
+				if strings.Contains(body, secret) || strings.Contains(body, "radio.example") || strings.Contains(body, utf16le("radio")) {
+					t.Errorf("GET %s: body leaks the upstream URL", p)
+				}
+			}
+		})
+	}
+}
+
+// utf16le encodes ASCII s as UTF-16LE.
+func utf16le(s string) string {
+	b := make([]byte, 0, 2*len(s))
+	for i := 0; i < len(s); i++ {
+		b = append(b, s[i], 0)
+	}
+	return string(b)
+}

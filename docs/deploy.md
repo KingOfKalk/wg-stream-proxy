@@ -156,8 +156,8 @@ docker exec wg-stream-proxy /wg-stream-proxy probe --route gr --header 'Referer=
 ```
 
 - Put the URL in single quotes: tokens in the query string contain `&`. The output shows the final URL as scheme, host and file name only, like the log.
-- Exit code `0`: the proxy would serve it; `1`: it would not (the last lines say why: `guard`, `timeout`, `tls`, `status` for a `403` or `404`, `unsupported` for a playlist format the proxy refuses); `2`: wrong usage.
-- Per request you see the format (HLS master or media playlist with the number of variants or segments, raw or ICY stream, refused playlist) and where the time went: tunnel start, DNS, connect, TLS, first byte. For HLS the first variant and the first segment are fetched too, which finds geo-blocks that only hit the segments.
+- Exit code `0`: the proxy would serve it; `1`: it would not (the last lines say why: `guard`, `timeout`, `tls`, `status` for a `403` or `404`, `unsupported` for a playlist format the proxy refuses, `drm` for a DASH manifest with DRM); `2`: wrong usage.
+- Per request you see the format (HLS master or media playlist with the number of variants or segments, DASH manifest with the number of periods and adaptation sets, raw or ICY stream, refused playlist) and where the time went: tunnel start, DNS, connect, TLS, first byte. For HLS the first variant and the first segment are fetched too, which finds geo-blocks that only hit the segments.
 - `--header Name=Value` is the same as `upstream.headers` of a channel (`User-Agent`, `Referer`, `Cookie`); once it works, copy the headers into the channel file.
 - Without `[debug] listen`, or if nothing listens there, the probe runs standalone (`standalone` in the output, one line on stderr says so): it starts the route's tunnel itself and stops it at the end. That is a second device with the key of the tunnel, so while a proxy has that tunnel up, the provider's server switches to the new endpoint and a stream on that tunnel can stall until the next handshake. Prefer the debug listener; `--standalone` forces this mode (for a config the running proxy has not loaded yet, with no stream on that tunnel).
 

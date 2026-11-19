@@ -63,7 +63,7 @@ func (t Type) String() string {
 // 2: a configured type other than Auto wins, then the Content-Type, then
 // the body: #EXTM3U after an optional UTF-8 BOM and whitespace is HLS, an
 // XML root element MPD is DASH. prefix is the start of the body (see
-// SniffLen). Resources under /r/ and /p/ pass Auto.
+// Sniff). Resources under /r/ and /p/ pass Auto.
 func Detect(contentType string, prefix []byte, configured Type) Type {
 	if configured != Auto {
 		return configured
@@ -82,8 +82,15 @@ func Detect(contentType string, prefix []byte, configured Type) Type {
 	switch {
 	case bytes.HasPrefix(body, []byte("#EXTM3U")):
 		return HLS
-	case len(body) > 0 && body[0] == '<' && xmlRoots[strings.ToLower(xmlRoot(body))] == FormatDASH:
+	case len(body) > 0 && body[0] == '<' && isDASHRoot(body):
 		return DASH
 	}
 	return Raw
+}
+
+// isDASHRoot reports whether the XML document starting at body has the
+// root element MPD (any case, any namespace prefix).
+func isDASHRoot(body []byte) bool {
+	root, ok := xmlRoot(body)
+	return ok && xmlRoots[strings.ToLower(root)] == FormatDASH
 }

@@ -55,7 +55,7 @@ func (u *probeUpstream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("[playlist]\nFile1=http://other.example/stream\n"))
 	case "/manifest.mpd":
 		w.Header().Set("Content-Type", "application/dash+xml")
-		_, _ = w.Write([]byte("<MPD/>"))
+		_, _ = w.Write([]byte(`<MPD><Period><AdaptationSet><SegmentTemplate media="$Number$.m4s"/></AdaptationSet></Period></MPD>`))
 	default:
 		http.NotFound(w, r)
 	}
@@ -97,7 +97,7 @@ func TestProbeDirect(t *testing.T) {
 		},
 		{"raw stream", "/radio", true, 0, []string{"raw stream", "15 bytes", "audio/mpeg", "result: ok"}},
 		{"refused pls", "/list.pls", true, 1, []string{"refused: pls playlist", "unsupported", "result: failed"}},
-		{"refused dash", "/manifest.mpd", true, 1, []string{"refused: dash playlist", "result: failed"}},
+		{"dash manifest", "/manifest.mpd", true, 0, []string{"DASH manifest, 1 period, 1 adaptation set", "result: ok"}},
 		{"upstream 404", "/missing", true, 1, []string{"status        404", "status: upstream status 404", "result: failed"}},
 		{"guard refusal", "/radio", false, 1, []string{"guard:", "result: failed"}},
 	}

@@ -64,76 +64,114 @@ func (s *Signer) PrefixPath(channel, prefix string, query bool) (string, error) 
 	return b.String(), nil
 }
 
+// PrefixResource is a verified request for a prefix-signed resource.
+type PrefixResource struct {
+	// Channel is the channel id.
+	Channel string
+	// URL is the upstream URL: the prefix plus the request path below
+	// the prefix path, plus the query if Query allows one.
+	URL string
+	// Prefix is the signed upstream prefix.
+	Prefix string
+	// Query: the mode allows a query.
+	Query bool
+
+	base *url.URL // Prefix, parsed
+}
+
+// Below reports whether u is a URL a request below the prefix path could
+// reach (spec 4.1): the prefix's scheme, host and port, no user info, a
+// path below the prefix directory that ParsePrefix would accept, and a
+// query only if the mode allows one. A fragment is ignored (it is never
+// sent). Upstream redirects of a prefix-signed request are only followed
+// if the target is below the prefix.
+func (r PrefixResource) Below(u *url.URL) bool {
+	if r.base == nil || u.Scheme != r.base.Scheme || u.Host != r.base.Host || u.User != nil || u.Opaque != "" {
+		return false
+	}
+	path, ok := strings.CutPrefix(u.EscapedPath(), r.base.EscapedPath())
+	if !ok || checkPrefixPath(path) != nil {
+		return false
+	}
+	switch {
+	case u.RawQuery == "" && !u.ForceQuery:
+		return true
+	case !r.Query:
+		return false
+	}
+	return validQuery(u.RawQuery)
+}
+
 // ParsePrefix verifies a request for a prefix-signed resource (spec 4.1)
-// and returns the channel id and the upstream URL: the signed prefix plus
-// the request path below the prefix path, plus the query if the mode
-// allows one. u is the request URL (r.URL); its escaped path is checked,
-// so every upstream URL stays below the prefix: same scheme, host and port,
-// below the prefix directory. Every failure wraps ErrInvalidResource; the
-// error never contains a URL.
-func (s *Signer) ParsePrefix(u *url.URL) (channel, upstream string, err error) {
+// and returns the channel id, the upstream URL and the prefix. u is the
+// request URL (r.URL); its escaped path is checked, so every upstream URL
+// stays below the prefix: same scheme, host and port, below the prefix
+// directory. Every failure wraps ErrInvalidResource; the error never
+// contains a URL.
+func (s *Signer) ParsePrefix(u *url.URL) (PrefixResource, error) {
+	var r PrefixResource
 	rest, ok := strings.CutPrefix(u.EscapedPath(), prefixRoot)
 	if !ok {
-		return "", "", fmt.Errorf("%w: not under %s", ErrInvalidResource, prefixRoot)
+		return r, fmt.Errorf("%w: not under %s", ErrInvalidResource, prefixRoot)
 	}
 	parts := strings.SplitN(rest, "/", 5)
 	if len(parts) != 5 {
-		return "", "", fmt.Errorf("%w: want 5 path segments", ErrInvalidResource)
+		return r, fmt.Errorf("%w: want 5 path segments", ErrInvalidResource)
 	}
 	channel, sigText, mode, prefixText, path := parts[0], parts[1], parts[2], parts[3], parts[4]
 	if !validChannel(channel) {
-		return "", "", fmt.Errorf("%w: invalid channel id", ErrInvalidResource)
+		return r, fmt.Errorf("%w: invalid channel id", ErrInvalidResource)
 	}
 	if len(sigText) != b64.EncodedLen(sigLen) {
-		return "", "", fmt.Errorf("%w: bad signature length", ErrInvalidResource)
+		return r, fmt.Errorf("%w: bad signature length", ErrInvalidResource)
 	}
 	sig, err := decodeB64(sigText)
 	if err != nil {
-		return "", "", fmt.Errorf("%w: bad signature encoding", ErrInvalidResource)
+		return r, fmt.Errorf("%w: bad signature encoding", ErrInvalidResource)
 	}
 	if mode != modeNoQuery && mode != modeQuery {
-		return "", "", fmt.Errorf("%w: unknown mode", ErrInvalidResource)
+		return r, fmt.Errorf("%w: unknown mode", ErrInvalidResource)
 	}
 	if prefixText == "" || len(prefixText) > b64.EncodedLen(MaxURLLen) {
-		return "", "", fmt.Errorf("%w: bad prefix length", ErrInvalidResource)
+		return r, fmt.Errorf("%w: bad prefix length", ErrInvalidResource)
 	}
 	raw, err := decodeB64(prefixText)
 	if err != nil {
-		return "", "", fmt.Errorf("%w: bad prefix encoding", ErrInvalidResource)
+		return r, fmt.Errorf("%w: bad prefix encoding", ErrInvalidResource)
 	}
 	prefix := string(raw)
 	if !hmac.Equal(sig, s.prefixMAC(channel, mode, prefix)) {
-		return "", "", fmt.Errorf("%w: signature mismatch", ErrInvalidResource)
+		return r, fmt.Errorf("%w: signature mismatch", ErrInvalidResource)
 	}
 	// Signed prefixes are canonical; check again anyway.
 	base, ok := parsePrefix(prefix)
 	if !ok {
-		return "", "", fmt.Errorf("%w: invalid prefix", ErrInvalidResource)
+		return r, fmt.Errorf("%w: invalid prefix", ErrInvalidResource)
 	}
 	if err := checkPrefixPath(path); err != nil {
-		return "", "", fmt.Errorf("%w: %w", ErrInvalidResource, err)
+		return r, fmt.Errorf("%w: %w", ErrInvalidResource, err)
 	}
-	upstream = prefix + path
+	upstream := prefix + path
 	switch {
 	case u.RawQuery == "" && !u.ForceQuery:
 	case mode != modeQuery:
-		return "", "", fmt.Errorf("%w: query not allowed", ErrInvalidResource)
+		return r, fmt.Errorf("%w: query not allowed", ErrInvalidResource)
 	case !validQuery(u.RawQuery):
-		return "", "", fmt.Errorf("%w: invalid query", ErrInvalidResource)
+		return r, fmt.Errorf("%w: invalid query", ErrInvalidResource)
 	case u.RawQuery != "":
 		upstream += "?" + u.RawQuery
 	}
 	if len(upstream) > MaxURLLen {
-		return "", "", fmt.Errorf("%w: upstream URL too long", ErrInvalidResource)
+		return r, fmt.Errorf("%w: upstream URL too long", ErrInvalidResource)
 	}
 	// By construction the URL is below the prefix; verify it the way the
 	// route parses it.
 	up, err := url.Parse(upstream)
 	if err != nil || up.Scheme != base.Scheme || up.Host != base.Host || up.User != nil ||
 		!strings.HasPrefix(up.EscapedPath(), base.EscapedPath()) {
-		return "", "", fmt.Errorf("%w: outside the prefix", ErrInvalidResource)
+		return r, fmt.Errorf("%w: outside the prefix", ErrInvalidResource)
 	}
-	return channel, upstream, nil
+	return PrefixResource{Channel: channel, URL: upstream, Prefix: prefix, Query: mode == modeQuery, base: base}, nil
 }
 
 // prefixMAC returns the first sigLen bytes of
@@ -174,11 +212,13 @@ func parsePrefix(prefix string) (*url.URL, bool) {
 // checkPrefixPath checks the escaped request path below a prefix path:
 // one or more segments of RFC 3986 path characters (unreserved,
 // sub-delims, ':', '@' and valid percent escapes). Decoded once, a
-// segment must not contain '/', '\', '%' (a double encoding) or control
-// bytes, and its name (the part before a ';', which some servers treat
-// as a path parameter) must not be empty, "." or "..": the upstream
-// server must not be able to read it as a step out of the prefix
-// directory.
+// segment must not contain '/', '\', '%' (a double encoding), control
+// bytes or non-ASCII bytes (overlong UTF-8 such as %c0%ae is a dot for
+// some servers), and its name (the part before a ';', which some servers
+// treat as a path parameter) must not be empty or consist of dots and
+// spaces only (Windows servers drop trailing dots and spaces, so "..%20"
+// is ".."): the upstream server must not be able to read it as a step
+// out of the prefix directory.
 func checkPrefixPath(path string) error {
 	if path == "" {
 		return errors.New("empty path")
@@ -194,7 +234,7 @@ func checkPrefixPath(path string) error {
 				}
 				c = unhex(seg[i+1])<<4 | unhex(seg[i+2])
 				i += 2
-				if c < 0x20 || c == 0x7f || c == '/' || c == '\\' || c == '%' {
+				if c < 0x20 || c >= 0x7f || c == '/' || c == '\\' || c == '%' {
 					return errors.New("forbidden escaped byte")
 				}
 			case !isPathChar(c):
@@ -203,8 +243,8 @@ func checkPrefixPath(path string) error {
 			dec = append(dec, c)
 		}
 		name, _, _ := strings.Cut(string(dec), ";")
-		if name == "" || name == "." || name == ".." {
-			return errors.New("empty or dot segment")
+		if strings.TrimRight(name, ". ") == "" {
+			return errors.New("empty segment or dots and spaces only")
 		}
 	}
 	return nil

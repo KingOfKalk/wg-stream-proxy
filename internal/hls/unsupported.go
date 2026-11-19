@@ -3,7 +3,11 @@
 package hls
 
 import (
+	"bufio"
 	"bytes"
+	"encoding/xml"
+	"errors"
+	"io"
 	"strings"
 )
 
@@ -15,6 +19,11 @@ const (
 	FormatDASH = "dash"
 	FormatXSPF = "xspf"
 	FormatASX  = "asx"
+	// FormatUnknown is a body the proxy cannot classify safely: it starts
+	// like XML but its root element is not found within XMLSniffLen
+	// bytes (see Sniff), or it is UTF-16 or UTF-32 text (byte order
+	// mark). Refused, fail closed.
+	FormatUnknown = "unknown"
 )
 
 // unsupportedTypes maps the Content-Types of playlists the proxy does not
@@ -51,7 +60,9 @@ var xmlRoots = map[string]string{
 // the body. On an auto channel, Detect classifies DASH manifests (format
 // "dash") as DASH, so only raw channels refuse them.
 // A configured Raw type ignores the Content-Type, like Detect, but not the
-// body. prefix is the start of the body (see SniffLen).
+// body. prefix is the start of the body as Sniff returns it; a body that
+// starts like XML without a root element in prefix, or with a UTF-16 or
+// UTF-32 byte order mark, is FormatUnknown (fail closed).
 func Unsupported(contentType string, prefix []byte, configured Type) string {
 	if configured == HLS || configured == DASH {
 		return ""
@@ -61,6 +72,9 @@ func Unsupported(contentType string, prefix []byte, configured Type) string {
 		if f, ok := unsupportedTypes[strings.ToLower(strings.TrimSpace(mediaType))]; ok {
 			return f
 		}
+	}
+	if wideBOM(prefix) {
+		return FormatUnknown
 	}
 	body := bytes.TrimPrefix(prefix, []byte(utf8BOM))
 	body = bytes.TrimLeft(body, " \t\r\n\v\f")
@@ -74,7 +88,11 @@ func Unsupported(contentType string, prefix []byte, configured Type) string {
 		// Only on a raw channel; Detect calls it HLS otherwise.
 		return FormatM3U
 	case len(body) > 0 && body[0] == '<':
-		return xmlRoots[strings.ToLower(xmlRoot(body))]
+		root, ok := xmlRoot(body)
+		if !ok {
+			return FormatUnknown
+		}
+		return xmlRoots[strings.ToLower(root)]
 	case urlList(body):
 		return FormatM3U
 	}
@@ -88,40 +106,70 @@ func hasPrefixFold(b []byte, prefix string) bool {
 }
 
 // xmlRoot returns the local name of the root element of an XML document
-// that starts at b, skipping the XML declaration, processing
-// instructions, comments, a doctype and whitespace; "" if the root
-// element does not start within b.
-func xmlRoot(b []byte) string {
+// that starts at b (after an optional UTF-8 BOM), as encoding/xml reads
+// it: after the XML declaration, processing instructions, comments and a
+// doctype with its internal subset. ok is false if no root element
+// starts within b or b is not XML up to it. The declared encoding is
+// ignored: element names are ASCII in every format concerned.
+func xmlRoot(b []byte) (name string, ok bool) {
+	d := xml.NewDecoder(bytes.NewReader(bytes.TrimPrefix(b, []byte(utf8BOM))))
+	d.Strict = false
+	d.CharsetReader = func(_ string, r io.Reader) (io.Reader, error) { return r, nil }
 	for {
-		b = bytes.TrimLeft(b, " \t\r\n")
-		var end string
-		switch {
-		case bytes.HasPrefix(b, []byte("<?")):
-			end = "?>"
-		case bytes.HasPrefix(b, []byte("<!--")):
-			end = "-->"
-		case bytes.HasPrefix(b, []byte("<!")):
-			end = ">"
-		case bytes.HasPrefix(b, []byte("<")):
-			name := b[1:]
-			i := bytes.IndexAny(name, " \t\r\n/>")
-			if i < 0 {
-				return "" // the name may go on beyond the prefix
-			}
-			name = name[:i]
-			if i := bytes.LastIndexByte(name, ':'); i >= 0 {
-				name = name[i+1:]
-			}
-			return string(name)
-		default:
-			return ""
+		t, err := d.RawToken()
+		if err != nil {
+			return "", false
 		}
-		i := bytes.Index(b, []byte(end))
-		if i < 0 {
-			return ""
+		if se, ok := t.(xml.StartElement); ok {
+			// RawToken returns a start tag only when it is complete.
+			return se.Name.Local, true
 		}
-		b = b[i+len(end):]
 	}
+}
+
+// wideBOM reports whether b starts with a UTF-16 or UTF-32 byte order
+// mark. The proxy reads no playlist in these encodings, and the checks
+// of Detect and Unsupported would not see a playlist in them.
+func wideBOM(b []byte) bool {
+	return bytes.HasPrefix(b, []byte("\xfe\xff")) || bytes.HasPrefix(b, []byte("\xff\xfe")) ||
+		bytes.HasPrefix(b, []byte("\x00\x00\xfe\xff"))
+}
+
+// xmlStart reports whether the body starting with prefix begins like
+// XML: '<' after an optional UTF-8 BOM and whitespace.
+func xmlStart(prefix []byte) bool {
+	body := bytes.TrimLeft(bytes.TrimPrefix(prefix, []byte(utf8BOM)), " \t\r\n\v\f")
+	return len(body) > 0 && body[0] == '<'
+}
+
+// XMLSniffLen is how much of a body Sniff reads when it starts like XML
+// but its root element does not start within the first SniffLen bytes
+// (a long comment or doctype).
+const XMLSniffLen = 64 << 10
+
+// Sniff returns the start of a body for Detect and Unsupported (spec
+// 3.1, 3.3): SniffLen bytes, or the whole body if it is shorter; if it
+// starts like XML and its root element does not start within them, up to
+// XMLSniffLen bytes. rest reads the whole body, the returned bytes
+// included; the caller reads from rest only. A read error other than
+// io.EOF is returned.
+func Sniff(body *bufio.Reader) (prefix []byte, rest *bufio.Reader, err error) {
+	prefix, err = body.Peek(SniffLen)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return nil, body, err
+	}
+	if len(prefix) < SniffLen || !xmlStart(prefix) {
+		return prefix, body, nil
+	}
+	if _, ok := xmlRoot(prefix); ok {
+		return prefix, body, nil
+	}
+	rest = bufio.NewReaderSize(body, XMLSniffLen)
+	prefix, err = rest.Peek(XMLSniffLen)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return nil, rest, err
+	}
+	return prefix, rest, nil
 }
 
 // urlList reports whether the first line of b that is neither blank nor a

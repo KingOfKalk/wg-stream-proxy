@@ -77,7 +77,8 @@ func TestRewriteGolden(t *testing.T) {
 
 // TestRewriteLiveChangesOnlyURLs checks the live golden case line by
 // line: only the BaseURL and UTCTiming lines change, plus the added
-// MPD-level BaseURL; everything else stays byte for byte.
+// MPD-level BaseURL, the comments go and the declaration is written
+// again; everything else stays byte for byte.
 func TestRewriteLiveChangesOnlyURLs(t *testing.T) {
 	in, err := os.ReadFile("testdata/live.mpd")
 	if err != nil {
@@ -88,6 +89,9 @@ func TestRewriteLiveChangesOnlyURLs(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := strings.NewReplacer(
+		`<?xml version="1.0" encoding="utf-8"?>`, `<?xml version="1.0" encoding="UTF-8"?>`,
+		`<!-- Made-up live channel modelled on a broadcaster's origin packager -->`, ``,
+		`<!-- 2026-11-19T11:59:00Z - 2026-11-19T12:00:00Z -->`, ``,
 		`profiles="urn:mpeg:dash:profile:isoff-live:2011,urn:com:dashif:dash264">`,
 		`profiles="urn:mpeg:dash:profile:isoff-live:2011,urn:com:dashif:dash264"><BaseURL>http://wsp.lan/p/n/{https://cdn.example.net/ch/}/</BaseURL>`,
 		`<BaseURL>dash/</BaseURL>`,
@@ -214,13 +218,13 @@ func TestRewrite(t *testing.T) {
 			want: mpdOpen + mpdBase + `<Period xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="urn:mpeg:dash:resolve-to-zero:2013" xlink:actuate="onLoad"/></MPD>`,
 		},
 		{
-			name: "unknown elements, namespaces, comments, CRLF and BOM unchanged",
+			name: "unknown elements, namespaces, CRLF and BOM unchanged, comments dropped, declaration rewritten",
 			in: "\ufeff<?xml version=\"1.0\"?>\r\n<!-- c -->\r\n" + `<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" xmlns:scte35="urn:scte:scte35:2014:xml+bin" type='static'>` + "\r\n" +
 				`<Period><EventStream schemeIdUri="urn:scte:scte35:2014:xml+bin"><Event id="1"><scte35:Signal><scte35:Binary>/DA=</scte35:Binary></scte35:Signal></Event></EventStream>` +
-				`<ProgramInformation moreInformationURL="https://info.example.com/"><Title>T &amp; <![CDATA[<x>]]></Title></ProgramInformation><?pi data?></Period></MPD>` + "\r\n",
-			want: "\ufeff<?xml version=\"1.0\"?>\r\n<!-- c -->\r\n" + `<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" xmlns:scte35="urn:scte:scte35:2014:xml+bin" type='static'>` + mpdBase + "\r\n" +
+				`<ProgramInformation moreInformationURL="https://info.example.com/"><Title>T &amp; &lt;x&gt;</Title></ProgramInformation><!-- d --></Period></MPD>` + "\r\n",
+			want: "\ufeff<?xml version=\"1.0\" encoding=\"UTF-8\"?>\r\n\r\n" + `<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" xmlns:scte35="urn:scte:scte35:2014:xml+bin" type='static'>` + mpdBase + "\r\n" +
 				`<Period><EventStream schemeIdUri="urn:scte:scte35:2014:xml+bin"><Event id="1"><scte35:Signal><scte35:Binary>/DA=</scte35:Binary></scte35:Signal></Event></EventStream>` +
-				`<ProgramInformation moreInformationURL="https://info.example.com/"><Title>T &amp; <![CDATA[<x>]]></Title></ProgramInformation><?pi data?></Period></MPD>` + "\r\n",
+				`<ProgramInformation moreInformationURL="https://info.example.com/"><Title>T &amp; &lt;x&gt;</Title></ProgramInformation></Period></MPD>` + "\r\n",
 		},
 		{
 			name: "attributes of rewritten elements re-escaped",
@@ -365,5 +369,18 @@ func TestRewriteManyAttributes(t *testing.T) {
 	dup := strings.Replace(b.String(), ` a199999="1"`, ` a0="2"`, 1)
 	if _, err := Rewrite([]byte(dup), testOptions(t)); !errors.Is(err, ErrInvalidManifest) {
 		t.Fatalf("duplicate among many attributes: %v", err)
+	}
+}
+
+func TestCount(t *testing.T) {
+	in, err := os.ReadFile("testdata/nested.mpd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p, a := Count(in); p != 1 || a != 2 {
+		t.Errorf("Count = %d periods, %d adaptation sets; want 1, 2", p, a)
+	}
+	if p, a := Count([]byte("<MPD><Period/><period><AdaptationSet/><x")); p != 2 || a != 1 {
+		t.Errorf("Count of a broken manifest = %d, %d", p, a)
 	}
 }

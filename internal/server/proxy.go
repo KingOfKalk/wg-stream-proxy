@@ -85,18 +85,21 @@ func (s *Server) handleResource(w http.ResponseWriter, r *http.Request) {
 // player built from a rewritten DASH manifest. Route and headers come
 // from the channel config, never from the URL.
 func (s *Server) handlePrefix(w http.ResponseWriter, r *http.Request) {
-	id, upstream, err := s.signer.ParsePrefix(r.URL)
+	pr, err := s.signer.ParsePrefix(r.URL)
 	if err != nil {
 		http.NotFound(w, r)
 		return
 	}
 	g := s.active()
-	ch, ok := g.channel(id)
+	ch, ok := g.channel(pr.Channel)
 	if !ok {
 		http.NotFound(w, r)
 		return
 	}
-	s.proxy(w, r, g, ch, fetch{upstream: upstream, configured: hls.Auto, other: metrics.KindSegment})
+	// Upstream redirects are followed only below the prefix: the client
+	// chooses the path, so an open redirect on the prefix host would
+	// otherwise reach any URL through the channel's route.
+	s.proxy(w, r, g, ch, fetch{upstream: pr.URL, configured: hls.Auto, other: metrics.KindSegment, redirect: pr.Below})
 }
 
 // channel returns the enabled channel with the given id.
@@ -122,6 +125,9 @@ type fetch struct {
 	// errorClips: a failure is answered with an error clip instead of an
 	// HTTP error (spec 3.4).
 	errorClips bool
+	// redirect, if set, is route.Request.Redirect: which redirects are
+	// followed (prefix-signed resources, spec 4.1).
+	redirect func(*url.URL) bool
 }
 
 // kind returns the metrics kind of the request until the response type
@@ -164,7 +170,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request, g *generation, ch
 	defer func() { s.requestFinished(rec.finish(r, ch, rq)) }()
 	client := r.Header
 	for refetch := false; ; refetch = true {
-		resp, err := rt.Fetch(ctx, route.Request{URL: f.upstream, Header: ch.Header(), Client: client, ICY: f.icy, Trace: &rec.trace})
+		resp, err := rt.Fetch(ctx, route.Request{URL: f.upstream, Header: ch.Header(), Client: client, ICY: f.icy, Trace: &rec.trace, Redirect: f.redirect})
 		if err != nil {
 			s.fail(w, r, g, ch, f, err, rq.FetchError)
 			return
@@ -212,8 +218,11 @@ func (s *Server) respond(w http.ResponseWriter, r *http.Request, g *generation, 
 		// be HLS or DASH (spec 3.1 steps 2.3, 2.4), and no channel may pipe
 		// a playlist the proxy does not rewrite (spec 3.3). A HEAD request
 		// closes the upstream body unread (spec 3.4); it sends no URLs.
-		prefix, err := body.Peek(hls.SniffLen)
-		if err != nil && !errors.Is(err, io.EOF) {
+		// XML without its root element in the first bytes is read
+		// further (hls.Sniff).
+		prefix, rest, err := hls.Sniff(body)
+		body = rest
+		if err != nil {
 			rq.Response(resp.StatusCode)
 			s.fail(w, r, g, ch, f, err, rq.Error)
 			return false
@@ -316,8 +325,11 @@ func (s *Server) rewrite(w http.ResponseWriter, r *http.Request, g *generation, 
 		// hls and dash errors never contain URLs from the playlist.
 		clip := f.clip(nil)
 		msg, reason := "playlist rejected", route.ReasonOther
-		if errors.Is(err, dash.ErrDRM) {
+		switch {
+		case errors.Is(err, dash.ErrDRM):
 			msg, reason = "DRM manifest refused", route.ReasonDRM
+		case errors.Is(err, dash.ErrTooLarge), errors.Is(err, hls.ErrPlaylistTooLarge):
+			reason = route.ReasonSize
 		}
 		s.log.Warn(msg, withClip([]any{"channel", ch.ID(), "url", route.LogURL(final.String()), "error", err}, clip)...)
 		rq.Error(string(reason))

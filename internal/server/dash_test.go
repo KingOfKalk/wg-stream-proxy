@@ -395,3 +395,59 @@ func TestDASHMetricsKind(t *testing.T) {
 	compareMetrics(t, e.metrics.Gatherer(), "wsp_upstream_requests_total", requestsHead,
 		`wsp_upstream_requests_total{channel="missing",code="404",kind="playlist"} 1`)
 }
+
+// TestPrefixRedirects: a prefix-signed request follows upstream
+// redirects only below its prefix (spec 4.1), so an open redirect on the
+// prefix host does not make the proxy fetch arbitrary URLs.
+func TestPrefixRedirects(t *testing.T) {
+	e := newDirectEnv(t, allowLoopback, dashTOML)
+	otherHost := strings.Replace(e.upURL, "127.0.0.1", "localhost", 1)
+	e.up.add("/cdn/ch1/dash/a.m4s", file{location: "/cdn/ch1/dash/b/c.m4s"})
+	e.up.add("/cdn/ch1/dash/b/c.m4s", file{ctype: "video/mp4", body: "inside"})
+	e.up.add("/cdn/ch1/dash/up.m4s", file{location: "/cdn/secret.txt"})
+	e.up.add("/cdn/ch1/dash/host.m4s", file{location: otherHost + "/cdn/ch1/dash/b/c.m4s"})
+	e.up.add("/cdn/ch1/dash/query.m4s", file{location: "/cdn/ch1/dash/b/c.m4s?x=1"})
+	e.up.add("/cdn/secret.txt", file{ctype: "text/plain", body: "outside"})
+	p, err := e.signer.PrefixPath("news", e.upURL+"/cdn/ch1/dash/", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r, b := e.get(t, p+"a.m4s", nil); r.StatusCode != http.StatusOK || b != "inside" {
+		t.Errorf("redirect below the prefix: status %d, body %q", r.StatusCode, b)
+	}
+	for _, name := range []string{"up.m4s", "host.m4s", "query.m4s"} {
+		if r, b := e.get(t, p+name, nil); r.StatusCode != http.StatusBadGateway || strings.Contains(b, "outside") || strings.Contains(b, "inside") {
+			t.Errorf("redirect of %s: status %d, body %q; want 502", name, r.StatusCode, b)
+		}
+	}
+	if n := len(e.up.requestsFor("/cdn/secret.txt")); n != 0 {
+		t.Errorf("refused redirect target requested %d times", n)
+	}
+	if n := len(e.up.requestsFor("/cdn/ch1/dash/b/c.m4s")); n != 1 {
+		t.Errorf("redirect target requested %d times, want 1", n)
+	}
+	compareMetrics(t, e.metrics.Gatherer(), "wsp_upstream_errors_total", errorsHead,
+		`wsp_upstream_errors_total{channel="news",reason="redirects"} 3`)
+	// /r/ resources and /c/ still follow any redirect.
+	if r, b := e.get(t, e.signer.Path("news", e.upURL+"/cdn/ch1/dash/up.m4s"), nil); r.StatusCode != http.StatusOK || b != "outside" {
+		t.Errorf("/r/ redirect: status %d, body %q", r.StatusCode, b)
+	}
+}
+
+// TestDASHOutputLimit: a manifest that would grow beyond the rewriter's
+// output limit fails with 502, reason size.
+func TestDASHOutputLimit(t *testing.T) {
+	e := newDirectEnv(t, allowLoopback, dashTOML)
+	var b strings.Builder
+	b.WriteString(`<MPD><BaseURL>` + e.upURL + `/` + strings.Repeat("d/", 1500) + `</BaseURL><Period><SegmentList>`)
+	for range 1000 {
+		b.WriteString(`<SegmentURL media="../a"/>`)
+	}
+	b.WriteString(`</SegmentList></Period></MPD>`)
+	e.up.add("/other.mpd", file{ctype: "application/dash+xml", body: b.String()})
+	if resp, _ := e.get(t, "/c/other.mpd", nil); resp.StatusCode != http.StatusBadGateway {
+		t.Errorf("status %d, want 502", resp.StatusCode)
+	}
+	compareMetrics(t, e.metrics.Gatherer(), "wsp_upstream_errors_total", errorsHead,
+		`wsp_upstream_errors_total{channel="other",reason="size"} 1`)
+}

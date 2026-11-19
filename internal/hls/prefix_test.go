@@ -62,7 +62,7 @@ func TestPrefixSignatureIsNotAResourceSignature(t *testing.T) {
 	r := s.Path(testChannel, testPrefix)
 	parts := strings.Split(r, "/")
 	forged := "/p/" + testChannel + "/" + parts[3] + "/n/" + parts[4] + "/seg.m4s"
-	if _, _, err := s.ParsePrefix(prefixRequest(t, forged)); !errors.Is(err, ErrInvalidResource) {
+	if _, err := s.ParsePrefix(prefixRequest(t, forged)); !errors.Is(err, ErrInvalidResource) {
 		t.Errorf("a /r/ signature verified as prefix signature: %v", err)
 	}
 	p := mustPrefixPath(t, s, testChannel, testPrefix, false)
@@ -134,7 +134,8 @@ func TestParsePrefix(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ch, up, err := s.ParsePrefix(prefixRequest(t, tt.target))
+			pr, err := s.ParsePrefix(prefixRequest(t, tt.target))
+			ch, up := pr.Channel, pr.URL
 			if err != nil {
 				t.Fatalf("ParsePrefix(%q): %v", tt.target, err)
 			}
@@ -183,6 +184,13 @@ func TestParsePrefixEscapes(t *testing.T) {
 		{"empty path", n},
 		{"no path", strings.TrimSuffix(n, "/")},
 		{"double encoded dot dot", n + "%252e%252e/x.m4s"},
+		{"dot dot with trailing space", n + "..%20/x.m4s"},
+		{"dot dot with trailing space and dot", n + "..%20./x.m4s"},
+		{"three dots", n + ".../x.m4s"},
+		{"dot space dot", n + ".%20./x.m4s"},
+		{"overlong UTF-8 dot dot", n + "%c0%ae%c0%ae/x.m4s"},
+		{"encoded non-ASCII", n + "a%e4.m4s"},
+		{"encoded UTF-8", n + "a%c3%a4.m4s"},
 		{"encoded NUL", n + "a%00.m4s"},
 		{"encoded newline", n + "a%0A.m4s"},
 		{"encoded DEL", n + "a%7f.m4s"},
@@ -214,7 +222,8 @@ func TestParsePrefixEscapes(t *testing.T) {
 			if err != nil {
 				return // the HTTP server rejects it before any handler
 			}
-			ch, up, err := s.ParsePrefix(u)
+			pr, err := s.ParsePrefix(u)
+			ch, up := pr.Channel, pr.URL
 			if !errors.Is(err, ErrInvalidResource) {
 				t.Fatalf("ParsePrefix(%q) = %q, %q, %v; want ErrInvalidResource", tt.target, ch, up, err)
 			}
@@ -229,7 +238,8 @@ func TestParsePrefixRoundTripStaysBelowPrefix(t *testing.T) {
 	s := mustSigner(t, testKey)
 	for _, prefix := range []string{testPrefix, "http://cdn.example.com/", "http://[2001:db8::1]:8080/a%2Fb/"} {
 		p := mustPrefixPath(t, s, testChannel, prefix, true)
-		ch, up, err := s.ParsePrefix(prefixRequest(t, p+"x/y.m4s?z=1"))
+		pr, err := s.ParsePrefix(prefixRequest(t, p+"x/y.m4s?z=1"))
+		ch, up := pr.Channel, pr.URL
 		if err != nil {
 			t.Fatalf("ParsePrefix: %v", err)
 		}
@@ -248,6 +258,7 @@ func FuzzParsePrefix(f *testing.F) {
 	for _, s := range []string{
 		"seg-1.m4s", "a/b/c.m4s", "../x", "%2e%2e/x", "a%2Fb", "a//b", "seg.m4s?a=1", "..;/x",
 		"x/%2E./y", "News-video=1067600-1077053775557.dash", "a%25%32%65", "?", "a/.",
+		"..%20/x", "...", "%c0%ae%c0%ae/x", ".%20.",
 	} {
 		f.Add(s, false)
 		f.Add(s, true)
@@ -259,7 +270,8 @@ func FuzzParsePrefix(f *testing.F) {
 		if err != nil {
 			return
 		}
-		ch, up, err := s.ParsePrefix(u)
+		pr, err := s.ParsePrefix(u)
+		ch, up := pr.Channel, pr.URL
 		if err != nil {
 			if !errors.Is(err, ErrInvalidResource) {
 				t.Fatalf("error %v does not wrap ErrInvalidResource", err)
@@ -285,15 +297,63 @@ func FuzzParsePrefix(f *testing.F) {
 		}
 		for seg := range strings.SplitSeq(below, "/") {
 			name, _, _ := strings.Cut(seg, ";")
-			if name == "" || name == "." || name == ".." {
+			if strings.TrimRight(name, ". ") == "" {
 				t.Fatalf("upstream %q: segment %q in decoded path %q", up, seg, pu.Path)
 			}
 		}
 		if strings.ContainsAny(pu.Path, "\\%") {
 			t.Fatalf("upstream %q: backslash or double encoding", up)
 		}
+		for i := 0; i < len(pu.Path); i++ {
+			if pu.Path[i] >= 0x80 {
+				t.Fatalf("upstream %q: non-ASCII byte in the decoded path", up)
+			}
+		}
 		if !query && strings.Contains(up, "?") {
 			t.Fatalf("upstream %q has a query without mode q", up)
 		}
 	})
+}
+
+// TestPrefixBelow checks the redirect rule of spec 4.1: a prefix-signed
+// request follows only redirects whose target is a valid request below
+// the same prefix.
+func TestPrefixBelow(t *testing.T) {
+	s := mustSigner(t, testKey)
+	tests := []struct {
+		target string
+		query  bool
+		want   bool
+	}{
+		{testPrefix + "b.m4s", false, true},
+		{testPrefix + "sub/b.m4s", false, true},
+		{testPrefix + "b.m4s#frag", false, true},
+		{testPrefix + "b.m4s?x=1", true, true},
+		{testPrefix + "b.m4s?x=1", false, false},
+		{testPrefix + "b.m4s?", false, false},
+		{testPrefix, false, false},
+		{testPrefix + "a//b.m4s", false, false},
+		{testPrefix + "%2e%2e/b.m4s", false, false},
+		{testPrefix + "a%2Fb.m4s", false, false},
+		{"https://cdn.example.com:8443/live/ch1/other/b.m4s", false, false},
+		{"https://cdn.example.com:8443/live/ch1/dashx/b.m4s", false, false},
+		{"https://cdn.example.com/live/ch1/dash/b.m4s", false, false},
+		{"http://cdn.example.com:8443/live/ch1/dash/b.m4s", false, false},
+		{"https://evil.example.com:8443/live/ch1/dash/b.m4s", false, false},
+		{"https://user@cdn.example.com:8443/live/ch1/dash/b.m4s", false, false},
+	}
+	for _, tt := range tests {
+		p := mustPrefixPath(t, s, testChannel, testPrefix, tt.query)
+		pr, err := s.ParsePrefix(prefixRequest(t, p+"a.m4s"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		u, err := url.Parse(tt.target)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := pr.Below(u); got != tt.want {
+			t.Errorf("Below(%q) with query %v = %v, want %v", tt.target, tt.query, got, tt.want)
+		}
+	}
 }

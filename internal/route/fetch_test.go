@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -604,5 +605,51 @@ func TestFetchErrorReducesURL(t *testing.T) {
 	}
 	if got := Classify(err); got != ReasonConnect {
 		t.Errorf("Classify = %q, want %q", got, ReasonConnect)
+	}
+}
+
+// TestFetchRedirectCheck: Request.Redirect refuses a redirect before it
+// is followed (prefix-signed /p/ resources, spec 4.1).
+func TestFetchRedirectCheck(t *testing.T) {
+	ch := make(chan string, 4)
+	r, _, _ := newFixture(t, func(w http.ResponseWriter, r *http.Request) {
+		ch <- r.Host + r.URL.Path
+		switch r.URL.Path {
+		case "/dir/a":
+			http.Redirect(w, r, "/dir/b?x=1", http.StatusFound)
+		case "/dir/out":
+			http.Redirect(w, r, "http://other.example.net/dir/c?token=secret", http.StatusFound)
+		default:
+			_, _ = io.WriteString(w, "ok")
+		}
+	})
+	var asked []string
+	below := func(u *url.URL) bool {
+		asked = append(asked, u.String())
+		return u.Host == "cdn.example.com"
+	}
+	if body := readClose(t, mustFetch(t, r, Request{URL: "http://cdn.example.com/dir/a", Redirect: below})); body != "ok" {
+		t.Errorf("allowed redirect: body %q", body)
+	}
+	if len(asked) != 1 || asked[0] != "http://cdn.example.com/dir/b?x=1" {
+		t.Errorf("Redirect asked for %v", asked)
+	}
+	_, err := r.Fetch(context.Background(), Request{URL: "http://cdn.example.com/dir/out", Redirect: below})
+	if !errors.Is(err, ErrRedirectRefused) {
+		t.Fatalf("Fetch error = %v, want ErrRedirectRefused", err)
+	}
+	if got := Classify(err); got != ReasonRedirects {
+		t.Errorf("Classify = %q, want %q", got, ReasonRedirects)
+	}
+	if strings.Contains(err.Error(), "secret") || strings.Contains(err.Error(), "other.example") {
+		t.Errorf("error leaks the Location: %v", err)
+	}
+	close(ch)
+	var hosts []string
+	for h := range ch {
+		hosts = append(hosts, h)
+	}
+	if want := []string{"cdn.example.com/dir/a", "cdn.example.com/dir/b", "cdn.example.com/dir/out"}; !slices.Equal(hosts, want) {
+		t.Errorf("upstream requests %v, want %v", hosts, want)
 	}
 }

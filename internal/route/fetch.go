@@ -36,6 +36,8 @@ var (
 	ErrHeaderTimeout = errors.New("route: response header timeout")
 	// ErrReadTimeout: no body data within read_timeout.
 	ErrReadTimeout = errors.New("route: body read timeout")
+	// ErrRedirectRefused: Request.Redirect refused a redirect target.
+	ErrRedirectRefused = errors.New("route: redirect target not allowed")
 
 	errInvalidURL  = errors.New("route: invalid upstream URL")
 	errBadRedirect = errors.New("route: invalid redirect location")
@@ -63,6 +65,11 @@ type Request struct {
 	// Trace, if set, records where the time of the request goes (debug
 	// log, spec 8); nil records nothing.
 	Trace *Trace
+	// Redirect, if set, reports whether a redirect to the resolved
+	// target is followed; if not, Fetch fails with ErrRedirectRefused.
+	// Prefix-signed resources (spec 4.1) only follow redirects below
+	// their prefix. nil follows every redirect.
+	Redirect func(*url.URL) bool
 }
 
 // Error is an upstream request error. Its URL has no query string,
@@ -157,6 +164,9 @@ func (r *Route) follow(ctx context.Context, t http.RoundTripper, u *url.URL, req
 			return nil, u, fmt.Errorf("%w: scheme %q", errBadRedirect, next.Scheme)
 		case len(next.String()) > MaxURLLen:
 			return nil, u, ErrURLTooLong
+		case req.Redirect != nil && !req.Redirect(next):
+			// The target is not logged: it may carry tokens.
+			return nil, u, ErrRedirectRefused
 		}
 		req.Trace.redirected()
 		u = next

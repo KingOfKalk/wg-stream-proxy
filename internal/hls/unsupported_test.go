@@ -3,6 +3,8 @@
 package hls
 
 import (
+	"bufio"
+	"io"
 	"strings"
 	"testing"
 )
@@ -81,8 +83,19 @@ func TestUnsupported(t *testing.T) {
 		{"other xml root", "application/xml", `<?xml version="1.0"?><tt xmlns="http://www.w3.org/ns/ttml">`, Auto, ""},
 		{"html page", "text/html", "<!DOCTYPE html>\n<html><body><a href=\"http://x.example/\">x</a>", Auto, ""},
 		{"root name is a prefix only", "", "<MPDX>", Auto, ""},
-		{"unterminated declaration", "", "<?xml version=\"1.0\"", Auto, ""},
-		{"unterminated comment", "", "<!-- <MPD>", Auto, ""},
+		{"unterminated declaration", "", "<?xml version=\"1.0\"", Auto, "unknown"},
+		{"unterminated comment", "", "<!-- <MPD>", Auto, "unknown"},
+		{"not XML after <", "text/plain", "<<<", Auto, "unknown"},
+		{"doctype with internal subset", "text/xml", `<?xml version="1.0"?><!DOCTYPE MPD [<!ENTITY a "b">]><MPD type="static">`, Raw, "dash"},
+		{"doctype with internal subset, asx", "", `<!DOCTYPE asx [<!ENTITY a ">">]><asx>`, Auto, "asx"},
+		{"root after a long comment", "application/octet-stream", "<!--" + strings.Repeat("x", 1000) + "--><MPD>", Raw, "dash"},
+		{"root beyond the prefix", "application/octet-stream", "<!--" + strings.Repeat("x", 1000), Auto, "unknown"},
+		{"declared latin-1", "", `<?xml version="1.0" encoding="ISO-8859-1"?><playlist>`, Auto, "xspf"},
+		{"utf-16le", "text/xml", "\xff\xfe<\x00M\x00P\x00D\x00>\x00", Auto, "unknown"},
+		{"utf-16be", "", "\xfe\xff\x00<\x00M\x00P\x00D", Auto, "unknown"},
+		{"utf-32le", "", "\xff\xfe\x00\x00<\x00\x00\x00", Raw, "unknown"},
+		{"utf-32be", "", "\x00\x00\xfe\xff\x00\x00\x00<", Auto, "unknown"},
+		{"utf-16 m3u", "audio/mpeg", "\xff\xfeh\x00t\x00t\x00p\x00:\x00/\x00/\x00", Raw, "unknown"},
 
 		// Media and other resources stream.
 		{"mpeg-ts", "video/mp2t", ts, Auto, ""},
@@ -127,11 +140,12 @@ func FuzzUnsupported(f *testing.F) {
 	for _, s := range []string{
 		"[playlist]\nFile1=http://a.example/\n", "http://a.example/\n", "#EXTM3U\n", "# c\n//a.example/x\n",
 		"<?xml version=\"1.0\"?><!-- c --><MPD>", "<!DOCTYPE asx><asx>", "\x47\x40\x00\x10", "ID3\x04", "",
+		"<!DOCTYPE MPD [<!ENTITY a \">\">]><MPD>", "\xff\xfe<\x00M\x00", "<!--" + strings.Repeat("x", 600),
 	} {
 		f.Add("", []byte(s), uint8(Auto))
 		f.Add("audio/x-scpls", []byte(s), uint8(Raw))
 	}
-	formats := map[string]bool{"": true, "pls": true, "m3u": true, "dash": true, "xspf": true, "asx": true}
+	formats := map[string]bool{"": true, "pls": true, "m3u": true, "dash": true, "xspf": true, "asx": true, "unknown": true}
 	f.Fuzz(func(t *testing.T, contentType string, prefix []byte, configured uint8) {
 		typ := Type(configured % 3)
 		got := Unsupported(contentType, prefix, typ)
@@ -142,4 +156,46 @@ func FuzzUnsupported(f *testing.F) {
 			t.Fatalf("configured hls refused as %q", got)
 		}
 	})
+}
+
+// TestSniff reads a longer start of bodies that begin like XML without a
+// root element in the first SniffLen bytes (spec 3.1, 3.3).
+func TestSniff(t *testing.T) {
+	longComment := "<!--" + strings.Repeat("x", 1000) + "-->"
+	tests := []struct {
+		name, body string
+		want       int // length of the prefix
+		typ        Type
+		format     string
+	}{
+		{"media", strings.Repeat("\x47", 2000), SniffLen, Raw, ""},
+		{"short body", "<MPD/>", 6, DASH, "dash"},
+		{"root in the first bytes", "<MPD>" + strings.Repeat(" ", 2000), SniffLen, DASH, "dash"},
+		{"root after a long comment", longComment + "<MPD>" + strings.Repeat(" ", 2000), len(longComment) + 2005, DASH, "dash"},
+		{"root after a long comment, short body", longComment + "<MPD/>", len(longComment) + 6, DASH, "dash"},
+		{"no root within XMLSniffLen", "<!--" + strings.Repeat("x", 2*XMLSniffLen), XMLSniffLen, Raw, "unknown"},
+		{"html after a long comment", longComment + "<html>" + strings.Repeat(" ", 2000), len(longComment) + 2006, Raw, ""},
+		{"long comment, long body", longComment + "<MPD>" + strings.Repeat(" ", 2*XMLSniffLen), XMLSniffLen, DASH, "dash"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			prefix, rest, err := Sniff(bufio.NewReaderSize(strings.NewReader(tt.body), SniffLen))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(prefix) != tt.want {
+				t.Errorf("prefix of %d bytes, want %d", len(prefix), tt.want)
+			}
+			if typ := Detect("", prefix, Auto); typ != tt.typ {
+				t.Errorf("Detect = %v, want %v", typ, tt.typ)
+			}
+			if f := Unsupported("", prefix, Auto); f != tt.format {
+				t.Errorf("Unsupported = %q, want %q", f, tt.format)
+			}
+			b, err := io.ReadAll(rest)
+			if err != nil || string(b) != tt.body {
+				t.Errorf("rest of the body changed: %d bytes, %v", len(b), err)
+			}
+		})
+	}
 }

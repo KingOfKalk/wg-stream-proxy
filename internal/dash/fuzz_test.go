@@ -27,7 +27,7 @@ func checkRewritten(t *testing.T, out []byte) {
 	depth, rootBase := 0, false
 	var base *strings.Builder
 	for {
-		tok, _, _, err := z.next()
+		tok, raw, _, err := z.next()
 		if errors.Is(err, io.EOF) {
 			break
 		}
@@ -40,29 +40,41 @@ func checkRewritten(t *testing.T, out []byte) {
 			ln := strings.ToLower(tok.Name.Local)
 			scheme, _ := attr(tok.Attr, "schemeiduri")
 			switch {
-			case removedElements[ln], ln == "supplementalproperty" && chainingSchemes[strings.TrimSpace(scheme)]:
+			case removedElements[ln], ln == "supplementalproperty" && chainingSchemes[lowerTrim(scheme)]:
 				t.Fatalf("output has %s:\n%s", tok.Name.Local, out)
 			case ln == "baseurl":
 				base = &strings.Builder{}
 				if depth == 2 {
 					rootBase = true
 				}
-			case ln == "utctiming" && !directTiming[strings.TrimSpace(scheme)]:
+			case (ln == "eventstream" || ln == "inbandeventstream") && !keptEvent(tok.Attr):
+				t.Fatalf("output has %s %q", tok.Name.Local, scheme)
+			case ln == "utctiming" && !directTiming[lowerTrim(scheme)]:
 				if v, _ := attr(tok.Attr, "value"); scheme != schemeHTTPISO || v != testTime {
 					t.Fatalf("UTCTiming %q %q not served by the proxy", scheme, v)
 				}
 			}
 			for _, a := range tok.Attr {
-				if !containsString(refAttrs[ln], strings.ToLower(a.Name.Local)) {
+				an := strings.ToLower(a.Name.Local)
+				if ln == "baseurl" && !baseURLAttrs[an] && a.Name.Space != "xmlns" && an != "xmlns" {
+					t.Fatalf("BaseURL keeps attribute %s", a.Name.Local)
+				}
+				if !isRefAttr(ln, tok.Attr, an) {
 					continue
 				}
 				v, err := cleanURL(a.Value)
 				if err != nil {
 					t.Fatal(err)
 				}
-				if !plain(v) && !strings.HasPrefix(v, proxyPrefix) {
+				if (!plain(v) || fontDownload(ln, tok.Attr)) && !strings.HasPrefix(v, proxyPrefix) {
 					t.Fatalf("%s %s=%q is neither plain nor a prefix URL", tok.Name.Local, a.Name.Local, v)
 				}
+			}
+		case xml.Comment:
+			t.Fatalf("output has a comment")
+		case xml.ProcInst:
+			if string(raw) != xmlDecl {
+				t.Fatalf("output has processing instruction %q", raw)
 			}
 		case xml.CharData:
 			if base != nil {
@@ -103,6 +115,10 @@ func FuzzRewrite(f *testing.F) {
 		`<MPD><BaseURL>../a/</BaseURL><Period><BaseURL/><AdaptationSet><SegmentList><SegmentURL media="//b.example/s/1.m4s"/></SegmentList></AdaptationSet></Period></MPD>`,
 		`<MPD><Location>https://a.example/m.mpd</Location><UTCTiming schemeIdUri="urn:mpeg:dash:utc:ntp:2014" value="ntp.example"/><Period/></MPD>`,
 		`<mpd:MPD xmlns:mpd="urn:x"><mpd:Period><mpd:BaseURL>x/</mpd:BaseURL></mpd:Period></mpd:MPD>`,
+		`<?xml version="1.0"?><MPD><!---><BaseURL>https://e.example/</BaseURL>--><Period/></MPD>`,
+		`<MPD><Period><EventStream schemeIdUri="urn:mpeg:dash:event:callback:2015"><Event messageData="https://e.example/"/></EventStream>` +
+			`<AdaptationSet><InbandEventStream schemeIdUri="urn:scte:scte35:2013:bin"/><SupplementalProperty schemeIdUri="urn:dvb:dash:fontdownload:2014" dvb:url="f.woff"/></AdaptationSet></Period></MPD>`,
+		`<MPD><BaseURL byteRange="$base$" serviceLocation="a">a/</BaseURL><Period/></MPD>`,
 	} {
 		f.Add([]byte(s))
 	}

@@ -77,6 +77,8 @@ func (s Step) describeFormat() string {
 		return "raw stream"
 	case FormatICY:
 		return "raw stream (ICY)"
+	case FormatDASH:
+		return fmt.Sprintf("DASH manifest, %s, %s", plural(s.Periods, "period"), plural(s.AdaptationSets, "adaptation set"))
 	case FormatRefused:
 		return "refused: " + s.Refused + " playlist"
 	}
