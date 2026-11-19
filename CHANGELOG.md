@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.4.0](https://github.com/KingOfKalk/wg-stream-proxy/compare/v0.3.0...v0.4.0) (2026-11-19)
+
+
+### Features
+
+* **cli:** probe command to test a URL through a route ([#123](https://github.com/KingOfKalk/wg-stream-proxy/issues/123)) ([e10db21](https://github.com/KingOfKalk/wg-stream-proxy/commit/e10db21b807333b199d99fc635566f98925e6583))
+* **dash:** MPEG-DASH channels without DRM ([#124](https://github.com/KingOfKalk/wg-stream-proxy/issues/124)) ([9c67233](https://github.com/KingOfKalk/wg-stream-proxy/commit/9c672332109a20664d911f5cebb691fcc42da308))
+* **epg:** fetch, filter and merge EPG sources through routes ([#126](https://github.com/KingOfKalk/wg-stream-proxy/issues/126)) ([9eca21e](https://github.com/KingOfKalk/wg-stream-proxy/commit/9eca21ecf304cc9090d7e41cab684da79855e623))
+
+
+### Performance Improvements
+
+* **tunnel:** retry tunnel DNS every 0.25s until the first answer after a start ([#128](https://github.com/KingOfKalk/wg-stream-proxy/issues/128)) ([402f9e1](https://github.com/KingOfKalk/wg-stream-proxy/commit/402f9e14c393a8d4686adac1b39c7212609136c6))
+
 ## [0.3.0](https://github.com/KingOfKalk/wg-stream-proxy/compare/v0.2.1...v0.3.0) (2026-11-19)
 
 
