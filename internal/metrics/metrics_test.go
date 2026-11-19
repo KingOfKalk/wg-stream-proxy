@@ -3,10 +3,12 @@
 package metrics
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -257,6 +259,58 @@ wsp_error_clips_total{clip="channel-not-available"} 1
 wsp_error_clips_total{clip="tunnel-unreachable"} 2
 `
 	if err := testutil.GatherAndCompare(m.Gatherer(), strings.NewReader(want), "wsp_error_clips_total"); err != nil {
+		t.Error(err)
+	}
+}
+
+func TestEPGCollector(t *testing.T) {
+	var sources []EPGSource
+	m := New(Options{EPG: func() []EPGSource { return sources }})
+	names := []string{"wsp_epg_fetches_total", "wsp_epg_fetch_duration_seconds", "wsp_epg_source_bytes", "wsp_epg_filtered_bytes", "wsp_epg_last_success_timestamp_seconds"}
+	if err := testutil.GatherAndCompare(m.Gatherer(), strings.NewReader(""), names...); err != nil {
+		t.Error(err)
+	}
+	sources = []EPGSource{
+		{Name: "gr", Fetches: map[string]uint64{"ok": 3, "timeout": 1}, Duration: 1500 * time.Millisecond, Bytes: 16000000, FilteredBytes: 700000, Updated: time.Unix(1700000000, 0)},
+		{Name: "de", Fetches: map[string]uint64{"status": 2}, Duration: time.Second},
+	}
+	want := `
+# HELP wsp_epg_fetch_duration_seconds Time of the last fetch of an EPG source, download and filter.
+# TYPE wsp_epg_fetch_duration_seconds gauge
+wsp_epg_fetch_duration_seconds{source="de"} 1
+wsp_epg_fetch_duration_seconds{source="gr"} 1.5
+# HELP wsp_epg_filtered_bytes Size of what the proxy keeps of the EPG source copy in use; 0 without a copy.
+# TYPE wsp_epg_filtered_bytes gauge
+wsp_epg_filtered_bytes{source="de"} 0
+wsp_epg_filtered_bytes{source="gr"} 700000
+# HELP wsp_epg_last_success_timestamp_seconds Time the EPG source copy in use was fetched, 0 without a copy.
+# TYPE wsp_epg_last_success_timestamp_seconds gauge
+wsp_epg_last_success_timestamp_seconds{source="de"} 0
+wsp_epg_last_success_timestamp_seconds{source="gr"} 1.7e+09
+# HELP wsp_epg_source_bytes XML size of the EPG source copy in use, before filtering (after decompression); 0 without a copy.
+# TYPE wsp_epg_source_bytes gauge
+wsp_epg_source_bytes{source="de"} 0
+wsp_epg_source_bytes{source="gr"} 1.6e+07
+`
+	if err := testutil.GatherAndCompare(m.Gatherer(), strings.NewReader(want), names[1:]...); err != nil {
+		t.Error(err)
+	}
+	fetches := "# HELP wsp_epg_fetches_total Fetches of an EPG source by result: ok or why it failed.\n# TYPE wsp_epg_fetches_total counter\n"
+	for _, src := range []string{"de", "gr"} {
+		for _, r := range slices.Sorted(slices.Values(EPGResults)) {
+			n := 0
+			switch src + " " + r {
+			case "gr ok":
+				n = 3
+			case "gr timeout":
+				n = 1
+			case "de status":
+				n = 2
+			}
+			fetches += fmt.Sprintf("wsp_epg_fetches_total{result=%q,source=%q} %d\n", r, src, n)
+		}
+	}
+	if err := testutil.GatherAndCompare(m.Gatherer(), strings.NewReader(fetches), names[0]); err != nil {
 		t.Error(err)
 	}
 }

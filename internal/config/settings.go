@@ -26,6 +26,10 @@ const (
 	defaultIdleTimeout    = 60 * time.Minute
 	defaultWatchInterval  = 2 * time.Second
 	defaultPlaylistSize   = 8 << 20
+	defaultEPGRefresh     = 6 * time.Hour
+	// minEPGRefresh keeps a typo ("6s") from fetching a large EPG file
+	// over and over.
+	minEPGRefresh = time.Minute
 )
 
 // MaxPlaylistSizeLimit is the upper bound of [upstream] max_playlist_size
@@ -189,7 +193,67 @@ func (c *Config) applySettings(raw rawConfig, src string, ov Overrides, routes m
 		}
 		c.epgURL = *raw.EPG.URL
 	}
+	c.epgRefresh = duration("epg.refresh", raw.EPG.Refresh, defaultEPGRefresh)
+	if c.epgRefresh > 0 && c.epgRefresh < minEPGRefresh {
+		fail("epg.refresh", src, "must be at least %s", minEPGRefresh)
+	}
+	c.epgSources = epgSources(raw.EPG.Source, routes, fail, src)
+	if c.epgURL != "" && len(raw.EPG.Source) > 0 {
+		fail("epg.url", src, "not allowed together with [[epg.source]]: use url (the player fetches the EPG) or sources (the proxy serves it)")
+	}
 	return errs
+}
+
+// epgSources validates the [[epg.source]] entries (spec 5.3): unique
+// valid names, absolute http(s) URLs of at most 4096 bytes, an existing
+// route (omitted: direct).
+func epgSources(raw []rawEPGSource, routes map[string]bool, fail func(key, origin, format string, args ...any), src string) []EPGSource {
+	var out []EPGSource
+	seen := map[string]bool{}
+	for i, rs := range raw {
+		key := fmt.Sprintf("epg.source %d", i+1)
+		s := EPGSource{Route: RouteDirect}
+		ok := true
+		switch {
+		case rs.Name == nil || *rs.Name == "":
+			fail(key, src, "name: required")
+			ok = false
+		case !ValidName(*rs.Name):
+			fail(key, src, "name: invalid name %q: use [a-z0-9-], 1-%d characters", *rs.Name, maxNameLen)
+			ok = false
+		case seen[*rs.Name]:
+			fail(key, src, "name: duplicate source %q", *rs.Name)
+			ok = false
+		default:
+			s.Name = *rs.Name
+			seen[s.Name] = true
+			key += fmt.Sprintf(" (%q)", s.Name)
+		}
+		switch {
+		case rs.URL == nil || *rs.URL == "":
+			fail(key, src, "url: required")
+			ok = false
+		case len(*rs.URL) > maxURLLen:
+			fail(key, src, "url: longer than %d bytes", maxURLLen)
+			ok = false
+		case !httpURL(*rs.URL):
+			fail(key, src, "url: must be an absolute http(s) URL")
+			ok = false
+		default:
+			s.URL = *rs.URL
+		}
+		if rs.Tunnel != nil {
+			if !routes[*rs.Tunnel] {
+				fail(key, src, "tunnel: unknown tunnel %q", *rs.Tunnel)
+				ok = false
+			}
+			s.Route = *rs.Tunnel
+		}
+		if ok {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // sizeUnits are the units of a size value, as multipliers.

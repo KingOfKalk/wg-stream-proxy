@@ -24,6 +24,7 @@ import (
 
 	"github.com/KingOfKalk/wg-stream-proxy/internal/clips"
 	"github.com/KingOfKalk/wg-stream-proxy/internal/config"
+	"github.com/KingOfKalk/wg-stream-proxy/internal/epg"
 	"github.com/KingOfKalk/wg-stream-proxy/internal/hls"
 	"github.com/KingOfKalk/wg-stream-proxy/internal/metrics"
 	"github.com/KingOfKalk/wg-stream-proxy/internal/playlist"
@@ -52,6 +53,8 @@ type Options struct {
 	// RecentRequests is how many finished /c/, /r/ and /p/ requests are kept
 	// for /debug/requests; 0 keeps none (no debug listener).
 	RecentRequests int
+	// EPGClock schedules the EPG refreshes; nil means the system clock.
+	EPGClock epg.Clock
 }
 
 // Server serves the player-facing HTTP interface. It is an http.Handler.
@@ -68,6 +71,9 @@ type Server struct {
 	// recent keeps the latest finished requests for /debug/requests;
 	// nil while the debug listener is off.
 	recent *recentRequests
+	// epg fetches, filters and merges the EPG sources (spec 7.1); Run
+	// runs it.
+	epg *epg.Guide
 
 	// mu guards closed and the Add calls of handlers, so drain does not
 	// race with a request that is just starting.
@@ -100,12 +106,15 @@ func New(opts Options) (*Server, error) {
 	if opts.RecentRequests > 0 {
 		s.recent = newRecentRequests(opts.RecentRequests)
 	}
-	s.swap(opts.Config, opts.Routes)
 	if s.log == nil {
 		s.log = slog.New(slog.DiscardHandler)
 	}
+	s.epg = epg.NewGuide(epg.GuideOptions{Fetch: s.fetchEPG, Clock: opts.EPGClock, Logger: s.log})
+	s.swap(opts.Config, opts.Routes)
 	// GET patterns match HEAD too.
 	s.mux.HandleFunc("GET /playlist.m3u8", s.handlePlaylist)
+	s.mux.HandleFunc("GET "+epgPath, s.handleEPG)
+	s.mux.HandleFunc("GET "+epgPath+".gz", s.handleEPG)
 	s.mux.HandleFunc("GET /c/{id}", s.handleChannel)
 	s.mux.HandleFunc("GET /r/", s.handleResource)
 	s.mux.HandleFunc("GET /p/", s.handlePrefix)
@@ -126,9 +135,12 @@ type generation struct {
 	routes *route.Set
 }
 
-// swap makes cfg and routes the active generation.
+// swap makes cfg and routes the active generation and applies the EPG
+// settings of cfg.
 func (s *Server) swap(cfg *config.Config, routes *route.Set) {
 	s.gen.Store(&generation{cfg: cfg, routes: routes})
+	// After the store: the guide fetches through the active routes.
+	s.epg.Update(cfg)
 }
 
 // active returns the active generation.
@@ -165,9 +177,10 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 // handlePlaylist serves the channel list (spec 6).
 func (s *Server) handlePlaylist(w http.ResponseWriter, r *http.Request) {
 	cfg := s.active().cfg
+	base := baseURL(cfg.PublicBaseURL(), r)
 	body := playlist.Render(cfg.Channels(), playlist.Options{
-		BaseURL: baseURL(cfg.PublicBaseURL(), r),
-		EPGURL:  cfg.EPGURL(),
+		BaseURL: base,
+		EPGURL:  epgLink(cfg, base),
 		Group:   r.URL.Query().Get("group"),
 	})
 	w.Header().Set("Content-Type", playlist.ContentType)

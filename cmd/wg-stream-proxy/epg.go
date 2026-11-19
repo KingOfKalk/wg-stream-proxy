@@ -4,6 +4,8 @@ package main
 
 import (
 	"context"
+	"errors"
+	"flag"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -11,7 +13,6 @@ import (
 	"github.com/KingOfKalk/wg-stream-proxy/internal/config"
 	"github.com/KingOfKalk/wg-stream-proxy/internal/epg"
 	"github.com/KingOfKalk/wg-stream-proxy/internal/importer"
-	"github.com/KingOfKalk/wg-stream-proxy/internal/route"
 )
 
 // matchCandidates is the number of suggestions per channel in epg match:
@@ -19,7 +20,8 @@ import (
 const matchCandidates = 3
 
 // epgCmd runs epg ids and epg match (spec 7.2). Both take the config
-// flags of serve and check and print to stdout; nothing is written.
+// flags of serve and check plus --source and print to stdout; nothing is
+// written.
 func (c *cli) epgCmd(args []string) int {
 	if len(args) > 0 && isHelpFlag(args[0]) {
 		return c.help("epg")
@@ -29,18 +31,31 @@ func (c *cli) epgCmd(args []string) int {
 		return 2
 	}
 	sub := args[0]
-	opts, code, ok := c.parseFlags("epg "+sub, args[1:])
-	if !ok {
-		return code
+	fs, fp, source := epgFlagSet("epg " + sub)
+	fs.SetOutput(c.stderr)
+	if err := fs.Parse(args[1:]); err != nil {
+		return c.parseFailed("epg "+sub, err)
+	}
+	if fs.NArg() > 0 {
+		_, _ = fmt.Fprintf(c.stderr, "wg-stream-proxy: epg %s: unexpected arguments: %s\n", sub, strings.Join(fs.Args(), " "))
+		return 2
+	}
+	opts, err := config.Resolve(*fp, c.env)
+	if err != nil {
+		c.printErrors(err)
+		return 1
 	}
 	cfg, err := config.Load(opts)
 	if err != nil {
 		c.printErrors(err)
 		return 1
 	}
-	x, err := c.loadEPG(cfg)
+	x, err := c.loadEPG(cfg, *source)
 	if err != nil {
 		_, _ = fmt.Fprintf(c.stderr, "wg-stream-proxy: epg %s: %v\n", sub, err)
+		if errors.Is(err, errUnknownSource) {
+			return 2
+		}
 		return 1
 	}
 	var out string
@@ -56,24 +71,62 @@ func (c *cli) epgCmd(args []string) int {
 	return 0
 }
 
-// loadEPG downloads [epg] url over the direct route (spec 7.2): with the
-// private-range guard (and the allow_private exceptions of direct) and
-// the [upstream] timeouts.
-func (c *cli) loadEPG(cfg *config.Config) (*epg.Index, error) {
-	if cfg.EPGURL() == "" {
-		return nil, fmt.Errorf("no [epg] url in config.toml")
+// epgFlagSet returns the flags of epg ids and epg match: the config
+// flags and --source.
+func epgFlagSet(name string) (*flag.FlagSet, *config.Flags, *string) {
+	fs, fp := configFlagSet(name)
+	source := fs.String("source", "", "name of the [[epg.source]] to read (default: the first one, or [epg] url)")
+	return fs, fp, source
+}
+
+// errUnknownSource: --source names no [[epg.source]].
+var errUnknownSource = errors.New("unknown EPG source")
+
+// epgSource returns the EPG file the commands read (spec 7.2): the
+// [[epg.source]] named name, by default the first one, or [epg] url
+// over the direct route.
+func epgSource(cfg *config.Config, name string) (config.EPGSource, error) {
+	sources := cfg.EPGSources()
+	if name != "" {
+		names := make([]string, len(sources))
+		for i, s := range sources {
+			if s.Name == name {
+				return s, nil
+			}
+			names[i] = s.Name
+		}
+		if len(names) == 0 {
+			return config.EPGSource{}, fmt.Errorf("%w %q: config.toml has no [[epg.source]]", errUnknownSource, name)
+		}
+		return config.EPGSource{}, fmt.Errorf("%w %q (want one of: %s)", errUnknownSource, name, strings.Join(names, ", "))
 	}
-	allow := cfg.AllowPrivate()
-	for name, prefixes := range c.allowPrivate {
-		allow[name] = append(allow[name], prefixes...)
+	switch {
+	case len(sources) > 0:
+		return sources[0], nil
+	case cfg.EPGURL() != "":
+		return config.EPGSource{URL: cfg.EPGURL(), Route: config.RouteDirect}, nil
 	}
-	set, err := route.NewSet(route.Host(), nil, route.Options{Upstream: cfg.Upstream(), AllowPrivate: allow})
+	return config.EPGSource{}, errors.New("no [[epg.source]] or [epg] url in config.toml")
+}
+
+// loadEPG downloads the EPG file of epgSource through its route (spec
+// 7.2): with the private-range guard (and the allow_private exceptions of
+// the route) and the [upstream] timeouts. A tunnel route starts its
+// tunnel in this process.
+func (c *cli) loadEPG(cfg *config.Config, name string) (*epg.Index, error) {
+	src, err := epgSource(cfg, name)
 	if err != nil {
 		return nil, err
 	}
-	defer set.CloseIdleConnections()
-	direct, _ := set.Route(config.RouteDirect)
-	return epg.Download(c.context(), direct, cfg.EPGURL())
+	if src.Route != config.RouteDirect {
+		_, _ = fmt.Fprintf(c.stderr, "wg-stream-proxy: epg: source %q uses tunnel %q: starting it in this process; a running proxy with the same tunnel key may stall until its next handshake\n", src.Name, src.Route)
+	}
+	rt, closeRoute, err := c.standaloneRoute(cfg, src.Route)
+	if err != nil {
+		return nil, err
+	}
+	defer closeRoute()
+	return epg.Download(c.context(), rt, src.URL)
 }
 
 // context returns the command context.

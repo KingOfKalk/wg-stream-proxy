@@ -62,10 +62,14 @@ func Load(opts Options) (*Config, error) {
 		tunnelSet[t.Name] = true
 	}
 	l := &channelLoader{
-		configDir: p.ConfigDir,
-		tunnels:   tunnelSet,
-		userAgent: c.upstream.UserAgent,
-		ids:       map[string]string{},
+		configDir:  p.ConfigDir,
+		tunnels:    tunnelSet,
+		userAgent:  c.upstream.UserAgent,
+		epgSources: map[string]bool{},
+		ids:        map[string]string{},
+	}
+	for _, s := range c.epgSources {
+		l.epgSources[s.Name] = true
 	}
 	files, ferrs := listFiles(filepath.Join(p.ConfigDir, "channels.d"), ".toml")
 	errs = append(errs, ferrs...)
@@ -94,6 +98,7 @@ func Load(opts Options) (*Config, error) {
 		}
 		l.loadFile(f, data)
 	}
+	l.checkEPGSources()
 	errs = append(errs, l.errs...)
 
 	if len(errs) > 0 {

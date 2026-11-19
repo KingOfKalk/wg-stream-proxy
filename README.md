@@ -9,6 +9,7 @@ Route each IPTV and internet radio channel through its own userspace WireGuard t
 - Radio: raw and ICY (Icecast, Shoutcast) audio streams.
 - Per-channel routes: each channel uses a named WireGuard tunnel or `direct`; several tunnels run in one process. A channel never silently bypasses its tunnel, and a private-range guard blocks the LAN and the host.
 - One M3U channel list (`/playlist.m3u8`) with EPG link, logos and Kodi directives; `import` converts an existing M3U file.
+- One XMLTV guide (`/epg.xml.gz`): EPG sources fetched through their routes, filtered to your channels and merged.
 - Metrics: Prometheus metrics on `/metrics` including timing histograms, and a Grafana dashboard.
 - Error clips: an HLS channel that fails to start shows a short clip with the reason ("Tunnel not reachable", "Channel not available", …) instead of a failure dialog.
 - Debug: profiles, recent requests, tunnel state and cool-down on a separate listener (off by default).

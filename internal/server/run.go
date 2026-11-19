@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/KingOfKalk/wg-stream-proxy/internal/config"
+	"github.com/KingOfKalk/wg-stream-proxy/internal/epg"
 	"github.com/KingOfKalk/wg-stream-proxy/internal/hls"
 	"github.com/KingOfKalk/wg-stream-proxy/internal/metrics"
 	"github.com/KingOfKalk/wg-stream-proxy/internal/route"
@@ -68,6 +69,8 @@ type RunOptions struct {
 	// TunnelClock is the tunnels' clock (idle close, start timeouts); nil
 	// means the system clock. Tests inject a manual one.
 	TunnelClock tunnel.Clock
+	// EPGClock schedules the EPG refreshes; nil means the system clock.
+	EPGClock epg.Clock
 }
 
 // Run loads the tunnels of the configuration (none is started before
@@ -111,17 +114,24 @@ func Run(ctx context.Context, opts RunOptions) (err error) {
 	}
 
 	// One registry for the process: reloads keep it. The tunnel gauges
-	// read the current tunnels at scrape time (mgr is set before the first
-	// scrape); the manager reports every tunnel start to it.
-	var mgr *tunnel.Manager
-	met := metrics.New(metrics.Options{Tunnels: func() []metrics.Tunnel {
-		ts := mgr.Tunnels()
-		out := make([]metrics.Tunnel, len(ts))
-		for i, t := range ts {
-			out[i] = t
-		}
-		return out
-	}})
+	// and EPG metrics read the current state at scrape time (mgr and srv
+	// are set before the first scrape); the manager reports every tunnel
+	// start to it.
+	var (
+		mgr *tunnel.Manager
+		srv *Server
+	)
+	met := metrics.New(metrics.Options{
+		Tunnels: func() []metrics.Tunnel {
+			ts := mgr.Tunnels()
+			out := make([]metrics.Tunnel, len(ts))
+			for i, t := range ts {
+				out[i] = t
+			}
+			return out
+		},
+		EPG: func() []metrics.EPGSource { return srv.epgStatus() },
+	})
 	mgr, err = tunnel.Load(cfg.Tunnels(), tunnel.Options{
 		ConnectTimeout: cfg.Upstream().ConnectTimeout,
 		IdleTimeout:    cfg.IdleTimeout(),
@@ -146,9 +156,9 @@ func Run(ctx context.Context, opts RunOptions) (err error) {
 	if opts.DebugListener != nil {
 		recent = recentRequestsSize
 	}
-	srv, err := New(Options{
+	srv, err = New(Options{
 		Config: cfg, Routes: routes, Signer: opts.Signer, Logger: log, Version: opts.Version, Metrics: met,
-		RecentRequests: recent,
+		RecentRequests: recent, EPGClock: opts.EPGClock,
 	})
 	if err != nil {
 		return err
@@ -156,6 +166,10 @@ func Run(ctx context.Context, opts RunOptions) (err error) {
 	st.srv = srv
 	// Runs before the tunnels close, after all handlers returned.
 	defer st.closeIdleConnections()
+	// The EPG refreshes (spec 7.1); stopped before the tunnels drain, so
+	// a fetch in progress does not hold a tunnel up.
+	stopEPG := startEPG(srv.epg)
+	defer stopEPG()
 
 	hs := &http.Server{
 		Handler:           srv,
@@ -211,6 +225,7 @@ func Run(ctx context.Context, opts RunOptions) (err error) {
 	}
 	srv.drain()
 	// The tunnels drain within the same deadline, then close (spec 2.1).
+	stopEPG()
 	_ = mgr.Shutdown(time.Until(deadline))
 	log.Info("stopped")
 	return nil

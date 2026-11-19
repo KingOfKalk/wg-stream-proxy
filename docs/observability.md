@@ -24,6 +24,10 @@ The metrics in short (definitions in [spec 7.3](spec.md)):
 | `wsp_upstream_requests_total` | counter | `channel`, `kind`, `code` | Upstream status codes (`error`: no response) |
 | `wsp_upstream_errors_total` | counter | `channel`, `reason` | Why upstream requests fail |
 | `wsp_error_clips_total` | counter | `clip` | How often viewers saw an error clip instead of an HTTP error, and which one ([spec 3.4](spec.md)) |
+| `wsp_epg_fetches_total` | counter | `source`, `result` | EPG proxy mode ([spec 6.1](spec.md)): fetches of each source, `ok` or why they failed |
+| `wsp_epg_last_success_timestamp_seconds` | gauge | `source` | When was the EPG copy a source serves fetched? `0` without one |
+| `wsp_epg_fetch_duration_seconds` | gauge | `source` | How long did the last fetch (download and filter) take? |
+| `wsp_epg_source_bytes`, `wsp_epg_filtered_bytes` | gauge | `source` | XML size of the source copy before and after filtering |
 
 ## Prometheus
 
@@ -54,7 +58,7 @@ The dashboard expects the job name `wg-stream-proxy` (its `instance` variable li
 One scrape of a proxy with 6 channels (all `direct`), one configured tunnel and a few thousand requests returned 119 series: 75 `wsp_`, 35 `go_` and 9 `process_`. Each timing histogram series is 14 series (11 buckets, `+Inf`, sum, count), so the histograms dominate. At `15s` that is 5,760 samples per series and day, about 0.7 million samples or roughly 1 to 1.5 MB per day for 119 series (Prometheus needs [about 1 to 2 bytes per sample](https://prometheus.io/docs/prometheus/latest/storage/)); at `30s` half of it. Each further channel adds a handful of series (its `kind`, `code` and `reason` combinations), each further tunnel 16.
 
 - Retention: Prometheus keeps 15 days by default. For trends over months, start it with `--storage.tsdb.retention.time=180d`; the storage above stays small.
-- Cardinality is bounded by your config: `channel` by the channel ids, `tunnel` and `route` by the tunnel names plus `direct`; `kind`, `phase`, `reason`, `code` and `clip` have a few fixed values.
+- Cardinality is bounded by your config: `channel` by the channel ids, `tunnel` and `route` by the tunnel names plus `direct`, `source` by the `[[epg.source]]` names (14 series each); `kind`, `phase`, `reason`, `code`, `clip` and `result` have a few fixed values.
 - Counters and histograms start from zero when the proxy restarts; `rate()` and `increase()` handle the reset. Gauges are recomputed. Tunnels are idle after a restart until the first request, so `wsp_tunnel_up` is `0` then.
 - Tunnels start on demand and stop after `tunnels.idle_timeout`, so `wsp_tunnel_up == 0` is normal while nothing plays.
 
@@ -107,6 +111,19 @@ sum by (code) (rate(wsp_upstream_requests_total[5m]))
 sum by (channel, kind) (wsp_active_requests)
 ```
 
+EPG proxy mode ([spec 6.1](spec.md)): each source is fetched every `[epg] refresh` (default 6 h), so these change rarely.
+
+```promql
+# Age of the EPG copy each source serves, in seconds (grows past refresh while fetches fail)
+(time() - wsp_epg_last_success_timestamp_seconds) and (wsp_epg_last_success_timestamp_seconds > 0)
+
+# Failed EPG fetches per day, by source and result
+sum by (source, result) (increase(wsp_epg_fetches_total{result!="ok"}[1d]))
+
+# Share of a source the guide keeps
+wsp_epg_filtered_bytes / wsp_epg_source_bytes
+```
+
 ## Example alerting rules
 
 Examples to adapt, not defaults; thresholds depend on your streams. Load them through `rule_files` in `prometheus.yml`.
@@ -151,6 +168,16 @@ groups:
         for: 10m
         annotations:
           summary: "p95 first byte on route {{ $labels.route }} is above 5 s"
+
+      # The EPG copy of a source is older than twice the default refresh:
+      # its fetches fail and the guide serves the last good copy.
+      - alert: WgStreamProxyEPGStale
+        expr: |
+          (time() - wsp_epg_last_success_timestamp_seconds > 12 * 3600)
+          and (wsp_epg_last_success_timestamp_seconds > 0)
+        for: 30m
+        annotations:
+          summary: "EPG source {{ $labels.source }} has not been fetched for more than 12 h"
 ```
 
 ## Grafana dashboard
@@ -197,6 +224,7 @@ Variables (all with "All"): `instance` (single select, the instances of job `wg-
 | Upstream timing | p50 and p95 per route and phase, heatmap of the first byte | Is a route slow, and in DNS, connect, TLS or the upstream's first byte? Tunnel or provider? |
 | Channels | Active requests by channel and kind, requests by status code, errors by reason and error clips, failed share by channel | Which channel is watched, which one fails and why, and what did the viewer see? |
 | Process | Resident memory and heap, CPU, goroutines, GC pause time | Does the proxy fit the Raspberry Pi: growing memory or goroutines, CPU peaks? |
+| EPG | Age of the EPG copy per source | Does each `[[epg.source]]` still update, or does the guide serve an old copy? Empty in link mode |
 
 Reading hints:
 

@@ -45,7 +45,7 @@ func (c *cli) importM3U(args []string) int {
 			c.printErrors(err)
 			return 1
 		}
-		if opts.EPG, err = c.loadEPG(cfg); err != nil {
+		if opts.EPG, err = c.loadEPG(cfg, ""); err != nil {
 			_, _ = fmt.Fprintf(c.stderr, "wg-stream-proxy: import: --match-epg: %v\n", err)
 			return 1
 		}

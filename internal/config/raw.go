@@ -31,11 +31,20 @@ type rawConfig struct {
 		WatchInterval *string `toml:"watch_interval"`
 	} `toml:"reload"`
 	EPG struct {
-		URL *string `toml:"url"`
+		URL     *string        `toml:"url"`
+		Refresh *string        `toml:"refresh"`
+		Source  []rawEPGSource `toml:"source"`
 	} `toml:"epg"`
 	Debug struct {
 		Listen *string `toml:"listen"`
 	} `toml:"debug"`
+}
+
+// rawEPGSource is one [[epg.source]] of config.toml (spec 5.3).
+type rawEPGSource struct {
+	Name   *string `toml:"name"`
+	URL    *string `toml:"url"`
+	Tunnel *string `toml:"tunnel"`
 }
 
 type rawSettings struct {
@@ -88,10 +97,11 @@ type rawUpstream struct {
 }
 
 type rawPlaylist struct {
-	TVGID *string                      `toml:"tvg_id"`
-	Logo  *string                      `toml:"logo"`
-	Attrs map[string]string            `toml:"attrs"`
-	Extra map[string]map[string]string `toml:"extra"`
+	TVGID     *string                      `toml:"tvg_id"`
+	EPGSource *string                      `toml:"epg_source"`
+	Logo      *string                      `toml:"logo"`
+	Attrs     map[string]string            `toml:"attrs"`
+	Extra     map[string]map[string]string `toml:"extra"`
 }
 
 // goField matches the Go struct field part of go-toml type errors.

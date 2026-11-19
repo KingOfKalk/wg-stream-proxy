@@ -27,6 +27,7 @@ type layer struct {
 	typ     *UpstreamType
 	headers map[string]string // canonical names
 	tvgID   *string
+	epgSrc  *string
 	logo    *string
 	attrs   map[string]string
 	extra   map[string]map[string]string
@@ -37,10 +38,12 @@ type channelLoader struct {
 	configDir string
 	tunnels   map[string]bool
 	userAgent string
-	global    layer // channels.d/_defaults.toml
-	errs      []error
-	ids       map[string]string // id -> location of first use
-	channels  []Channel
+	// epgSources holds the names of the [[epg.source]] entries.
+	epgSources map[string]bool
+	global     layer // channels.d/_defaults.toml
+	errs       []error
+	ids        map[string]string // id -> location of first use
+	channels   []Channel
 }
 
 func (l *channelLoader) fail(prefix, format string, args ...any) {
@@ -196,6 +199,28 @@ func (l *channelLoader) loadFile(path string, data []byte) {
 	}
 }
 
+// checkEPGSources reports channels with the same tvg_id that name
+// different EPG sources (spec 5.4): the served guide has one <channel>
+// element per id, so it comes from one source.
+func (l *channelLoader) checkEPGSources() {
+	type first struct{ src, file, name string }
+	byID := map[string]first{}
+	for _, ch := range l.channels {
+		if ch.tvgID == "" || ch.epgSrc == "" {
+			continue
+		}
+		f, ok := byID[ch.tvgID]
+		switch {
+		case !ok:
+			byID[ch.tvgID] = first{ch.epgSrc, ch.file, ch.name}
+		case f.src != ch.epgSrc:
+			l.fail(fmt.Sprintf("%s: channel %q", ch.file, ch.name),
+				"playlist.epg_source: %q differs from %q of channel %q in %s with the same tvg_id %q",
+				ch.epgSrc, f.src, f.name, f.file, ch.tvgID)
+		}
+	}
+}
+
 // merge applies config.toml, then layers (global defaults, file defaults,
 // channel) in this order; the more specific layer wins, maps merge key by
 // key (spec 5.4). An empty map value removes the key set by a lower
@@ -214,6 +239,9 @@ func (l *channelLoader) merge(ch *Channel, layers ...layer) {
 		}
 		if ly.tvgID != nil {
 			ch.tvgID = *ly.tvgID
+		}
+		if ly.epgSrc != nil {
+			ch.epgSrc = *ly.epgSrc
 		}
 		if ly.logo != nil {
 			logo = *ly.logo
@@ -287,6 +315,15 @@ func (l *channelLoader) layer(prefix string, up rawUpstream, pl rawPlaylist) lay
 		fail("playlist.logo", "must not contain line breaks")
 	}
 	ly.tvgID, ly.logo = pl.TVGID, pl.Logo
+	if v := pl.EPGSource; v != nil {
+		// Empty: no source of its own, the first one that has the
+		// tvg_id (also over a lower layer's value).
+		if *v != "" && !l.epgSources[*v] {
+			fail("playlist.epg_source", "unknown EPG source %q (want the name of an [[epg.source]] in config.toml)", *v)
+		} else {
+			ly.epgSrc = v
+		}
+	}
 
 	ly.attrs = map[string]string{}
 	for _, k := range slices.Sorted(maps.Keys(pl.Attrs)) {

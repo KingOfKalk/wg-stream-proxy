@@ -27,7 +27,7 @@ var metricRef = regexp.MustCompile(`\b(?:wsp|go|process)_[A-Za-z0-9_:]+`)
 // "HISTOGRAM", "SUMMARY").
 func registryTypes(t *testing.T) map[string]string {
 	t.Helper()
-	m := New(Options{Tunnels: func() []Tunnel {
+	m := New(Options{EPG: func() []EPGSource { return []EPGSource{{Name: "gr"}} }, Tunnels: func() []Tunnel {
 		return []Tunnel{fakeTunnel{name: "gr", up: true, hs: time.Unix(1700000000, 0)}}
 	}})
 	m.ObserveTunnelStart("gr", time.Second)

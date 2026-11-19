@@ -68,6 +68,39 @@ Kodi's IPTV Simple Client reads the M3U playlist at startup, or by its "Auto ref
 
 Recommended: in the IPTV Simple Client settings (General or Advanced, depending on the Kodi version) set "Auto refresh mode" to "Repeated refresh" with a "Refresh interval" of 60 minutes. Disabling the cache is a side effect of auto refresh (see the README), which is fine for a playlist on the LAN. Without it, restart the add-on or Kodi to see new channels.
 
+## EPG in Kodi
+
+Two modes ([spec 6, 6.1](spec.md#61-epg-proxy-mode)):
+
+- Link mode, `[epg] url`: the channel list links the EPG file and Kodi downloads it itself, directly from the host, not through a tunnel.
+- Proxy mode, one or more `[[epg.source]]`: the proxy fetches each source through its route, keeps only the channels of your channel files (their `tvg_id`) and the programmes that have not ended, and serves one merged guide at `http://<pi>:2349/epg.xml.gz`; the channel list links it instead of the source. A real source of 263 channels and 9 days (about 16 MB of XML) shrinks to a few percent for 15 channels, so Kodi on the Raspberry Pi parses much less.
+
+```toml
+# config.toml
+[epg]
+refresh = "6h"                 # how often each source is fetched (default 6h)
+
+[[epg.source]]
+name = "gr"
+url = "https://epg.example.org/epg/epg.xml.gz"
+
+[[epg.source]]
+name = "de"
+url = "https://epg.example.net/guide.xml.gz"
+tunnel = "de"                  # fetched through the de tunnel
+
+# channels.d/greek.toml, per channel: only from this source
+[channel.playlist]
+tvg_id = "ertworld.example"
+epg_source = "gr"
+```
+
+- Without `epg_source` a channel's guide comes from the first source that has its `tvg_id`. Find the ids of a source with `wg-stream-proxy epg ids --source de`; `epg match --source de` suggests them per channel.
+- A source that fails keeps serving its last good copy (`epg source failed` in the log, `wsp_epg_last_success_timestamp_seconds` in the metrics); it is tried again after 10 minutes.
+- The guide is there once a source was fetched after the start (a few seconds); before that `/epg.xml.gz` answers `503`.
+- Kodi's IPTV Simple Client uses the `x-tvg-url` of the channel list only if its EPG settings have no XMLTV location; otherwise set "Location" to "Remote path" and "XMLTV URL" to `http://<pi>:2349/epg.xml.gz` ([README](https://github.com/kodi-pvr/pvr.iptvsimple/blob/Omega/README.md)). Its "Auto refresh mode" (see [Changes in Kodi](#changes-in-kodi)) reloads the XMLTV file together with the playlist; a guide that changes every few hours does not need it more often than the playlist.
+- After a reload that adds a channel or changes a `tvg_id` or `epg_source`, the proxy fetches its sources again at once; Kodi shows the change after it reads the guide again.
+
 ## Radio channels in Kodi
 
 Kodi's IPTV Simple Client puts a channel into its Radio section only if the `#EXTINF` line has `radio="true"`. Set it through `playlist.attrs`, for a whole channel file with a file default (see [`examples/config/channels.d/radio.toml`](../examples/config/channels.d/radio.toml)):

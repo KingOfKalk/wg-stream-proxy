@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("<tv><channel id=\"a\"><display-name><![CDATA[]]></display-name></channel></tv>")

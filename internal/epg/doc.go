@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-// Package epg downloads an XMLTV file and suggests EPG ids for channels
-// (spec 7.2: epg ids, epg match, import --match-epg). It reads only the
-// channel list of the file, not the programmes.
+// Package epg handles XMLTV files. It downloads one and suggests EPG ids
+// for channels (spec 7.2: epg ids, epg match, import --match-epg),
+// reading only the channel list. In EPG proxy mode (spec 6.1) Guide
+// fetches the [[epg.source]] files through their routes, Filter keeps the
+// configured channels and their programmes as a stream and writes them
+// again from the parsed tokens, and Merge builds the served guide.
 package epg
