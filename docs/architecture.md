@@ -191,8 +191,10 @@ flowchart TB
   (raw).
 - `/r/...`: signed resources found inside rewritten playlists:
   sub-playlists, segments, keys. Same route and headers as the channel.
-- Responses: playlists are rewritten, everything else (segments, keys,
-  raw streams) is piped with `io.Copy`.
+- Responses: HLS playlists are rewritten; other playlist formats (PLS,
+  plain M3U, DASH, XSPF, ASX) are refused with `502`, so the player never
+  gets upstream URLs (fail closed, spec 3.3); everything else (segments,
+  keys, raw streams) is piped with `io.Copy`.
 - The planes touch in four places: each request reads the *active*
   config, `/c/` and `/r/` use the signing key, each upstream dial goes
   through a route whose tunnel the lifecycle manager runs, and each
@@ -294,8 +296,9 @@ sequenceDiagram
 - `/r/` (spec 4): the signature binds the URL to the channel. A tampered
   URL, an unknown or a disabled channel gives `404`. Route and headers
   always come from the channel config, never from the URL.
-- Sub-playlists are detected and rewritten again; everything else
-  (segments, keys, init segments) is streamed unchanged. AES-128 keys are
+- Sub-playlists are detected and rewritten again; other playlist formats
+  are refused with `502` (spec 3.3); everything else (segments, keys,
+  init segments) is streamed unchanged. AES-128 keys are
   passed through; the player decrypts.
 - Status mapping (spec 3.4): upstream `2xx`/`4xx` pass through, `5xx` and
   connection errors give `502`, timeouts `504`.
@@ -331,7 +334,9 @@ sequenceDiagram
 ```
 
 - Raw passthrough (spec 3.3) covers radio and MPEG-TS: anything that is
-  not detected as HLS.
+  not detected as HLS. A playlist the proxy does not rewrite (PLS, plain
+  M3U, DASH, XSPF, ASX, or any playlist on a `raw` channel) is refused
+  with `502` instead: piped, it would send the player past the tunnel.
 - Shoutcast v1 servers answer `ICY 200 OK` instead of an HTTP status
   line; the route's connection wrapper fixes that before Go's HTTP parser
   reads it.
@@ -528,7 +533,7 @@ Requests go down the layers, responses travel back up.
 |---|---|---|---|
 | 1 HTTP | Routing of the paths, absolute base URL, `/logos/` from disk, `/healthz`; graceful shutdown waits for running handlers | `internal/server`, `internal/playlist` | 6, 7.1 |
 | 2 Generation | The immutable `generation`: one `config.Config` plus the `route.Set` built for it, in an `atomic.Pointer`. Every request takes it once and keeps it to its end | `internal/server`, `internal/config` | 5.6 |
-| 3 Content | `Server.proxy`: fetch through the channel's route, then `hls.Detect`; playlists go through `hls.Rewrite` with a `Signer.PathBuilder`, everything else through `stream` (`io.Copy` + flush). Status mapping, the `206` refetch | `internal/hls`, `internal/server` | 3.1-3.4, 4 |
+| 3 Content | `Server.proxy`: fetch through the channel's route, then `hls.Detect`; playlists go through `hls.Rewrite` with a `Signer.PathBuilder`, playlists `hls.Unsupported` names are refused with `502`, everything else goes through `stream` (`io.Copy` + flush). Status mapping, the `206` refetch | `internal/hls`, `internal/server` | 3.1-3.4, 4 |
 | 4 Routes | One `Route` per tunnel plus `direct`. `Fetch` applies the upstream header rules, redirects and timeouts; the route's `dial` resolves, runs `Guard.Check` and connects Happy-Eyeballs style. Two `http.Transport`s per route: the normal pool, and the ICY transport for `/c/` of raw and `auto` channels, which uses each connection for one request only | `internal/route` | 2.1, 3.3-3.5 |
 | 5 Tunnels | `tunnel.Manager` with one `Tunnel` per tunnel file: lazy start, idle close, drain, reload (`Apply`). `direct` is `route.Host()`: host resolver and dialer | `internal/tunnel`, `internal/tunnel/netstack`, `internal/config/wgquick` | 2.1, 5.5 |
 | 6 Host network | One UDP socket per running tunnel to its peer; plain TCP for `direct`. No TUN device, no routing table change | wireguard-go `conn` | 1.1, 2.1 |

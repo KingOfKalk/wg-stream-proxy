@@ -68,9 +68,9 @@ wg-stream-proxy
    2. `Content-Type` is `application/vnd.apple.mpegurl` or `application/x-mpegurl` (case-insensitive, parameters ignored): HLS.
    3. Body starts with `#EXTM3U` (after optional UTF-8 BOM and whitespace, within the first 512 bytes): HLS.
    4. Otherwise: raw.
-3. HLS: rewrite (3.2) and return. Raw: pipe (3.3).
+3. HLS: rewrite (3.2) and return. Raw: pipe (3.3), unless it is a playlist the proxy does not rewrite (refused, 3.3).
 
-Resources under `/r/` use the same detection (steps 2.2-2.4): playlists are rewritten, everything else is streamed with `io.Copy`.
+Resources under `/r/` use the same detection (steps 2.2-2.4): playlists are rewritten, playlists the proxy does not rewrite are refused (3.3), everything else is streamed with `io.Copy`.
 
 ### 3.2 HLS rewriting
 
@@ -90,6 +90,11 @@ Resources under `/r/` use the same detection (steps 2.2-2.4): playlists are rewr
 ### 3.3 Raw passthrough
 
 - Upstream body piped with `io.Copy` and flush; no size or total time limit.
+- Fail closed: a playlist the proxy does not rewrite is refused with `502` instead of piped, on `raw` and `auto` channels and `/r/` resources, because the player would fetch the URLs in it directly, past the tunnel. Checked on `GET` responses with a `2xx` status (`HEAD` and other statuses send no playlist); `hls` channels are always rewritten (3.2). Detected, after the HLS detection of 3.1:
+  - by `Content-Type` (case-insensitive, parameters ignored; not on `raw` channels, whose configured type overrides it): PLS `audio/x-scpls`, `audio/scpls`, `application/pls+xml`; M3U `audio/x-mpegurl`, `audio/mpegurl`; DASH `application/dash+xml`; XSPF `application/xspf+xml`; ASX `video/x-ms-asx`, `audio/x-ms-asx`, `video/x-ms-wvx`, `audio/x-ms-wax`;
+  - by the start of the body (first 512 bytes, after optional UTF-8 BOM and whitespace): `[playlist]` (PLS) or `[Reference]` (ASX reference file), case-insensitive; `#EXTM3U` (reaches this check only on `raw` channels); a first line that is neither blank nor a `#` comment and is an absolute URL (`scheme://`, scheme of two or more characters) or a scheme-relative one (`//`) without control characters (plain M3U); an XML root element `MPD`, `playlist` or `ASX` (case-insensitive, namespace prefix ignored, after XML declaration, comments and doctype).
+  - Media (MPEG-TS, fMP4, MP3, AAC, Ogg, ICY streams) matches none of these. A `warn` log line names channel, route, URL (8) and format (`pls`, `m3u`, `dash`, `xspf`, `asx`); metrics reason `unsupported` (7.3).
+  - Rewriting PLS and plain M3U (internet radio) is a possible later feature; DASH is planned for v0.4 (10).
 - Shoutcast v1 servers answer `ICY 200 OK`; the raw route's connection wrapper rewrites a leading `ICY ` status line to `HTTP/1.0 ` before Go's HTTP parser sees it.
   - Used for `/c/` requests of `raw` and `auto` channels (the type of `auto` is only known from the response; the wrapper leaves `HTTP/` responses unchanged). These connections are not reused (one request per connection); `hls` channels and `/r/` resources use the normal pool.
   - Only the first bytes of each connection are checked, so a connection carries one request: an ICY response has no length and ends with its connection, and a server may answer one port with ICY or HTTP per path. Over `https` the wrapper sees TLS records and changes nothing (Shoutcast v1 has no TLS).
@@ -364,16 +369,16 @@ The EPG commands (`epg ids`, `epg match`, `import --match-epg`) download `epg.ur
 - `tunnel_last_handshake_timestamp_seconds{tunnel}`: `0` while the tunnel is not running or has no handshake yet.
 - `active_requests{channel,kind}`: in-flight requests incl. open raw streams; `kind` = `playlist`, `segment`, `raw`.
 - `upstream_requests_total{channel,kind,code}`: `code` = upstream status, or `error`.
-- `upstream_errors_total{channel,reason}`: `reason` = `connect`, `timeout`, `guard`, `tls`, `redirects`, `size`, `other`.
+- `upstream_errors_total{channel,reason}`: `reason` = `connect`, `timeout`, `guard`, `tls`, `redirects`, `size`, `unsupported`, `other`.
 - `tunnel_start_seconds{tunnel}` (histogram): one observation per successful tunnel start, the time from the start request until the first handshake completed (device up included). Observed where the tunnel starts, once per start however many requests waited for it; a failed start is not observed (the start failure line, spec 8, logs it).
 - `upstream_phase_seconds{route,phase}` (histogram): where the time of the upstream requests of `/c/` and `/r/` goes, per route (`direct` or a tunnel name), `phase` = `dns` (host lookups), `connect` (connection setup, Happy-Eyeballs fallback included), `tls` (TLS handshakes), `first_byte` (start of the upstream request until the first response byte); the same definitions as the debug line (`dns`, `connect`, `tls`, `ttfb`, spec 8), without a tunnel start wait (that is `tunnel_start_seconds`).
 - Buckets of both histograms, in seconds: `0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 15` (classic histograms).
 
 Only `/c/` and `/r/` requests of enabled channels count; `channel` is the channel id, never a URL.
 
-- `kind`: `playlist` if the response is detected as a playlist (3.1), else `raw` for `/c/` and `segment` for `/r/`. Until the type is detected, and if it never is (error, non-`2xx` status), an `hls` channel and, without a configured type, an upstream path ending in `.m3u8` or `.m3u` count as `playlist`.
+- `kind`: `playlist` if the response is detected as a playlist (3.1) or refused as one (3.3), else `raw` for `/c/` and `segment` for `/r/`. Until the type is detected, and if it never is (error, non-`2xx` status), an `hls` channel and, without a configured type, an upstream path ending in `.m3u8` or `.m3u` count as `playlist`.
 - `upstream_requests_total` counts every upstream request, the refetch of a partial playlist (3.4) included.
-- `upstream_errors_total` counts failures before the response (with `code="error"`) and after it: playlist body or sniff read errors, a rejected playlist or a second `206` (`other`), a stream ended by an upstream error. Upstream statuses count only in `upstream_requests_total`.
+- `upstream_errors_total` counts failures before the response (with `code="error"`) and after it: playlist body or sniff read errors, a rejected playlist or a second `206` (`other`), a refused playlist format (`unsupported`, 3.3), a stream ended by an upstream error. Upstream statuses count only in `upstream_requests_total`.
 - A request the client gave up counts neither as error nor, if no response came, as upstream request.
 - Timing histograms: labels are the route or tunnel name and the phase only, never a channel or URL. They are collected for every `/c/` and `/r/` request at every log level and recorded when the request ends (a stream: when it closes). A request observes only the phases that happened: no `dns` for an IP literal or a pooled connection, no `connect` for a pooled connection, no `tls` for plain HTTP, no `first_byte` without a response; phases that failed (a refused connect, a failed handshake) count with their duration. `first_byte` is observed once per request, for the last upstream response (a refetch, 3.4, does not count twice). Requests the client gave up observe what happened before.
 
