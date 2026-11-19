@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.2.0](https://github.com/KingOfKalk/wg-stream-proxy/compare/v0.1.0...v0.2.0) (2026-11-19)
+
+
+### Features
+
+* **metrics:** timing histograms for tunnel starts and upstream phases ([#93](https://github.com/KingOfKalk/wg-stream-proxy/issues/93)) ([6701987](https://github.com/KingOfKalk/wg-stream-proxy/commit/6701987e7fc9824ee6de7871abdedf99e8bb530e))
+* **server:** optional debug endpoints for profiles and recent requests ([#94](https://github.com/KingOfKalk/wg-stream-proxy/issues/94)) ([b540523](https://github.com/KingOfKalk/wg-stream-proxy/commit/b540523fc5f368cc304105c02c9198e3d000e9f0))
+
+
+### Bug Fixes
+
+* **server:** answer debug requests only by IP or localhost (DNS rebinding) ([#96](https://github.com/KingOfKalk/wg-stream-proxy/issues/96)) ([9cc04a3](https://github.com/KingOfKalk/wg-stream-proxy/commit/9cc04a331f9958c20b09f44411f87d178341474d))
+
+
+### Documentation
+
+* **observability:** Grafana dashboard and Prometheus guide ([#98](https://github.com/KingOfKalk/wg-stream-proxy/issues/98)) ([b3ba0f5](https://github.com/KingOfKalk/wg-stream-proxy/commit/b3ba0f5c8e39c9fcbe5aba7ba1070824a0583ffe))
+* **spec:** reorder the roadmap: v0.2 Observability, v0.3 Experience, v0.4 Content ([#91](https://github.com/KingOfKalk/wg-stream-proxy/issues/91)) ([1927ab0](https://github.com/KingOfKalk/wg-stream-proxy/commit/1927ab026a7d5a76fccb1599da47cd11f236499e))
+
+
+### Tests
+
+* **server:** wait for the request to end in TestDebugTunnelsAndCooldown ([#100](https://github.com/KingOfKalk/wg-stream-proxy/issues/100)) ([29598a8](https://github.com/KingOfKalk/wg-stream-proxy/commit/29598a8121713f10f2a8db7323f5a1c7169c7bc9))
+
+
+### Continuous Integration
+
+* **player:** cache the ffmpeg packages and retry slow apt downloads ([#102](https://github.com/KingOfKalk/wg-stream-proxy/issues/102)) ([fbcbc9e](https://github.com/KingOfKalk/wg-stream-proxy/commit/fbcbc9e28369690e9949e0e281e58855d3f2bdcf))
+
 ## 0.1.0 (2026-11-18)
 
 
