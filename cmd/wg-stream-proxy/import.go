@@ -17,22 +17,13 @@ import (
 // may come before or after the file. The output goes to stdout, or to a
 // new file named by --out that is never overwritten.
 func (c *cli) importM3U(args []string) int {
-	fset := flag.NewFlagSet("import", flag.ContinueOnError)
-	fset.SetOutput(c.stderr)
-	var opts importer.Options
-	var out, configDir string
-	var matchEPG bool
-	fset.StringVar(&opts.Tunnel, "tunnel", "", "tunnel name or direct, written at the top of the channel file")
-	fset.StringVar(&out, "out", "", "write to this new file instead of stdout (never overwritten)")
-	fset.BoolVar(&matchEPG, "match-epg", false, "keep tvg_id only if the EPG (epg.url in config.toml) has it, else suggest the best match in a comment")
-	fset.StringVar(&configDir, "config-dir", "", "config directory for --match-epg (env "+config.EnvConfigDir+")")
-	files, err := parseInterspersed(fset, args)
+	flags := newImportFlags()
+	flags.fset.SetOutput(c.stderr)
+	files, err := parseInterspersed(flags.fset, args)
 	if err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return 0
-		}
-		return 2
+		return c.parseFailed("import", err)
 	}
+	opts, out, configDir, matchEPG := flags.opts, flags.out, flags.configDir, flags.matchEPG
 	if len(files) != 1 {
 		_, _ = fmt.Fprintln(c.stderr, "wg-stream-proxy: import: want exactly one M3U file")
 		return 2
