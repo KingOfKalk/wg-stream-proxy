@@ -30,8 +30,19 @@ var (
 )
 
 // startedTunnel returns a running tunnel to peer whose lookups use the
-// fake clock. Starting it sends no DNS query.
+// fake clock. Starting it sends no DNS query; its lookups retry like
+// those of a tunnel whose DNS servers answered before (no warm-up, see
+// freshTunnel).
 func startedTunnel(t *testing.T, peer *tunneltest.Peer) (*Tunnel, *testEnv) {
+	t.Helper()
+	tun, env := freshTunnel(t, peer)
+	tun.run.Load().dns.answered.Store(true)
+	return tun, env
+}
+
+// freshTunnel is startedTunnel before the first DNS answer since the
+// start: its lookups retry with the warm-up schedule.
+func freshTunnel(t *testing.T, peer *tunneltest.Peer) (*Tunnel, *testEnv) {
 	t.Helper()
 	m, env := newManager(t, peer.ClientTunnel(t, "gr"))
 	tun := mustTunnel(t, m, "gr")
@@ -160,6 +171,98 @@ func TestLookupAllQueriesLostEndsAtDeadline(t *testing.T) {
 	_, err := tun.LookupNetIP(ctx, "upstream.test")
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Errorf("err = %v, want context.DeadlineExceeded", err)
+	}
+}
+
+func TestLookupRetrySchedule(t *testing.T) {
+	warmup := slices.Repeat([]time.Duration{250 * time.Millisecond}, 32)
+	tests := []struct {
+		name string
+		// answered: a DNS server answered since the tunnel started.
+		answered bool
+		// delays are the times from one attempt to the next; sent[i] is
+		// the number of UDP queries attempt i sends to the two servers.
+		delays []time.Duration
+		sent   []int
+	}{
+		{
+			name:     "after the first answer",
+			answered: true,
+			delays:   []time.Duration{500 * time.Millisecond, time.Second, 2 * time.Second, 4 * time.Second, 4 * time.Second},
+			sent:     []int{2, 1, 1, 1, 1, 1},
+		},
+		{
+			// Every 0.25s to every server for 8s, then every 4s in turn.
+			name:   "before the first answer",
+			delays: append(slices.Clone(warmup), 4*time.Second, 4*time.Second),
+			sent:   append(slices.Repeat([]int{2}, 32), 1, 1, 1),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			peer := tunneltest.Start(t, twoServers)
+			peer.SetHost("upstream.test", upstream4)
+			tun, env := freshTunnel(t, peer)
+			if tt.answered {
+				tun.run.Load().dns.answered.Store(true)
+			}
+			peer.DropDNS(-1)
+
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			done := lookupAsync(ctx, tun, "upstream.test")
+			total := 0
+			for i, want := range tt.delays {
+				total += tt.sent[i]
+				peer.WaitDNS(t, total)
+				env.clock.waitArmed(t, want)
+				assertPending(t, done)
+				env.clock.advance(want)
+			}
+			total += tt.sent[len(tt.delays)]
+			peer.WaitDNS(t, total)
+			env.clock.waitTimers(1)
+			cancel()
+			if r := <-done; !errors.Is(r.err, context.Canceled) {
+				t.Errorf("err = %v, want context.Canceled", r.err)
+			}
+			if got := peer.DroppedDNS(); got != total {
+				t.Errorf("queries sent = %d, want %d", got, total)
+			}
+		})
+	}
+}
+
+func TestLookupWarmupEndsWithFirstAnswer(t *testing.T) {
+	peer := tunneltest.Start(t, twoServers)
+	peer.SetHost("upstream.test", upstream4)
+	peer.SetHost("other.test", upstream4)
+	tun, env := freshTunnel(t, peer)
+	// The first attempt and the first retry, to both servers, are lost,
+	// as while a VPN DNS server is silent after the handshake.
+	peer.DropDNS(4)
+
+	done := lookupAsync(t.Context(), tun, "upstream.test")
+	for sent := 2; sent <= 4; sent += 2 {
+		peer.WaitDNS(t, sent)
+		env.clock.waitArmed(t, 250*time.Millisecond)
+		assertPending(t, done)
+		env.clock.advance(250 * time.Millisecond)
+	}
+	if r := <-done; r.err != nil || !slices.Equal(r.addrs, []netip.Addr{upstream4}) {
+		t.Fatalf("LookupNetIP = %v, %v; want [%v]", r.addrs, r.err, upstream4)
+	}
+
+	// The DNS path works now: the next lookup retries after 0.5s.
+	peer.WaitDNS(t, 6)
+	peer.DropDNS(2)
+	done = lookupAsync(t.Context(), tun, "other.test")
+	peer.WaitDNS(t, 8)
+	env.clock.waitArmed(t, 500*time.Millisecond)
+	assertPending(t, done)
+	env.clock.advance(500 * time.Millisecond)
+	if r := <-done; r.err != nil || !slices.Equal(r.addrs, []netip.Addr{upstream4}) {
+		t.Errorf("LookupNetIP = %v, %v; want [%v]", r.addrs, r.err, upstream4)
 	}
 }
 

@@ -8,7 +8,8 @@
 // A *Tunnel is the route layer's way to the internet through the tunnel:
 // LookupNetIP resolves host names with the tunnel's DNS servers inside the
 // netstack (own client: first query to every server, retries after 0.5s,
-// answers cached while the device runs), DialContext connects to
+// every 0.25s until the first answer after a start, answers cached while
+// the device runs), DialContext connects to
 // resolved addresses. Both start the device if needed; concurrent first
 // users share one start.
 //

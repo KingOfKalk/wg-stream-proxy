@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/net/dns/dnsmessage"
@@ -30,6 +31,16 @@ import (
 var dnsRetryDelays = []time.Duration{500 * time.Millisecond, time.Second, 2 * time.Second, 4 * time.Second}
 
 const (
+	// dnsWarmupDelay is the time from one attempt to the next, each to
+	// every server, until a server has answered since the tunnel started
+	// (spec 2.1): the DNS servers of some VPN providers do not answer for
+	// several seconds after the handshake of a key that was idle for a
+	// while (#127), and the first answer should come soon after they do.
+	dnsWarmupDelay = 250 * time.Millisecond
+	// dnsWarmupRounds bounds the warm-up attempts of a query (8s); then
+	// it goes on with the last of dnsRetryDelays.
+	dnsWarmupRounds = 32
+
 	// dnsUDPSize is the EDNS(0) UDP payload size offered to servers, as in
 	// Go's resolver.
 	dnsUDPSize = 1232
@@ -64,6 +75,10 @@ type dnsClient struct {
 	// the tunnel has.
 	types []dnsmessage.Type
 	clock Clock
+	// answered: a server answered a query of this client, so the DNS
+	// path through the tunnel works. Until then queries retry with
+	// dnsWarmupDelay.
+	answered atomic.Bool
 
 	// ctx ends when the client closes; it bounds every flight.
 	ctx     context.Context
@@ -330,6 +345,9 @@ type dnsQuery struct {
 	// rounds counts the rounds sent: the first asks every server, each
 	// retry the next server in turn.
 	rounds int
+	// backoff counts the rounds sent after a server had answered, the
+	// index into dnsRetryDelays.
+	backoff int
 	// next is the index of the server for the next retry; failed marks
 	// the servers that answered with an error.
 	next     int
@@ -368,7 +386,8 @@ type dnsExchange struct {
 
 // exchange asks the questions name/types, in parallel. The first round
 // of a query goes to every server at once; the first valid answer wins.
-// A query is repeated on the next server after dnsRetryDelays, at once
+// A query is repeated on the next server after dnsRetryDelays (before
+// the first answer since the start: see send), at once
 // after an error answer to a retry, and over TCP after a truncated
 // answer, until ctx ends. A server that answered with an error is not
 // asked again; a query fails once every server did. It returns the
@@ -402,6 +421,11 @@ func (c *dnsClient) exchange(ctx context.Context, host string, name dnsmessage.N
 				l.send(r.query)
 			}
 		case r := <-l.results:
+			if r.err == nil {
+				// Any answer, also an error or a late one: the DNS path
+				// works.
+				c.answered.Store(true)
+			}
 			q := l.queries[r.query]
 			if q.done {
 				// A late answer to an earlier attempt.
@@ -457,7 +481,9 @@ func canonicalName(host string) string {
 
 // send sends the next round of query i and arms its retry timer: the
 // first round to every server, later ones to the next server that has
-// not answered with an error. Earlier attempts keep listening: a late
+// not answered with an error. Until a server has answered since the
+// start, the first dnsWarmupRounds rounds go to every such server and
+// retry after dnsWarmupDelay. Earlier attempts keep listening: a late
 // answer still counts. An attempt that cannot be sent counts as lost.
 func (l *dnsExchange) send(i int) {
 	q := l.queries[i]
@@ -466,16 +492,29 @@ func (l *dnsExchange) send(i int) {
 	if q.timer != nil {
 		q.timer.Stop()
 	}
-	delay := dnsRetryDelays[min(round, len(dnsRetryDelays)-1)]
+	answered := l.c.answered.Load()
+	warmup := !answered && round < dnsWarmupRounds
+	var delay time.Duration
+	switch {
+	case warmup:
+		delay = dnsWarmupDelay
+	case answered:
+		delay = dnsRetryDelays[min(q.backoff, len(dnsRetryDelays)-1)]
+		q.backoff++
+	default:
+		delay = dnsRetryDelays[len(dnsRetryDelays)-1]
+	}
 	q.timer = l.c.clock.AfterFunc(delay, func() {
 		select {
 		case l.retries <- dnsRetry{query: i, round: round}:
 		case <-l.ctx.Done():
 		}
 	})
-	if round == 0 {
+	if round == 0 || warmup {
 		for s := range l.c.servers {
-			l.sendTo(i, s, round)
+			if !q.failed[s] {
+				l.sendTo(i, s, round)
+			}
 		}
 		return
 	}
