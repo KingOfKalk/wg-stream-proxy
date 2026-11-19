@@ -24,8 +24,6 @@ watch_interval = "2s"                 # check the config files for changes and r
 
 [clips]
 error = true                          # error clips instead of 502/504 on GET /c/ of HLS channels
-inflight = false                      # in-flight clips: not built yet
-grace = "1s"                          # for in-flight clips: not used yet
 
 # [epg]
 # url = "https://epg.example.com/epg.xml.gz"  # optional, no default

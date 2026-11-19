@@ -194,8 +194,6 @@ watch_interval = "2s"                 # how often the config files are checked f
 
 [clips]
 error = true                          # error clips instead of 502/504 on GET /c/ of HLS channels (3.4)
-inflight = false                      # in-flight clips while a channel starts: not built yet, only validated
-grace = "1s"                          # wait before an in-flight clip starts: not used yet
 
 [epg]
 url = "https://epg.example.org/epg/epg.xml.gz"  # optional, no default
@@ -429,9 +427,9 @@ Only `/c/` and `/r/` requests of enabled channels count; `channel` is the channe
 
 - **v0.1 Core** (released as v0.1.0): the core of this spec (config, tunnels, routes and guard, HLS and raw/ICY streams, channel list, `SIGHUP` reload, metrics, `import`, `epg`), plus Dockerfile, Compose file and the v0.1 test layers in [testing.md](testing.md). Publishes the container image `ghcr.io/kingofkalk/wg-stream-proxy` (`linux/amd64` + `linux/arm64`, public package): tag `edge` on every push to `main`, version tags on release.
 - **v0.2 Observability** (released as v0.2.0): timing histograms, debug endpoints with profiles, recent requests and cool-down.
-- **v0.3 Experience:** placeholder and error clips with seamless switchover (design: [clips.md](clips.md)), per-request prefetch, file-watch reload.
+- **v0.3 Experience:** error clips (design: [clips.md](clips.md)), file-watch reload.
 - **v0.4 Content:** DASH without DRM, EPG proxy mode, logo proxying, ad-hoc proxy endpoint.
-- **Later:** distribution (GoReleaser, systemd unit, launchd plist, Kustomize), 32-bit ARM, scaling beyond 3 viewers, per-tunnel overrides.
+- **Later:** in-flight clips with seamless switchover (parked, [#116](https://github.com/KingOfKalk/wg-stream-proxy/issues/116); design in [clips.md](clips.md)), per-request prefetch (waits for timing data, [#84](https://github.com/KingOfKalk/wg-stream-proxy/issues/84)), distribution (GoReleaser, systemd unit, launchd plist, Kustomize), 32-bit ARM, scaling beyond 3 viewers, per-tunnel overrides.
 
 ## 11. Risks
 
