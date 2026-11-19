@@ -2,8 +2,10 @@
 
 // Package server is the HTTP side of wg-stream-proxy (spec 7.1): the
 // channel list, channel entries under /c/, signed resources under /r/,
-// /healthz and /metrics. Upstream requests go through the channel's route
-// (internal/route); playlists are rewritten with internal/hls.
+// logos under /logos/, /healthz and /metrics, plus the debug endpoints on
+// their own listener ([debug] listen, off by default). Upstream requests go
+// through the channel's route (internal/route); playlists are rewritten
+// with internal/hls.
 package server
 
 import (

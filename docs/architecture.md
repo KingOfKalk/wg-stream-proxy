@@ -4,7 +4,8 @@ How wg-stream-proxy works, in diagrams first and short text second. This
 document explains [spec.md](spec.md); it defines nothing new. If the two
 ever disagree, the spec wins. Section numbers like "spec 3.2" refer to it.
 
-Related: [spec.md](spec.md), [deploy.md](deploy.md), [testing.md](testing.md)
+Related: [spec.md](spec.md), [deploy.md](deploy.md), [testing.md](testing.md),
+[observability.md](observability.md)
 
 ## Contents
 
@@ -51,9 +52,10 @@ flowchart LR
   `direct` over the normal internet connection.
 - The tunnels run **in userspace inside the proxy process**: no TUN
   device, no root, no kernel module. Nothing else on the host is affected.
-- Players (Kodi IPTV Simple Client, VLC) only see **one M3U8 channel
-  list** on the LAN. Every stream, playlist, segment and key is fetched
-  through the proxy, so it always takes the channel's route.
+- Players (Kodi IPTV Simple Client, VLC) only see **one M3U channel
+  list** (`/playlist.m3u8`) on the LAN. Every stream, playlist, segment
+  and key is fetched through the proxy, so it always takes the channel's
+  route.
 - **Fail closed**: a channel never silently bypasses its tunnel. A broken
   tunnel means an error, never a direct connection.
 - Scale: a household, 3 concurrent viewers (spec 1.1).
@@ -120,10 +122,10 @@ flowchart LR
   `DNS` servers.
 - **direct**: the host network, same HTTP settings, same guard. Used only
   where a channel says `tunnel = "direct"`.
-- **EPG**: in v0.1 the channel list only *links* the EPG URL
-  (`x-tvg-url`); the player downloads it itself (spec 6). Only the CLI
-  (`epg ids`, `epg match`, `import --match-epg`) downloads it, over `direct`
-  (spec 7.2).
+- **EPG**: the channel list only *links* the EPG URL (`x-tvg-url`, link
+  mode; EPG proxy mode is planned for v0.4); the player downloads it itself
+  (spec 6). Only the CLI (`epg ids`, `epg match`, `import --match-epg`)
+  downloads it, over `direct` (spec 7.2).
 
 ## 3. Control plane and data plane
 
@@ -177,6 +179,10 @@ flowchart TB
 - `SIGHUP` reload (spec 5.6): the new config is validated completely. An
   invalid one is rejected and the old one keeps serving. Unchanged tunnels
   keep running; changed or removed tunnels are drained.
+- File watching (spec 5.6): a poll of path, size and modification time of
+  the files a reload reads, every `reload.watch_interval` (default `2s`).
+  A change that stayed the same for one more interval calls the same
+  reload as `SIGHUP`; no change, no reload.
 - Tunnel lifecycle: lazy start, idle close, drain (section 6).
 - Signing key: signs and verifies `/r/` URLs (spec 4). Changing it needs
   a restart, like `listen` and the tunnels dir location.
@@ -220,7 +226,7 @@ sequenceDiagram
     C-->>S: channels in file order
     S->>L: render
     Note over L: header with EPG link,<br/>extra lines, EXTINF line,<br/>absolute /c/{id} URL per channel
-    L-->>S: M3U8 text
+    L-->>S: M3U text
     S-->>P: 200 audio/x-mpegurl
     Note over P,S: No upstream request and no tunnel start
 ```
@@ -541,9 +547,9 @@ Requests go down the layers, responses travel back up.
 - **Data plane**: a player request goes down the layers and back. The
   route layer only knows the `route.Network` interface (resolve a host,
   dial an `ip:port`); `*tunnel.Tunnel` and `route.Host()` implement it.
-- **Control plane**: `cmd/wg-stream-proxy` turns `SIGHUP` into
-  `Reloader.Reload`. It loads all files (`config.Load`, `tunnel.Parse`);
-  if they are valid, `Manager.Apply` swaps the tunnel set,
+- **Control plane**: `cmd/wg-stream-proxy` turns `SIGHUP` and the changes
+  that `server.Watch` sees in the config files into `Reloader.Reload`. It
+  loads all files (`config.Load`, `tunnel.Parse`); if they are valid, `Manager.Apply` swaps the tunnel set,
   `route.Set.Next` builds the next routes (unchanged routes keep their
   pools), and the new generation is swapped in for new requests. Running
   requests finish on the old one. An invalid config changes nothing.
@@ -833,8 +839,8 @@ flowchart TD
     classDef done fill:#2a8a68,stroke:#1a5e46,color:#ffffff
 ```
 
-All packages of v0.1 exist on `main`. Section 7 shows how they work
-together at run time.
+All packages exist on `main`. Section 7 shows how they work together at
+run time.
 
 | Package | Role | Status |
 |---|---|---|
@@ -857,16 +863,16 @@ together at run time.
 
 | Version | Adds | Where it shows up |
 |---|---|---|
-| **v0.1 Core** (released as v0.1.0) | Everything in the spec: config, tunnels, routes and guard, HLS rewrite, raw/ICY, signed `/r/`, channel list, `SIGHUP` reload, metrics, `import`, `epg`; Dockerfile, Compose file, image on `ghcr.io` (`linux/amd64`, `linux/arm64`); test layers L1-L6 | the whole picture above |
-| **v0.2 Observability** | Timing histograms, debug endpoints with profiles, recent requests and cool-down | metrics (`/metrics`), new debug endpoints |
+| **v0.1 Core** (released as v0.1.0) | The core of the spec: config, tunnels, routes and guard, HLS rewrite, raw/ICY, signed `/r/`, channel list, `SIGHUP` reload, metrics, `import`, `epg`; Dockerfile, Compose file, image on `ghcr.io` (`linux/amd64`, `linux/arm64`); test layers L1-L6 | the whole picture above |
+| **v0.2 Observability** (released as v0.2.0) | Timing histograms, debug endpoints with profiles, recent requests and cool-down | metrics (`/metrics`), new debug endpoints |
 | **v0.3 Experience** | Placeholder and error clips with seamless switchover (own design doc), per-request prefetch, file-watch reload | data plane (clips, prefetch), control plane (reload trigger) |
 | **v0.4 Content** | DASH without DRM, EPG proxy mode, logo proxying, ad-hoc proxy endpoint | data plane |
 | **Later** | Distribution (GoReleaser, systemd unit, launchd plist, Kustomize), 32-bit ARM, scaling beyond 3 viewers, per-tunnel overrides | deployment, limits |
 
 ```mermaid
 flowchart LR
-    v01["v0.1 Core<br/>spec complete<br/>container image"]:::proxy
-    v02["v0.2 Observability<br/>timing histograms,<br/>debug endpoints"]:::later
+    v01["v0.1 Core<br/>released<br/>container image"]:::proxy
+    v02["v0.2 Observability<br/>released<br/>timing histograms,<br/>debug endpoints"]:::proxy
     v03["v0.3 Experience<br/>clips, prefetch,<br/>file-watch reload"]:::later
     v04["v0.4 Content<br/>DASH, EPG proxy,<br/>logo proxy,<br/>ad-hoc endpoint"]:::later
     later["Later<br/>GoReleaser, systemd, launchd,<br/>Kustomize, 32-bit ARM,<br/>more viewers,<br/>per-tunnel overrides"]:::later
@@ -878,9 +884,10 @@ flowchart LR
 
 ### 9.2 Final version
 
-The same structure as in section 2; future parts are grey and dashed. The
-details of v0.2 and later are not specified yet (the clips get their own
-design doc), so this shows only *where* each part fits.
+The same structure as in section 2; released parts are purple, future parts
+are grey and dashed. The details of v0.3 and later are not specified yet
+(the clips get their own design doc), so this shows only *where* each part
+fits.
 
 ```mermaid
 flowchart LR
@@ -892,7 +899,7 @@ flowchart LR
         ctl["Config + reload<br/>SIGHUP"]:::proxy
         watch["File-watch reload<br/>v0.3"]:::later
         srv["HTTP server<br/>playlist, /c, /r"]:::proxy
-        obs["Timing histograms,<br/>debug endpoints<br/>v0.2"]:::later
+        obs["Timing histograms,<br/>debug endpoints<br/>v0.2"]:::proxy
         clips["Placeholder and<br/>error clips v0.3"]:::later
         pre["Prefetch v0.3"]:::later
         extra["EPG proxy, logo proxy,<br/>ad-hoc endpoint, DASH<br/>v0.4"]:::later
@@ -912,7 +919,7 @@ flowchart LR
     players --> srv
     watch -.-> ctl
     ctl --> srv
-    srv -.-> obs
+    srv --> obs
     srv -.-> clips
     srv -.-> pre
     srv -.-> extra
@@ -938,7 +945,7 @@ flowchart LR
 
 - The core stays the same in every version: one process, routes with the
   guard in front of every dial, tunnels in userspace, fail closed.
-- v0.2 adds measurements only (timing histograms, debug endpoints with
+- v0.2 added measurements only (timing histograms, debug endpoints with
   recent requests and cool-down); it does not change how requests are
   routed.
 - v0.3 adds behaviour *in front of* the routes (clips, prefetch) and a
@@ -946,17 +953,17 @@ flowchart LR
 - v0.4 extends the data plane (DASH without DRM, EPG and logos fetched
   through the proxy, an ad-hoc endpoint).
 - Later items change how the binary is shipped and run (distribution,
-  section 10) or the limits (more viewers, 32-bit ARM, per-tunnel
-  overrides).
+  release binaries, section 10) or the limits (more viewers, 32-bit ARM,
+  per-tunnel overrides).
 
 ## 10. Deployment
 
 ```mermaid
 flowchart TB
-    subgraph v01["v0.1"]
+    subgraph now["Today"]
         direction LR
         img["Container image<br/>ghcr.io, distroless,<br/>non-root"]:::proxy
-        bin["Binary<br/>linux amd64 + arm64,<br/>darwin arm64"]:::proxy
+        bin["Binary<br/>build from source<br/>or go install"]:::proxy
         pi["Raspberry Pi 5<br/>LibreELEC Docker add-on"]:::lan
         compose["Docker / Compose<br/>Linux host"]:::lan
         host["Linux or macOS<br/>standalone"]:::lan
@@ -972,12 +979,12 @@ flowchart TB
         gor -.-> svc
         k8s -.-> cluster
     end
-    v01 ~~~ lt
+    now ~~~ lt
 
     classDef lan fill:#3b7fb0,stroke:#24577d,color:#ffffff
     classDef proxy fill:#6f5cc2,stroke:#46398a,color:#ffffff
     classDef later fill:#c3cad2,stroke:#5b6670,color:#1b1f24,stroke-dasharray:5 3
-    style v01 fill:none,stroke:#6f5cc2,stroke-width:2px
+    style now fill:none,stroke:#6f5cc2,stroke-width:2px
     style lt fill:none,stroke:#5b6670,stroke-width:2px,stroke-dasharray:5 3
 ```
 
@@ -993,6 +1000,9 @@ flowchart TB
   userspace, so there is no TUN device and no routing table change.
 - LAN use only; exposing it to the internet needs an authenticating
   reverse proxy (spec 8).
+- There are no release binaries yet: a standalone binary comes from
+  `go install` or a build from source (see [deploy.md](deploy.md)); the
+  container image needs no Go toolchain.
 - Details per variant: [deploy.md](deploy.md).
 
 ## 11. Glossary

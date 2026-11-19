@@ -62,7 +62,6 @@ func TestImport(t *testing.T) {
 		{"missing file", []string{"import", filepath.Join(dir, "missing.m3u")}, 1, "", "missing.m3u", ""},
 		{"no channels", []string{"import", empty}, 1, "", "import: " + empty + ": no channels found", ""},
 		{"invalid tunnel", []string{"import", in, "--tunnel", "Bad"}, 1, "", `invalid tunnel name "Bad"`, ""},
-		{"help", []string{"import", "-h"}, 0, "", "-out", ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

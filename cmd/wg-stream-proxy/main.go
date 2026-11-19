@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-// Command wg-stream-proxy routes IPTV streams through userspace WireGuard
-// tunnels and serves them as one M3U8 playlist.
+// Command wg-stream-proxy routes each IPTV and internet radio channel
+// through its own userspace WireGuard tunnel (or direct) and serves them as
+// one M3U playlist for Kodi, VLC and other players. It proxies HLS (TS,
+// fMP4, AES-128) and raw/ICY audio streams; no root, no TUN device, fails
+// closed.
 package main
 
 import (
@@ -15,23 +18,12 @@ import (
 	"time"
 
 	"github.com/KingOfKalk/wg-stream-proxy/internal/config"
+	"github.com/KingOfKalk/wg-stream-proxy/internal/route"
 	"github.com/KingOfKalk/wg-stream-proxy/internal/server"
 )
 
 // version is set at build time with -ldflags "-X main.version=...".
 var version = "dev"
-
-const usage = `usage: wg-stream-proxy [command] [args]
-
-commands:
-  serve        run the proxy (default)
-  check        validate the config
-  import       convert an M3U file to channel files
-  epg          list or match EPG ids
-  healthcheck  query /healthz on the listen address
-  tunnel       list tunnels or stop one (needs [debug] listen)
-  version      print version and source URL
-`
 
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
@@ -59,6 +51,8 @@ type cli struct {
 	hangup chan os.Signal
 	// reloaded, if set, is called with the result of each reload.
 	reloaded func(error)
+	// clock schedules the config file checks; nil means the system clock.
+	clock route.Clock
 	// epgAllowPrivate adds private-range guard exceptions per route name
 	// for the EPG download (tests allow the loopback range).
 	epgAllowPrivate map[string][]netip.Prefix
@@ -78,12 +72,24 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 func (c *cli) run(args []string) int {
 	cmd := "serve"
-	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
-		cmd, args = args[0], args[1:]
+	if len(args) > 0 {
+		// Only the first argument asks for the help of the program;
+		// "serve -h" and "--listen :1 -h" are the help of serve.
+		if isHelpFlag(args[0]) {
+			return c.help("")
+		}
+		if !strings.HasPrefix(args[0], "-") {
+			cmd, args = args[0], args[1:]
+		}
+	}
+	if cmd == "version" && len(args) == 1 && isHelpFlag(args[0]) {
+		return c.help("version")
 	}
 
 	// Write errors on stderr are ignored: there is nowhere left to report them.
 	switch cmd {
+	case "help":
+		return c.helpCmd(args)
 	case "version":
 		return runVersion(args, c.stdout, c.stderr)
 	case "serve":
@@ -99,7 +105,7 @@ func (c *cli) run(args []string) int {
 	case "epg":
 		return c.epgCmd(args)
 	default:
-		_, _ = fmt.Fprintf(c.stderr, "wg-stream-proxy: unknown command %q\n\n%s", cmd, usage)
+		_, _ = fmt.Fprintf(c.stderr, "wg-stream-proxy: unknown command %q\n\n%s", cmd, topHelp())
 		return 2
 	}
 }

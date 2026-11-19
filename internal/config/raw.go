@@ -24,6 +24,9 @@ type rawConfig struct {
 	Tunnels       struct {
 		IdleTimeout *string `toml:"idle_timeout"`
 	} `toml:"tunnels"`
+	Reload struct {
+		WatchInterval *string `toml:"watch_interval"`
+	} `toml:"reload"`
 	EPG struct {
 		URL *string `toml:"url"`
 	} `toml:"epg"`
