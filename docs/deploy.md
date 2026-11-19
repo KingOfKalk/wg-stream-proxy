@@ -1,23 +1,31 @@
 # wg-stream-proxy - Deployment
 
-Companion to [spec.md](spec.md). All variants use the same config layout (SPEC 5.1) and env vars.
+Companion to [spec.md](spec.md). All variants use the same config layout (spec 5.1) and env vars.
 
 ## Common rules
 
 - Default paths: config dir `/etc/wg-stream-proxy`, tunnel files in `/etc/wg-stream-proxy/tunnels`.
 - The process runs as a non-root user; tunnel files must be readable by it but not world-readable.
-- Signing key via `WG_STREAM_PROXY_SIGNING_KEY_FILE` pointing to a secret file (SPEC 4). Generate with `openssl rand -base64 32`.
+- Signing key via `WG_STREAM_PROXY_SIGNING_KEY_FILE` pointing to a secret file (spec 4). Generate with `openssl rand -base64 32`.
 - Single instance: tunnel state lives in memory, and VPN providers often limit connections per key.
-- Reload: `SIGHUP` re-reads config and channel files (SPEC 5.6). Where files are injected at start (systemd credentials, Kubernetes without file watching), changes need a restart.
+- Reload: the proxy checks `config.toml`, the channel files and the tunnel files every 2 s and reloads when they changed (`[reload] watch_interval`, `"0"` turns it off; spec 5.3 and 5.6); `SIGHUP` reloads at any time. `listen`, `debug.listen`, `log_format`, `reload.watch_interval`, the signing key and the tunnels dir location still need a restart. Where files are injected at start (systemd credentials, Kubernetes secrets that are copied), a change in the source needs a restart or a new copy.
 
-## Standalone (v0.1)
+## Standalone
+
+There are no release binaries yet; release binaries are planned (Later, [spec 10](spec.md)). Build the binary from source (`go build ./cmd/wg-stream-proxy`) or install it with `go install` (Go 1.27.4 or newer, see `go.mod`); the container image below needs no Go toolchain.
+
+<!-- x-release-please-start-version -->
+```bash
+go install github.com/KingOfKalk/wg-stream-proxy/cmd/wg-stream-proxy@v0.2.1
+```
+<!-- x-release-please-end -->
 
 ```bash
 wg-stream-proxy check --config-dir ./config
 wg-stream-proxy serve --config-dir ./config
 ```
 
-## Docker and Compose (v0.1)
+## Docker and Compose
 
 Image: `ghcr.io/kingofkalk/wg-stream-proxy` (public), base `distroless/static:nonroot` (UID 65532), `linux/amd64` + `linux/arm64`. Built from the [`Dockerfile`](../Dockerfile) by [`container.yml`](../.github/workflows/container.yml).
 
@@ -50,6 +58,15 @@ Compose: [`deploy/compose/compose.yaml`](../deploy/compose/compose.yaml) (`read_
 
 - Reload: `docker kill -s HUP wg-stream-proxy`.
 - LibreELEC 12+ on Raspberry Pi 4/5: the Docker add-on runs the `linux/arm64` image.
+
+## Changes in Kodi
+
+Kodi's IPTV Simple Client reads the M3U playlist at startup, or by its "Auto refresh mode" ([README](https://github.com/kodi-pvr/pvr.iptvsimple/blob/Omega/README.md)): "Repeated refresh" every N minutes (at most 120) or "Once per day". Kodi pulls the playlist; the proxy cannot tell it about changes. So after you save a channel file:
+
+- Changes to an existing channel's upstream URL, route, headers or tunnel apply at once: Kodi only knows `/c/<id>`, and the proxy resolves the rest per request.
+- New or removed channels, and changed names, groups, logos or EPG ids, appear in Kodi after its next refresh.
+
+Recommended: in the IPTV Simple Client settings (General or Advanced, depending on the Kodi version) set "Auto refresh mode" to "Repeated refresh" with a "Refresh interval" of 60 minutes. Disabling the cache is a side effect of auto refresh (see the README), which is fine for a playlist on the LAN. Without it, restart the add-on or Kodi to see new channels.
 
 ## Radio channels in Kodi
 
@@ -150,7 +167,7 @@ ExecStart=/usr/local/bin/wg-stream-proxy serve
 ExecReload=/bin/kill -HUP $MAINPID
 ```
 
-- The tunnels dir (`%d`) also contains `signing.key`; only `*.conf` files are read as tunnels (SPEC 5.1).
+- The tunnels dir (`%d`) also contains `signing.key`; only `*.conf` files are read as tunnels (spec 5.1).
 - Credentials are copied at service start, so changed or added tunnel files need `systemctl restart`. Channel files are re-read on `systemctl reload`.
 - Adding a tunnel needs a new `LoadCredential=` line.
 
@@ -167,4 +184,4 @@ Kustomize base in `deploy/k8s/`:
 - `Secret` with one key per tunnel (`gr.conf`, `uk.conf`), mounted at `/etc/wg-stream-proxy/tunnels`, `defaultMode: 0440`.
 - `Secret` with the signing key, injected via `env.valueFrom.secretKeyRef` as `WG_STREAM_PROXY_SIGNING_KEY`.
 - `Service` as `LoadBalancer` or `NodePort` for LAN players. Ingress optional, with response buffering disabled and long read timeouts.
-- Config changes: `kubectl rollout restart deployment/wg-stream-proxy` (no file watching before v0.3).
+- Config changes: file watching (spec 5.6) picks up a mounted ConfigMap when Kubernetes swaps it; secrets copied at start need `kubectl rollout restart deployment/wg-stream-proxy`.

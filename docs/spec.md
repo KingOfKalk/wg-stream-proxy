@@ -1,10 +1,10 @@
 # wg-stream-proxy - Specification
 
-> Route individual IPTV streams through userspace WireGuard tunnels and serve them as one M3U8 playlist for Kodi, VLC and others.
+> Route each IPTV and internet radio channel through its own userspace WireGuard tunnel (or direct) and serve them as one M3U playlist for Kodi, VLC and other players. Proxies HLS (TS, fMP4, AES-128) and raw/ICY audio streams; no root, no TUN device, fails closed.
 
 - Repository: `github.com/KingOfKalk/wg-stream-proxy`, Go, AGPL-3.0-or-later
-- Status: Draft v3
-- Related: [architecture.md](architecture.md), [deploy.md](deploy.md), [testing.md](testing.md)
+- Status: binding for the latest [release](https://github.com/KingOfKalk/wg-stream-proxy/releases); the roadmap (section 10) lists what is released and what is planned
+- Related: [architecture.md](architecture.md), [deploy.md](deploy.md), [testing.md](testing.md), [observability.md](observability.md)
 
 ## 1. Scope
 
@@ -12,7 +12,7 @@
 
 - Route each channel through a chosen WireGuard tunnel, or explicitly `direct`. Nothing else on the host is affected.
 - Multiple tunnels in one process, fully in userspace (no TUN device, no root, no kernel module).
-- One extended M3U8 channel list for Kodi (IPTV Simple Client), VLC and other players.
+- One extended M3U channel list (`/playlist.m3u8`) for Kodi (IPTV Simple Client), VLC and other players.
 - HLS passthrough with playlist rewriting; raw passthrough for radio and MPEG-TS.
 - Fail closed: a channel never silently bypasses its tunnel.
 - Migration from an existing M3U file via `import`.
@@ -22,12 +22,13 @@
 
 - Decryption, DRM licenses or keys inside the proxy (permanent). AES-128 HLS keys are only passed through.
 - Transcoding, restreaming, Widevine passthrough, Kodi add-on, web UI, Xtream Codes, multi-user.
-- DASH in v0.1; DASH without DRM is planned for v0.4 (spec 10).
+- DASH: not supported (DASH without DRM planned for v0.4, spec 10).
 
 ### 1.3 Platforms
 
-- `linux/amd64`, `linux/arm64`, `darwin/arm64`; `CGO_ENABLED=0`; container image `linux/amd64` + `linux/arm64`.
-- LibreELEC 12+ uses an aarch64 userland on Raspberry Pi 4/5 (since 12.0, May 2024), so `linux/arm64` binaries and containers (Docker add-on) run on default installs. Only 32-bit images (Raspberry Pi 2/3, Allwinner H3/R40, Rockchip RK3288) would need `linux/arm`, which is deferred.
+- Build targets (cross-compiled in CI): `linux/amd64`, `linux/arm64`, `darwin/arm64`; `CGO_ENABLED=0`.
+- Distribution: the container image (`linux/amd64` + `linux/arm64`). Binaries: build from source or `go install`; release binaries are planned (Later, spec 10).
+- LibreELEC 12+ uses an aarch64 userland on Raspberry Pi 4/5 (since 12.0, May 2024), so the `linux/arm64` container (Docker add-on) runs on default installs. Only 32-bit images (Raspberry Pi 2/3, Allwinner H3/R40, Rockchip RK3288) would need `linux/arm`, which is deferred.
 
 ## 2. Architecture
 
@@ -182,14 +183,17 @@ direct = []
 [tunnels]
 idle_timeout = "60m"
 
+[reload]
+watch_interval = "2s"                 # how often the config files are checked for changes (5.6); "0" turns it off
+
 [epg]
-url = "https://ext.greektv.app/epg/epg.xml.gz"  # optional, no default
+url = "https://epg.example.org/epg/epg.xml.gz"  # optional, no default
 
 [debug]
 listen = ""                           # off; e.g. "127.0.0.1:2350" (7.1)
 ```
 
-Unknown keys and wrong value types are config errors. Values are validated: `listen` is `[host]:port` with a numeric port; `debug.listen` is empty or of the same form, with a port other than the one of `listen` (as in effect after flag and environment); durations are positive; `max_playlist_size` is a whole number directly followed by `B`, `KiB` or `MiB`, positive and at most `32MiB`; `public_base_url` and `epg.url` are empty or absolute `http(s)` URLs; `user_agent` has no line breaks; `allow_private` keys are `direct` or existing tunnel names, values are CIDR prefixes without host bits.
+Unknown keys and wrong value types are config errors. Values are validated: `listen` is `[host]:port` with a numeric port; `debug.listen` is empty or of the same form, with a port other than the one of `listen` (as in effect after flag and environment); durations are positive (`reload.watch_interval` also accepts `"0"`, which turns watching off); `max_playlist_size` is a whole number directly followed by `B`, `KiB` or `MiB`, positive and at most `32MiB`; `public_base_url` and `epg.url` are empty or absolute `http(s)` URLs; `user_agent` has no line breaks; `allow_private` keys are `direct` or existing tunnel names, values are CIDR prefixes without host bits.
 
 ### 5.4 Channel files (`channels.d/*.toml`)
 
@@ -205,7 +209,7 @@ attrs = { parent-code = "1234" }
 
 [[channel]]
 name = "ERT World"                    # required
-url = "https://ertflix-ertworld.siliconweb.com/mpegts/618618_3479286/master_mpegts.m3u8"  # required
+url = "https://live.example.com/mpegts/100100_200200/master_mpegts.m3u8"  # required
 id = "ert-world"                      # optional, default: slug of name
 tunnel = "gr"                         # optional
 group = "Greek TV"                    # optional
@@ -213,7 +217,7 @@ enabled = true
 
 [channel.upstream]
 type = "auto"                         # auto | hls | raw
-headers = { Referer = "https://www.ertflix.gr/" }
+headers = { Referer = "https://www.example.org/" }
 
 [channel.playlist]
 tvg_id = "ertworld"
@@ -226,7 +230,7 @@ attrs = { tvg-chno = "5" }
 [[channel]]
 name = "Das Erste"
 tunnel = "direct"
-url = "https://daserste-live.ard-mcdn.de/daserste/live/hls/de/master.m3u8"
+url = "https://live.example.net/daserste/live/hls/de/master.m3u8"
 ```
 
 - Sub-tables apply to the `[[channel]]` directly above.
@@ -264,11 +268,12 @@ url = "https://daserste-live.ard-mcdn.de/daserste/live/hls/de/master.m3u8"
 ### 5.6 Reload
 
 - `SIGHUP` reloads all files; the new config is validated completely (tunnel files included), an invalid one is rejected with all errors logged and the old one keeps serving. Reloads run one at a time.
+- File watching: unless `reload.watch_interval` (5.3) is `"0"`, the proxy checks the files a reload reads (`config.toml`, `channels.d/*.toml` with `_defaults.toml`, `<tunnels-dir>/*.conf`) every interval by path, size and modification time; other files do not count. Added, changed and removed files all count. A change triggers the same reload as `SIGHUP` once the files have stayed the same for one further interval, so an editor that writes in several steps causes one reload. Nothing is reloaded while the files are unchanged; a rejected config is logged once and not tried again until the files change. `SIGHUP` works either way. Polling works on every file system (bind mounts, network shares); a change made without touching size and modification time is not seen.
 - Requests in flight finish with the config they started with; new requests use the new one.
 - Unchanged tunnels (same parsed content; comments and formatting do not count) keep running; changed or removed tunnels are drained (2.1) and recreated lazily.
 - A route (`direct` or a tunnel) keeps its pooled upstream connections only if its network, its `allow_private` entries and the whole `[upstream]` block are unchanged; otherwise new requests use a new route and the old route's idle connections are closed, while an unchanged tunnel keeps running.
 - A reload that changes or removes a tunnel which is still starting cancels the start; requests waiting for it get `502`; the new tunnel starts lazily on the next request.
-- Restart required for: `listen`, `debug.listen`, `log_format`, signing key, tunnels dir location. A reload that changes one of them logs a warning and keeps the old value.
+- Restart required for: `listen`, `debug.listen`, `log_format`, `reload.watch_interval`, signing key, tunnels dir location. A reload that changes one of them logs a warning and keeps the old value.
 - A successful reload logs one info line `reloaded` with the channel and tunnel counts, `channels_added`, `channels_changed` and `channels_removed` (counts; changed means any difference of the merged channel config, comments, formatting and order do not count) and `tunnels_added`, `tunnels_changed` and `tunnels_removed` (names); a reload that changes nothing logs the same line with zeros. At debug level a second line lists the ids of the added, changed and removed channels; no line contains URLs.
 
 ## 6. Channel list
@@ -282,7 +287,7 @@ url = "https://daserste-live.ard-mcdn.de/daserste/live/hls/de/master.m3u8"
 - `#KODIPROP` and other `extra` lines appear only here, never in playlists under `/c/` or `/r/`.
 
 ```
-#EXTM3U x-tvg-url="https://ext.greektv.app/epg/epg.xml.gz" url-tvg="https://ext.greektv.app/epg/epg.xml.gz"
+#EXTM3U x-tvg-url="https://epg.example.org/epg/epg.xml.gz" url-tvg="https://epg.example.org/epg/epg.xml.gz"
 #KODIPROP:inputstream.adaptive.manifest_type=hls
 #EXTINF:-1 tvg-id="ertworld" tvg-name="ERT World" tvg-logo="EPTWORLD" group-title="Greek TV" parent-code="1234" tvg-chno="5",ERT World
 http://wsp.lan:2349/c/ert-world.m3u8
@@ -331,7 +336,10 @@ wg-stream-proxy healthcheck           # GET /healthz on the listen address, exit
 wg-stream-proxy tunnel list           # tunnels and their state, from the debug endpoints (7.1)
 wg-stream-proxy tunnel stop <name>    # cool-down of a tunnel (7.1)
 wg-stream-proxy version               # print version and source URL (AGPL section 13)
+wg-stream-proxy help [command]        # description and command list, or the flags of a command
 ```
+
+`help`: `wg-stream-proxy help`, `-h` and `--help` print a one-line description, the usage line and the list of commands with one line each, to stdout, exit 0. `help <command>` (`help epg ids`) and `<command> -h` (also after other flags, `serve --listen :1 -h`) print the usage, description and flags of that command to stdout, exit 0; for `epg` and `tunnel` they list the subcommands. Only a first argument `-h` or `--help` is the help of the program, so `serve -h` stays the help of `serve`. An unknown command, also for `help <unknown>`, prints one error line and the command list to stderr and exits 2. A flag error prints the flag package's message and a pointer to `help <command>` to stderr and exits 2. Without any argument the program runs `serve`; it prints no help.
 
 `serve` stops on `SIGINT` or `SIGTERM`: it accepts no new connections, gives in-flight requests up to 30s (2.1), then closes the remaining connections and the tunnels; a second signal exits at once.
 
@@ -406,8 +414,8 @@ Only `/c/` and `/r/` requests of enabled channels count; `channel` is the channe
 
 ## 10. Roadmap
 
-- **v0.1 Core** (released as v0.1.0): everything in this spec, plus Dockerfile, Compose file and the v0.1 test layers in [testing.md](testing.md). Publishes the container image `ghcr.io/kingofkalk/wg-stream-proxy` (`linux/amd64` + `linux/arm64`, public package): tag `edge` on every push to `main`, version tags on release.
-- **v0.2 Observability:** timing histograms, debug endpoints with profiles, recent requests and cool-down.
+- **v0.1 Core** (released as v0.1.0): the core of this spec (config, tunnels, routes and guard, HLS and raw/ICY streams, channel list, `SIGHUP` reload, metrics, `import`, `epg`), plus Dockerfile, Compose file and the v0.1 test layers in [testing.md](testing.md). Publishes the container image `ghcr.io/kingofkalk/wg-stream-proxy` (`linux/amd64` + `linux/arm64`, public package): tag `edge` on every push to `main`, version tags on release.
+- **v0.2 Observability** (released as v0.2.0): timing histograms, debug endpoints with profiles, recent requests and cool-down.
 - **v0.3 Experience:** placeholder and error clips with seamless switchover (own design doc), per-request prefetch, file-watch reload.
 - **v0.4 Content:** DASH without DRM, EPG proxy mode, logo proxying, ad-hoc proxy endpoint.
 - **Later:** distribution (GoReleaser, systemd unit, launchd plist, Kustomize), 32-bit ARM, scaling beyond 3 viewers, per-tunnel overrides.

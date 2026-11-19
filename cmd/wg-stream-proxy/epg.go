@@ -21,6 +21,9 @@ const matchCandidates = 3
 // epgCmd runs epg ids and epg match (spec 7.2). Both take the config
 // flags of serve and check and print to stdout; nothing is written.
 func (c *cli) epgCmd(args []string) int {
+	if len(args) > 0 && isHelpFlag(args[0]) {
+		return c.help("epg")
+	}
 	if len(args) == 0 || args[0] != "ids" && args[0] != "match" {
 		_, _ = fmt.Fprintln(c.stderr, "wg-stream-proxy: epg: want a subcommand: ids or match")
 		return 2
