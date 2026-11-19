@@ -525,3 +525,10 @@ func headerNames(h http.Header) string {
 	slices.Sort(names)
 	return strings.Join(names, ",")
 }
+
+// binaryBody is a stream body of n bytes that is not text (spec 3.3: a
+// text body that is no handled format is refused): NUL bytes between
+// copies of c.
+func binaryBody(c byte, n int) string {
+	return strings.Repeat(string([]byte{0, c}), n/2)
+}

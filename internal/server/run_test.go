@@ -237,7 +237,7 @@ func maps(a, b map[string]string) bool {
 
 func TestRunShutdownEndsStreams(t *testing.T) {
 	up := newUpstream()
-	up.add("/radio", file{ctype: "audio/mpeg", body: strings.Repeat("a", 1024), endless: true})
+	up.add("/radio", file{ctype: "audio/mpeg", body: binaryBody('a', 1024), endless: true})
 	upSrv := httptest.NewServer(up)
 	t.Cleanup(upSrv.Close)
 	dir := writeConfig(t, map[string]string{

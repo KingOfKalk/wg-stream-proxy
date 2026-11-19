@@ -3,6 +3,7 @@
 package server
 
 import (
+	"math/rand/v2"
 	"net/http"
 	"strings"
 	"testing"
@@ -231,6 +232,25 @@ func TestSniffGap(t *testing.T) {
 			want: [3]int{502, 502, 502},
 		},
 	}
+	mpd := `<MPD><BaseURL>` + stream + `</BaseURL><Period/></MPD>`
+	for _, lead := range []struct{ name, short, long string }{
+		{"text", "x", strings.Repeat("x", 600)},
+		{"a second BOM", "\ufeff\ufeff", strings.Repeat("\ufeff", 200)},
+		{"a comment line", "#c\n", strings.Repeat("#c\n", 200)},
+		{"NBSP", "\u00a0", strings.Repeat("\u00a0", 300)},
+		{"NUL", "\x00", ""},
+	} {
+		tests = append(tests, struct {
+			name, ctype, body string
+			want              [3]int
+		}{"MPD after " + lead.name, "text/xml", lead.short + mpd, [3]int{502, 502, 502}})
+		if lead.long != "" {
+			tests = append(tests, struct {
+				name, ctype, body string
+				want              [3]int
+			}{"MPD after long " + lead.name, "text/xml", lead.long + mpd, [3]int{502, 502, 502}})
+		}
+	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			e := newDirectEnv(t, allowLoopback, unsupportedTOML)
@@ -271,8 +291,16 @@ func utf16le(s string) string {
 func TestSniffStreams(t *testing.T) {
 	ttml := `<?xml version="1.0" encoding="UTF-8"?>` + "\n" +
 		`<tt xmlns="http://www.w3.org/ns/ttml" xml:lang="en"><body><div><p begin="0s" end="2s">Hello</p></div></body></tt>` + "\n"
+	rnd := rand.New(rand.NewPCG(3, 4))
+	random := make([]byte, 4096)
+	for i := range random {
+		random[i] = byte(rnd.Uint32())
+	}
 	for _, tt := range []struct{ name, ctype, body string }{
 		{"ttml", "application/ttml+xml", ttml},
+		{"webvtt", "text/vtt", "WEBVTT\n\n00:00.000 --> 00:02.000\nHello\n"},
+		{"mp3 from mid-frame starting with <", "audio/mpeg", "\x3c\x9a\x01" + strings.Repeat("\xff\xfb\x90\x64\x00\x0f\xf0\x00\x00\x69", 300)},
+		{"random bytes", "application/octet-stream", string(random)},
 		{"fmp4 with a 60-byte ftyp", "video/mp4", "\x00\x00\x00<ftypiso6\x00\x00\x00\x00iso6dash" + strings.Repeat("\x00", 2000)},
 	} {
 		t.Run(tt.name, func(t *testing.T) {

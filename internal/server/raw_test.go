@@ -21,7 +21,7 @@ const radioHeader = "icy-name:Test Radio\r\nicy-genre:Test\r\nicy-br:128\r\nicy-
 
 // radioFirst is the first body write: more than hls.SniffLen, so type
 // detection of auto channels does not wait for the lockstep chunks.
-var radioFirst = strings.Repeat("a", 1024)
+var radioFirst = binaryBody('a', 1024)
 
 // radioChunk is the i-th lockstep chunk, much smaller than any buffer.
 func radioChunk(i int) string { return strings.Repeat(string(rune('b'+i)), 100) }
@@ -91,7 +91,7 @@ func (f *radio) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		select {
 		case _, ok := <-s.next:
 			if !ok {
-				endless := strings.Repeat("z", 4096)
+				endless := binaryBody('z', 4096)
 				for {
 					if _, err := io.WriteString(c, endless); err != nil {
 						return

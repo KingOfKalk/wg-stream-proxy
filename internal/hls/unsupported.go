@@ -9,6 +9,7 @@ import (
 	"errors"
 	"io"
 	"strings"
+	"unicode/utf8"
 )
 
 // Playlist formats the proxy does not rewrite (spec 3.3), as returned by
@@ -83,7 +84,13 @@ func Unsupported(contentType string, prefix []byte, configured Type) string {
 	if wideBOM(prefix) {
 		return FormatUnknown
 	}
-	body := bytes.TrimPrefix(prefix, []byte(utf8BOM))
+	if hasMPDTag(prefix) {
+		// Anywhere in the prefix: lighter player parsers keep leading
+		// text or bytes as a text node and still take the MPD.
+		return FormatDASH
+	}
+	text := textLike(prefix)
+	body := stripBOMs(prefix)
 	body = bytes.TrimLeft(body, " \t\r\n\v\f")
 	switch {
 	case hasPrefixFold(body, "[playlist]"):
@@ -94,7 +101,7 @@ func Unsupported(contentType string, prefix []byte, configured Type) string {
 	case bytes.HasPrefix(body, []byte("#EXTM3U")):
 		// Only on a raw channel; Detect calls it HLS otherwise.
 		return FormatM3U
-	case len(body) > 0 && body[0] == '<':
+	case text && len(body) > 0 && body[0] == '<':
 		root, ok := xmlRoot(body)
 		if !ok {
 			return FormatUnknown
@@ -113,8 +120,72 @@ func Unsupported(contentType string, prefix []byte, configured Type) string {
 		return FormatUnknown
 	case urlList(body):
 		return FormatM3U
+	case text && len(prefix) > maxBinaryTextLen && !bytes.HasPrefix(body, []byte("WEBVTT")):
+		// Text that is no format the proxy handles is never a media
+		// stream; a player's parser could find a playlist in it.
+		return FormatUnknown
 	}
 	return ""
+}
+
+// maxBinaryTextLen is the longest body that is not classified as text
+// even if all its bytes are printable: an AES-128 key (16 bytes) can be.
+const maxBinaryTextLen = 16
+
+// stripBOMs removes any number of leading UTF-8 byte order marks.
+func stripBOMs(b []byte) []byte {
+	for bytes.HasPrefix(b, []byte(utf8BOM)) {
+		b = b[len(utf8BOM):]
+	}
+	return b
+}
+
+// textLike reports whether a body prefix is text: after any number of
+// UTF-8 byte order marks, at least one byte, valid UTF-8 (a rune cut off
+// at the end of the prefix is fine) without control characters other
+// than TAB, LF, CR and FF, and without DEL. Media and ciphertext are not:
+// a random byte is a control character or breaks UTF-8 within a few
+// bytes.
+func textLike(prefix []byte) bool {
+	b := stripBOMs(prefix)
+	if len(b) == 0 {
+		return false
+	}
+	for len(b) > 0 {
+		c := b[0]
+		if c < utf8.RuneSelf {
+			if c < 0x20 && c != '\t' && c != '\n' && c != '\r' && c != '\f' || c == 0x7f {
+				return false
+			}
+			b = b[1:]
+			continue
+		}
+		r, size := utf8.DecodeRune(b)
+		if r == utf8.RuneError && size == 1 {
+			return !utf8.FullRune(b) // cut off at the end of the prefix
+		}
+		b = b[size:]
+	}
+	return true
+}
+
+// hasMPDTag reports whether b contains "<mpd" or ":mpd" (any case)
+// followed by whitespace, '>', '/' or the end of b: the start of an MPD
+// element, also with a namespace prefix.
+func hasMPDTag(b []byte) bool {
+	for i := 0; i+4 <= len(b); i++ {
+		if b[i] != '<' && b[i] != ':' || !strings.EqualFold(string(b[i+1:i+4]), "mpd") {
+			continue
+		}
+		if i+4 == len(b) {
+			return true
+		}
+		switch b[i+4] {
+		case ' ', '\t', '\r', '\n', '>', '/':
+			return true
+		}
+	}
+	return false
 }
 
 // hasPrefixFold reports whether b starts with the ASCII string prefix,
@@ -225,7 +296,7 @@ func Sniff(body *bufio.Reader) (prefix []byte, rest *bufio.Reader, err error) {
 	if err != nil && !errors.Is(err, io.EOF) {
 		return nil, body, err
 	}
-	if len(prefix) < SniffLen || !xmlStart(prefix) {
+	if len(prefix) < SniffLen || !xmlStart(prefix) || !textLike(prefix) {
 		return prefix, body, nil
 	}
 	// XML is classified by the whole document if it fits (Unsupported).

@@ -225,7 +225,7 @@ wsp_upstream_errors_total{channel="radio",reason="guard"} 1
 			config: allowLoopback + "\n[upstream]\nheader_timeout = \"20ms\"\nread_timeout = \"20ms\"\n",
 			run: func(t *testing.T, e *directEnv) {
 				e.up.add("/hang", file{hang: true})
-				e.up.add("/radio", file{ctype: "audio/mpeg", body: strings.Repeat("a", 1024), stall: true})
+				e.up.add("/radio", file{ctype: "audio/mpeg", body: binaryBody('a', 1024), stall: true})
 				if resp, _ := e.get(t, "/c/hang", nil); resp.StatusCode != http.StatusGatewayTimeout {
 					t.Errorf("header timeout: status %d", resp.StatusCode)
 				}
@@ -323,7 +323,7 @@ wsp_upstream_errors_total{channel="radio",reason="unsupported"} 1
 			name:   "client disconnect",
 			config: allowLoopback,
 			run: func(t *testing.T, e *directEnv) {
-				e.up.add("/radio", file{ctype: "audio/mpeg", body: strings.Repeat("a", 4096), endless: true})
+				e.up.add("/radio", file{ctype: "audio/mpeg", body: binaryBody('a', 4096), endless: true})
 				e.up.add("/hang", file{hang: true})
 				resp := open(t, e.client, e.proxy.URL+"/c/radio")
 				if _, err := io.ReadFull(resp.Body, make([]byte, 64<<10)); err != nil {
@@ -403,10 +403,10 @@ func open(t *testing.T, c *http.Client, u string) *http.Response {
 // once the response type is known.
 func TestActiveRequestKinds(t *testing.T) {
 	e := newDirectEnv(t, allowLoopback, channelsTOML)
-	e.up.add("/radio", file{ctype: "audio/mpeg", body: strings.Repeat("a", 4096), endless: true})
-	e.up.add("/cdn/seg.ts", file{ctype: "video/mp2t", body: strings.Repeat("s", 4096), endless: true})
+	e.up.add("/radio", file{ctype: "audio/mpeg", body: binaryBody('a', 4096), endless: true})
+	e.up.add("/cdn/seg.ts", file{ctype: "video/mp2t", body: binaryBody('s', 4096), endless: true})
 	// A segment whose path looks like a playlist.
-	e.up.add("/cdn/odd.m3u8", file{ctype: "video/mp2t", body: strings.Repeat("o", 4096), endless: true})
+	e.up.add("/cdn/odd.m3u8", file{ctype: "video/mp2t", body: binaryBody('o', 4096), endless: true})
 
 	var open1 []*http.Response
 	for _, p := range []string{"/c/radio", e.signer.Path("news", e.upURL+"/cdn/seg.ts"), e.signer.Path("news", e.upURL+"/cdn/odd.m3u8"), "/c/radio"} {
