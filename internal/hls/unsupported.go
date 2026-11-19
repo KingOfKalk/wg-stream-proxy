@@ -43,6 +43,12 @@ var unsupportedTypes = map[string]string{
 	"audio/x-ms-wax":       FormatASX,
 }
 
+// mediaXML are the root elements (lower-case local names) of XML media
+// that players fetch as resources and the proxy streams: TTML subtitles.
+// Every other XML body that is not a playlist the proxy rewrites is
+// refused (FormatUnknown), HTML included.
+var mediaXML = map[string]bool{"tt": true}
+
 // xmlRoots maps the lower-case local name of the root element of XML
 // playlists to their format.
 var xmlRoots = map[string]string{
@@ -61,8 +67,9 @@ var xmlRoots = map[string]string{
 // "dash") as DASH, so only raw channels refuse them.
 // A configured Raw type ignores the Content-Type, like Detect, but not the
 // body. prefix is the start of the body as Sniff returns it; a body that
-// starts like XML without a root element in prefix, or with a UTF-16 or
-// UTF-32 byte order mark, is FormatUnknown (fail closed).
+// starts like XML is FormatUnknown unless it is a playlist (its format)
+// or one complete TTML document within XMLSniffLen bytes; UTF-16 or
+// UTF-32 text is FormatUnknown too (fail closed).
 func Unsupported(contentType string, prefix []byte, configured Type) string {
 	if configured == HLS || configured == DASH {
 		return ""
@@ -92,7 +99,18 @@ func Unsupported(contentType string, prefix []byte, configured Type) string {
 		if !ok {
 			return FormatUnknown
 		}
-		return xmlRoots[strings.ToLower(root)]
+		if f := xmlRoots[strings.ToLower(root)]; f != "" {
+			return f
+		}
+		// Players look for a playlist root among all top-level elements
+		// (dash.js and Shaka take a later MPD), so XML is streamed only
+		// if it is provably harmless: whole within the sniff window, one
+		// top-level element of a media format, nothing a lighter parser
+		// could read differently.
+		if mediaXML[strings.ToLower(root)] && len(prefix) < XMLSniffLen && singleElement(body) {
+			return ""
+		}
+		return FormatUnknown
 	case urlList(body):
 		return FormatM3U
 	}
@@ -199,10 +217,9 @@ const XMLSniffLen = 64 << 10
 
 // Sniff returns the start of a body for Detect and Unsupported (spec
 // 3.1, 3.3): SniffLen bytes, or the whole body if it is shorter; if it
-// starts like XML and its root element does not start within them, up to
-// XMLSniffLen bytes. rest reads the whole body, the returned bytes
-// included; the caller reads from rest only. A read error other than
-// io.EOF is returned.
+// starts like XML, up to XMLSniffLen bytes. rest reads the whole body,
+// the returned bytes included; the caller reads from rest only. A read
+// error other than io.EOF is returned.
 func Sniff(body *bufio.Reader) (prefix []byte, rest *bufio.Reader, err error) {
 	prefix, err = body.Peek(SniffLen)
 	if err != nil && !errors.Is(err, io.EOF) {
@@ -211,9 +228,7 @@ func Sniff(body *bufio.Reader) (prefix []byte, rest *bufio.Reader, err error) {
 	if len(prefix) < SniffLen || !xmlStart(prefix) {
 		return prefix, body, nil
 	}
-	if _, ok := xmlRoot(prefix); ok {
-		return prefix, body, nil
-	}
+	// XML is classified by the whole document if it fits (Unsupported).
 	rest = bufio.NewReaderSize(body, XMLSniffLen)
 	prefix, err = rest.Peek(XMLSniffLen)
 	if err != nil && !errors.Is(err, io.EOF) {
@@ -280,4 +295,62 @@ func isSchemeChar(c byte, first bool) bool {
 		return true
 	}
 	return false
+}
+
+// singleElement reports whether the XML document b (after an optional
+// UTF-8 BOM) is complete and holds exactly one top-level element,
+// followed only by whitespace and comments, without anything players'
+// lighter parsers end at other places: no processing instruction after
+// the declaration, no doctype, no CDATA section, no '<' or '>' inside a
+// tag, no comment starting with '-' or holding '<' or '>'. The prolog
+// was checked by xmlRoot.
+func singleElement(b []byte) bool {
+	b = bytes.TrimPrefix(b, []byte(utf8BOM))
+	d := xml.NewDecoder(bytes.NewReader(b))
+	d.Strict = true
+	d.CharsetReader = func(_ string, r io.Reader) (io.Reader, error) { return r, nil }
+	depth, roots := 0, 0
+	for off := int64(0); ; {
+		t, err := d.RawToken()
+		if errors.Is(err, io.EOF) {
+			return roots == 1 && depth == 0
+		}
+		if err != nil {
+			return false
+		}
+		raw := b[off:d.InputOffset()]
+		off = d.InputOffset()
+		switch t := t.(type) {
+		case xml.StartElement:
+			if depth == 0 {
+				roots++
+			}
+			if roots > 1 || bytes.IndexByte(raw[1:], '<') >= 0 || bytes.IndexByte(raw, '>') != len(raw)-1 {
+				return false
+			}
+			depth++
+		case xml.EndElement:
+			if len(raw) > 0 && (bytes.IndexByte(raw[1:], '<') >= 0 || bytes.IndexByte(raw, '>') != len(raw)-1) {
+				return false
+			}
+			depth--
+		case xml.CharData:
+			if bytes.HasPrefix(raw, []byte("<")) {
+				return false // CDATA
+			}
+			if depth == 0 && len(bytes.Trim(t, " \t\r\n")) > 0 {
+				return false
+			}
+		case xml.Comment:
+			if bytes.HasPrefix(t, []byte("-")) || bytes.ContainsAny(t, "<>") {
+				return false
+			}
+		case xml.ProcInst:
+			if roots > 0 || t.Target != "xml" {
+				return false
+			}
+		default:
+			return false
+		}
+	}
 }

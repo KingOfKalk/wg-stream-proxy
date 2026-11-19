@@ -80,9 +80,19 @@ func TestUnsupported(t *testing.T) {
 		{"asx body", "", "<ASX version=\"3.0\">\r\n<Entry><Ref href=\"http://radio.example/s\"/></Entry>", Auto, "asx"},
 		{"asx body lower case", "", "<asx version=\"3.0\">", Auto, "asx"},
 		{"xml with doctype", "", "<!DOCTYPE asx>\n<asx>", Auto, "asx"},
-		{"other xml root", "application/xml", `<?xml version="1.0"?><tt xmlns="http://www.w3.org/ns/ttml">`, Auto, ""},
-		{"html page", "text/html", "<!DOCTYPE html>\n<html><body><a href=\"http://x.example/\">x</a>", Auto, ""},
-		{"root name is a prefix only", "", "<MPDX>", Auto, ""},
+		{"ttml", "application/ttml+xml", ttml, Auto, ""},
+		{"ttml on a raw channel", "", "\n" + ttml + "\n<!-- end -->\n", Raw, ""},
+		{"ttml cut off", "application/xml", `<?xml version="1.0"?><tt xmlns="http://www.w3.org/ns/ttml">`, Auto, "unknown"},
+		{"ttml followed by an MPD", "text/xml", ttml + `<MPD><BaseURL>http://a.example/</BaseURL></MPD>`, Auto, "unknown"},
+		{"ttml with a comment hiding an MPD", "text/xml", `<tt><!---></tt><MPD><BaseURL>http://a.example/</BaseURL></MPD>--></tt>`, Auto, "unknown"},
+		{"ttml with CDATA", "text/xml", `<tt><p><![CDATA[x]]></p></tt>`, Auto, "unknown"},
+		{"ttml with > in an attribute", "text/xml", `<tt><p a="></tt><MPD/>"/></tt>`, Auto, "unknown"},
+		{"ttml with a processing instruction", "text/xml", `<tt><?p x?></tt>`, Auto, "unknown"},
+		{"other xml root", "application/xml", `<x/>`, Auto, "unknown"},
+		{"MPD after another root", "text/xml", `<x/><MPD type="static"><BaseURL>http://a.example/</BaseURL></MPD>`, Raw, "unknown"},
+		{"MPD after another root and a declaration", "text/xml", "<?xml version=\"1.0\"?>\n<x></x>\n<MPD type=\"static\">", Auto, "unknown"},
+		{"html page", "text/html", "<!DOCTYPE html>\n<html><body><a href=\"http://x.example/\">x</a></body></html>", Auto, "unknown"},
+		{"root name is a prefix only", "", "<MPDX/>", Auto, "unknown"},
 		{"unterminated declaration", "", "<?xml version=\"1.0\"", Auto, "unknown"},
 		{"unterminated comment", "", "<!-- <MPD>", Auto, "unknown"},
 		{"not XML after <", "text/plain", "<<<", Auto, "unknown"},
@@ -108,7 +118,7 @@ func TestUnsupported(t *testing.T) {
 		{"declaration with >", "text/xml", `<?xml version="1.0" x=">"?><x/>`, Auto, "unknown"},
 		{"doctype subset hiding the root", "text/xml", `<!DOCTYPE x [<!ENTITY a "]><MPD><BaseURL>http://a.example/</BaseURL></MPD><!-- ">]><x/>`, Auto, "unknown"},
 		{"doctype with internal subset is not read", "text/xml", `<!DOCTYPE x [<!ENTITY a "b">]><x/>`, Auto, "unknown"},
-		{"plain prolog", "text/xml", "\ufeff<?xml version=\"1.0\"?>\n<!-- generated -->\n<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0//EN\" \"http://www.w3.org/TR/xhtml1.dtd\">\n<html>", Auto, ""},
+		{"plain prolog", "text/xml", "\ufeff<?xml version=\"1.0\"?>\n<!-- generated -->\n<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0//EN\" \"http://www.w3.org/TR/xhtml1.dtd\">\n<html>", Auto, "unknown"},
 
 		// Media and other resources stream.
 		{"mpeg-ts", "video/mp2t", ts, Auto, ""},
@@ -155,6 +165,7 @@ func FuzzUnsupported(f *testing.F) {
 		"<?xml version=\"1.0\"?><!-- c --><MPD>", "<!DOCTYPE asx><asx>", "\x47\x40\x00\x10", "ID3\x04", "",
 		"<!DOCTYPE MPD [<!ENTITY a \">\">]><MPD>", "\xff\xfe<\x00M\x00", "<!--" + strings.Repeat("x", 600),
 		"<!---><MPD></MPD>--><x/>", "<?p a><MPD></MPD><q ?><x/>", "\x00<\x00?\x00x", "<\x00?\x00x\x00",
+		"<x/><MPD></MPD>", ttml, "<tt><!---></tt><MPD/>--></tt>",
 	} {
 		f.Add("", []byte(s), uint8(Auto))
 		f.Add("audio/x-scpls", []byte(s), uint8(Raw))
@@ -184,11 +195,11 @@ func TestSniff(t *testing.T) {
 	}{
 		{"media", strings.Repeat("\x47", 2000), SniffLen, Raw, ""},
 		{"short body", "<MPD/>", 6, DASH, "dash"},
-		{"root in the first bytes", "<MPD>" + strings.Repeat(" ", 2000), SniffLen, DASH, "dash"},
+		{"root in the first bytes", "<MPD>" + strings.Repeat(" ", 2000), 2005, DASH, "dash"},
 		{"root after a long comment", longComment + "<MPD>" + strings.Repeat(" ", 2000), len(longComment) + 2005, DASH, "dash"},
 		{"root after a long comment, short body", longComment + "<MPD/>", len(longComment) + 6, DASH, "dash"},
 		{"no root within XMLSniffLen", "<!--" + strings.Repeat("x", 2*XMLSniffLen), XMLSniffLen, Raw, "unknown"},
-		{"html after a long comment", longComment + "<html>" + strings.Repeat(" ", 2000), len(longComment) + 2006, Raw, ""},
+		{"html after a long comment", longComment + "<html>" + strings.Repeat(" ", 2000), len(longComment) + 2006, Raw, "unknown"},
 		{"long comment, long body", longComment + "<MPD>" + strings.Repeat(" ", 2*XMLSniffLen), XMLSniffLen, DASH, "dash"},
 	}
 	for _, tt := range tests {
@@ -211,5 +222,44 @@ func TestSniff(t *testing.T) {
 				t.Errorf("rest of the body changed: %d bytes, %v", len(b), err)
 			}
 		})
+	}
+}
+
+// ttml is a TTML subtitle document, the media XML players fetch as a
+// resource.
+const ttml = `<?xml version="1.0" encoding="UTF-8"?>
+<tt xmlns="http://www.w3.org/ns/ttml" xml:lang="en"><body><div>
+<p begin="00:00:00.000" end="00:00:02.000">Hello &amp; welcome</p>
+</div></body></tt>`
+
+// TestUnsupportedXMLWindow: XML that does not fit the sniff window is
+// refused, also an allowed media XML root.
+func TestUnsupportedXMLWindow(t *testing.T) {
+	big := `<tt xmlns="http://www.w3.org/ns/ttml"><body><div>` + strings.Repeat(`<p>x</p>`, XMLSniffLen/8) + `</div></body></tt>`
+	prefix, _, err := Sniff(bufio.NewReaderSize(strings.NewReader(big), SniffLen))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := Unsupported("application/ttml+xml", prefix, Auto); got != FormatUnknown {
+		t.Errorf("TTML larger than the window: %q, want unknown", got)
+	}
+	long := `<x>` + strings.Repeat("t", 70000) + `</x><MPD><BaseURL>http://a.example/</BaseURL></MPD>`
+	prefix, _, err = Sniff(bufio.NewReaderSize(strings.NewReader(long), SniffLen))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := Unsupported("text/xml", prefix, Raw); got != FormatUnknown {
+		t.Errorf("MPD beyond the window: %q, want unknown", got)
+	}
+	small := ttml + strings.Repeat(" ", 1000)
+	prefix, _, err = Sniff(bufio.NewReaderSize(strings.NewReader(small), SniffLen))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(prefix) != len(small) {
+		t.Errorf("Sniff read %d bytes of a %d-byte XML body, want all", len(prefix), len(small))
+	}
+	if got := Unsupported("application/ttml+xml", prefix, Auto); got != "" {
+		t.Errorf("TTML within the window: %q, want streamed", got)
 	}
 }

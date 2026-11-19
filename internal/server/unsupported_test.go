@@ -201,6 +201,26 @@ func TestSniffGap(t *testing.T) {
 			want: [3]int{502, 502, 502},
 		},
 		{
+			name: "MPD after another root", ctype: "text/xml",
+			body: `<x/><MPD><BaseURL>` + stream + `</BaseURL><Period/></MPD>`,
+			want: [3]int{502, 502, 502},
+		},
+		{
+			name: "MPD after another root and a declaration", ctype: "text/xml",
+			body: "<?xml version=\"1.0\"?>\n<x></x>\n<MPD><BaseURL>" + stream + "</BaseURL><Period/></MPD>",
+			want: [3]int{502, 502, 502},
+		},
+		{
+			name: "MPD beyond the sniff window", ctype: "text/xml",
+			body: "<x>" + strings.Repeat("t", 70000) + "</x><MPD><BaseURL>" + stream + "</BaseURL><Period/></MPD>",
+			want: [3]int{502, 502, 502},
+		},
+		{
+			name: "HTML page", ctype: "text/html",
+			body: `<!DOCTYPE html><html><body><a href="` + stream + `">x</a></body></html>`,
+			want: [3]int{502, 502, 502},
+		},
+		{
 			name: "UTF-16BE MPD without BOM", ctype: "text/xml",
 			body: utf16be(`<?xml version="1.0"?><MPD><BaseURL>` + stream + `</BaseURL></MPD>`),
 			want: [3]int{502, 502, 502},
@@ -244,4 +264,32 @@ func utf16le(s string) string {
 		b = append(b, s[i], 0)
 	}
 	return string(b)
+}
+
+// TestSniffStreams: TTML subtitles and media that only look like XML in
+// part still stream unchanged.
+func TestSniffStreams(t *testing.T) {
+	ttml := `<?xml version="1.0" encoding="UTF-8"?>` + "\n" +
+		`<tt xmlns="http://www.w3.org/ns/ttml" xml:lang="en"><body><div><p begin="0s" end="2s">Hello</p></div></body></tt>` + "\n"
+	for _, tt := range []struct{ name, ctype, body string }{
+		{"ttml", "application/ttml+xml", ttml},
+		{"fmp4 with a 60-byte ftyp", "video/mp4", "\x00\x00\x00<ftypiso6\x00\x00\x00\x00iso6dash" + strings.Repeat("\x00", 2000)},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			e := newDirectEnv(t, allowLoopback, unsupportedTOML)
+			e.up.add("/list", file{ctype: tt.ctype, body: tt.body})
+			for _, p := range []string{"/c/auto", "/c/raw", e.signer.Path("auto", e.upURL+"/list")} {
+				if resp, body := e.get(t, p, nil); resp.StatusCode != http.StatusOK || body != tt.body {
+					t.Errorf("GET %s: status %d, %d bytes; want 200 and the body", p, resp.StatusCode, len(body))
+				}
+			}
+		})
+	}
+	// A TTML document larger than the sniff window is refused.
+	big := `<tt xmlns="http://www.w3.org/ns/ttml"><body>` + strings.Repeat(`<p>x</p>`, 9000) + `</body></tt>`
+	e := newDirectEnv(t, allowLoopback, unsupportedTOML)
+	e.up.add("/list", file{ctype: "application/ttml+xml", body: big})
+	if resp, _ := e.get(t, "/c/auto", nil); resp.StatusCode != http.StatusBadGateway {
+		t.Errorf("large TTML: status %d, want 502", resp.StatusCode)
+	}
 }
