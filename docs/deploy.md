@@ -42,7 +42,7 @@ docker run -d --name wg-stream-proxy -p 2349:2349 \
   --read-only --cap-drop ALL \
   -v ./config:/etc/wg-stream-proxy:ro \
   -e WG_STREAM_PROXY_SIGNING_KEY_FILE=/etc/wg-stream-proxy/signing.key \
-  ghcr.io/kingofkalk/wg-stream-proxy:0.1.0
+  ghcr.io/kingofkalk/wg-stream-proxy:0.2.0
 ```
 <!-- x-release-please-end -->
 
