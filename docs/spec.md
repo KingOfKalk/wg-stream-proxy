@@ -58,7 +58,7 @@ wg-stream-proxy
   - Lazy start on the first request; concurrent first requests share one start.
   - Closed after `[tunnels] idle_timeout` (default `60m`) without activity. Activity = any in-flight request or open stream; the idle time runs from the end of the last one. Pooled idle upstream connections are not activity and close with the tunnel; the next request starts it again.
   - Start failure or no handshake within `[upstream] connect_timeout`: request fails with `502` (or an error clip, 3.4); the next request retries. Start, tunnel DNS and connect share one `connect_timeout` deadline.
-  - On shutdown, reload removal or cool-down (7.1): drain in-flight requests for max 30s, then close.
+  - On shutdown (7.2) the requests in flight get up to 30s, then the tunnels close. On reload removal or cool-down (7.1): drain in-flight requests for max 30s, then close.
 - `direct` uses a plain `http.Transport` on the host network with the same settings.
 
 ## 3. Stream handling

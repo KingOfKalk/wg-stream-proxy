@@ -122,7 +122,7 @@ func closeIdle(t *testing.T, s *closeSetup) {
 
 func closeDrain(t *testing.T, s *closeSetup) {
 	t.Helper()
-	if err := s.m.Drain("gr", 0); err != nil {
+	if err := drain(s.m, "gr", 0); err != nil {
 		t.Fatalf("Drain: %v", err)
 	}
 }

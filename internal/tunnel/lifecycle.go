@@ -3,15 +3,14 @@
 package tunnel
 
 import (
-	"maps"
-	"slices"
 	"sync"
 	"time"
 )
 
 // Lifecycle after the lazy start (spec 2.1): a running tunnel closes
-// after Options.IdleTimeout without activity, and Drain and Shutdown
-// give in-flight requests a bounded time before the device closes.
+// after Options.IdleTimeout without activity, and a reload removal or
+// Cooldown gives in-flight requests a bounded time before the device
+// closes.
 //
 // Activity is a request counted with Begin, plus the time of the latest
 // lookup, dial, Begin or end (LastActivity). The idle timer runs only
@@ -21,8 +20,8 @@ import (
 // Begin counts a request that uses the tunnel, from before its first
 // lookup or dial until its response body is closed; the returned end
 // marks its end and may be called more than once. While a request is in
-// flight the tunnel is not closed for idleness, and Drain and Shutdown
-// wait for it. Begin starts nothing: the first lookup or dial does.
+// flight the tunnel is not closed for idleness, and a reload removal or
+// Cooldown wait for it. Begin starts nothing: the first lookup or dial does.
 func (t *Tunnel) Begin() (end func()) {
 	t.touch()
 	t.mu.Lock()
@@ -56,7 +55,7 @@ func (t *Tunnel) inFlight() int {
 }
 
 // OnStop sets f to be called each time the running device stops: idle
-// close, Drain, Shutdown or Close. f runs before the device closes; the
+// close, reload, Cooldown or Close. f runs before the device closes; the
 // route layer closes its pooled connections through the tunnel there.
 // f replaces an earlier one; nil removes it.
 func (t *Tunnel) OnStop(f func()) {
@@ -137,27 +136,6 @@ func (t *Tunnel) finishStop(r *running, hook func(), reason string) {
 	}
 	r.close()
 	t.m.opts.Logger.Info("tunnel closed", "tunnel", t.cfg.Name, "reason", reason, "uptime", t.m.opts.Clock.Now().Sub(r.started))
-}
-
-// Drain stops the tunnel name gracefully (spec 2.1, reload removal): it
-// waits until no request on it is in flight, at most timeout (measured
-// by Options.Clock), then closes the device; connections still open
-// break. The tunnel stays usable: a later request starts it again.
-// An unknown name gives ErrNoSuchTunnel, a closed manager ErrClosed.
-func (m *Manager) Drain(name string, timeout time.Duration) error {
-	_, err := m.drain(name, timeout, "drain")
-	return err
-}
-
-// Shutdown drains every tunnel, including tunnels still draining after a
-// reload, with one shared timeout, like Drain, then closes the manager
-// like Close (spec 2.1, shutdown).
-func (m *Manager) Shutdown(timeout time.Duration) error {
-	m.mu.Lock()
-	tunnels := slices.Concat(m.sorted, slices.Collect(maps.Keys(m.draining)))
-	m.mu.Unlock()
-	m.wait(tunnels, timeout)
-	return m.Close()
 }
 
 // wait blocks until no request on tunnels is in flight, timeout has

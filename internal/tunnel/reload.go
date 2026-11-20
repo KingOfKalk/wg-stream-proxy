@@ -33,7 +33,7 @@ func errRetired(name string) error {
 // Apply makes tunnels the manager's tunnel set (a reload). tunnels are
 // checked like in New; on error nothing changes. Retired tunnels drain
 // for at most drainTimeout (measured by Options.Clock) in the
-// background; Close and Shutdown include them.
+// background; Close includes them.
 func (m *Manager) Apply(tunnels []*wgquick.Tunnel, drainTimeout time.Duration) (Changes, error) {
 	if err := checkTunnels(tunnels); err != nil {
 		return Changes{}, err

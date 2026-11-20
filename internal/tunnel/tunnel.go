@@ -301,8 +301,8 @@ func (m *Manager) Tunnels() []*Tunnel {
 
 // Close aborts pending starts and closes every running device at once,
 // including tunnels still draining after a reload. Open connections
-// through the tunnels break; Shutdown drains them first. Later calls on
-// the tunnels return ErrClosed. Close is idempotent.
+// through the tunnels break, so the caller ends its requests first. Later
+// calls on the tunnels return ErrClosed. Close is idempotent.
 func (m *Manager) Close() error {
 	m.mu.Lock()
 	if m.closed {
@@ -357,7 +357,7 @@ type Tunnel struct {
 	idleGen uint64
 	// onStop is called when the running device stops.
 	onStop func()
-	// draining counts the drains (Drain, Cooldown, reload) waiting for
+	// draining counts the drains (Cooldown, reload) waiting for
 	// the requests before they stop the device.
 	draining atomic.Int32
 

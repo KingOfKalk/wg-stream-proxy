@@ -292,7 +292,7 @@ func TestLifecycleLogDurations(t *testing.T) {
 	}
 	clk.advance(time.Minute)
 	done := make(chan error, 1)
-	go func() { done <- m.Drain("gr", testDrain) }()
+	go func() { done <- drain(m, "gr", testDrain) }()
 	clk.waitArmed(t, testDrain)
 	clk.advance(2 * time.Second)
 	end()
@@ -302,7 +302,7 @@ func TestLifecycleLogDurations(t *testing.T) {
 	out := buf.String()
 	for _, want := range []string{
 		`msg="tunnel drained" tunnel=gr requests=1 waited=2s`,
-		`msg="tunnel closed" tunnel=gr reason=drain uptime=1m2s`,
+		`msg="tunnel closed" tunnel=gr reason=cooldown uptime=1m2s`,
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("log lacks %s:\n%s", want, out)

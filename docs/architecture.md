@@ -509,7 +509,7 @@ stateDiagram-v2
 - **Idle close**: after `[tunnels] idle_timeout` (default `60m`) without
   activity the tunnel closes. Activity = any in-flight request or open
   stream.
-- **Drain**: on shutdown, on a cool-down (debug endpoints, spec 7.1) or
+- **Drain**: on a cool-down (debug endpoints, spec 7.1) or
   when a reload changes or removes a tunnel, in-flight requests get up to
   30s, then the tunnel closes. After a cool-down the same tunnel starts
   cold on the next request. A changed
@@ -733,7 +733,7 @@ flowchart LR
             bind["conn.Bind<br/>UDP socket"]:::tunnel
         end
     end
-    mgr["tunnel.Manager<br/>Apply, Shutdown"]:::ctl
+    mgr["tunnel.Manager<br/>Apply, Close"]:::ctl
     peer["VPN peer<br/>Endpoint"]:::inet
     up["DNS servers,<br/>upstreams"]:::inet
 
@@ -786,7 +786,7 @@ flowchart LR
   Every stop ends in `running.close`: the idle timer (armed when the last
   request ends, `idle_timeout` after the last activity), a reload that
   retires the tunnel (`Apply`: a start in progress is cancelled, requests
-  in flight get up to 30s), and `Shutdown`. Before the device closes, the
+  in flight get up to 30s), and `Close`. Before the device closes, the
   `OnStop` hook makes the route close its idle pooled connections.
 - **`internal/tunnel/netstack`** is a trimmed copy of wireguard-go's
   `tun/netstack` with one change: a packet gVisor sends after `Close` is

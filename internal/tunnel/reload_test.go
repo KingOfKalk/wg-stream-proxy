@@ -375,54 +375,26 @@ func TestApplyAfterClose(t *testing.T) {
 	}
 }
 
-func TestCloseAndShutdownCoverDrainingTunnels(t *testing.T) {
-	target := tunneltest.ServerAddr4.String() + ":80"
-	tests := []struct {
-		name string
-		stop func(t *testing.T, m *Manager, env *testEnv, end func())
-	}{
-		{"Close", func(t *testing.T, m *Manager, _ *testEnv, end func()) {
-			defer end()
-			if err := m.Close(); err != nil {
-				t.Fatal(err)
-			}
-		}},
-		{"Shutdown waits for the request", func(t *testing.T, m *Manager, env *testEnv, end func()) {
-			done := make(chan error, 1)
-			go func() { done <- m.Shutdown(testDrain) }()
-			// The reload drain and Shutdown each wait 30s.
-			env.clock.waitTimers(2)
-			select {
-			case err := <-done:
-				t.Fatalf("Shutdown returned with a request in flight on a draining tunnel: %v", err)
-			default:
-			}
-			end()
-			if err := <-done; err != nil {
-				t.Fatal(err)
-			}
-		}},
+func TestCloseCoversDrainingTunnels(t *testing.T) {
+	peer := tunneltest.Start(t, tunneltest.Options{})
+	m, _ := newManager(t, peer.ClientTunnel(t, "gr"))
+	old := mustTunnel(t, m, "gr")
+	stops := stopped(old)
+	end := old.Begin()
+	defer end()
+	c, err := old.DialContext(t.Context(), "tcp4", tunneltest.ServerAddr4.String()+":80")
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			peer := tunneltest.Start(t, tunneltest.Options{})
-			m, env := newManager(t, peer.ClientTunnel(t, "gr"))
-			old := mustTunnel(t, m, "gr")
-			stops := stopped(old)
-			end := old.Begin()
-			c, err := old.DialContext(t.Context(), "tcp4", target)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer func() { _ = c.Close() }()
-			if _, err := m.Apply(nil, testDrain); err != nil {
-				t.Fatal(err)
-			}
-			tt.stop(t, m, env, end)
-			waitClosed(t, stops, "draining tunnel stop")
-			readFails(t, c)
-		})
+	defer func() { _ = c.Close() }()
+	if _, err := m.Apply(nil, testDrain); err != nil {
+		t.Fatal(err)
 	}
+	if err := m.Close(); err != nil {
+		t.Fatal(err)
+	}
+	waitClosed(t, stops, "draining tunnel stop")
+	readFails(t, c)
 }
 
 func TestSetTimeouts(t *testing.T) {

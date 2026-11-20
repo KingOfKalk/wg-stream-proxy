@@ -491,7 +491,7 @@ func TestLookupCache(t *testing.T) {
 func TestLookupCacheClearedOnStop(t *testing.T) {
 	tests := map[string]func(t *testing.T, m *Manager, env *testEnv){
 		"drain": func(t *testing.T, m *Manager, _ *testEnv) {
-			if err := m.Drain("gr", 0); err != nil {
+			if err := drain(m, "gr", 0); err != nil {
 				t.Fatalf("Drain: %v", err)
 			}
 		},
@@ -597,7 +597,7 @@ func TestLookupEndsWhenTunnelStops(t *testing.T) {
 
 	done := lookupAsync(t.Context(), tun, "upstream.test")
 	waitWaiters(t, tun, "upstream.test", 1)
-	if err := m.Drain("gr", 0); err != nil {
+	if err := drain(m, "gr", 0); err != nil {
 		t.Fatalf("Drain: %v", err)
 	}
 	if r := <-done; !errors.Is(r.err, ErrUnavailable) {
