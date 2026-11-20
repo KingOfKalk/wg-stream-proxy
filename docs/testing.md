@@ -15,7 +15,7 @@ Companion to [spec.md](spec.md). Section numbers refer to the spec.
 | Layer | Scope | When | Version |
 |---|---|---|---|
 | L1 Unit | Rules of SPEC 3-7 | every push | v0.1 |
-| L2 Fuzz | Parsers | push (10s each), nightly (10min each) | v0.1 |
+| L2 Fuzz | Parsers | push (10s each), weekly (10min each) | v0.1 |
 | L3 Integration | Proxy + fixture upstreams + in-process tunnels | every push | v0.1 |
 | L4 Player | ffmpeg against the running binary | every push | v0.1 |
 | L5 Platform | Cross-compile, container smoke; manifests (Later) | every push | v0.1 / Later |
@@ -73,7 +73,7 @@ Proxy in-process with a test config dir, fixture upstreams as `httptest.Server`s
 - Reload: valid change applied, invalid change rejected while the old config keeps serving, removed tunnel drained, changed tunnel recreated, unchanged tunnel keeps running, reload during a tunnel start.
 - Error clips (spec 3.4): `GET /c/` of an HLS channel answers every failure class with its clip playlist (upstream `5xx` and `4xx`, timeout, refused connection, guard, rejected, refused and oversized playlists, a second `206`; through a tunnel: no handshake within `connect_timeout`, a name outside `AllowedIPs`); `HEAD`, `/r/`, raw channels and `error = false` keep the HTTP errors; `/clip/{name}.ts` serves the embedded segments, `404` for anything else, and never asks an upstream; logs and metrics as in spec 7.3 and 8.
 - Security: unsigned or tampered `/r/` and disabled channel give `404`, logo path traversal rejected; `/p/` escapes through the server reach no upstream, nor do upstream redirects out of the prefix; a prefix URL follows the channel's route after a reload that moves the channel to another tunnel, and dies with the channel.
-- Capacity: 3 simulated viewers on different channels; 30s on push, 5 minutes nightly; no stalls, no goroutine or memory growth.
+- Capacity: 3 simulated viewers on different channels; 30s on push, 5 minutes weekly; no stalls, no goroutine or memory growth.
 - EPG proxy mode: two direct sources (gzip and plain) filtered and merged by priority and `epg_source`, served plain and gzip with `ETag`, conditional and `HEAD` requests, linked from the channel list; `503` before the first fetch, a failing source logged; a reload that adds a channel fetches again; back to link mode gives `404`; a source through an in-process tunnel never dials direct, a source on a private address is refused by the guard (`result="guard"`).
 - Observability (v0.2):
   - Timing histograms (`wsp_tunnel_start_seconds`, `wsp_upstream_phase_seconds`): the phases of direct and tunnel requests are observed and served on `/metrics`; the Grafana dashboard only uses metrics the registry has.
@@ -92,8 +92,8 @@ Proxy in-process with a test config dir, fixture upstreams as `httptest.Server`s
 
 ## L5 Platform
 
-- v0.1: cross-compile `linux/amd64`, `linux/arm64`, `darwin/arm64` on every push; container smoke test (build image, start with `examples/config`, wait for `healthcheck`, fetch `/playlist.m3u8`); `docker compose config` for Compose.
-- v0.1, nightly: unit and integration tests on a native arm64 CI runner (QEMU only as fallback, without `-race`).
+- v0.1: `darwin/arm64` build (`Build`) and `linux/amd64` + `linux/arm64` image build (`Container`) on every push; container smoke test (build image, start with `examples/config`, wait for `healthcheck`, fetch `/playlist.m3u8`); `docker compose config` for Compose.
+- v0.1, weekly: unit and integration tests on a native arm64 CI runner (QEMU only as fallback, without `-race`).
 - Later (with distribution): `kubeconform` for Kustomize output, `systemd-analyze verify` for the unit.
 
 ## L6 Manual release checklist
@@ -106,8 +106,8 @@ Proxy in-process with a test config dir, fixture upstreams as `httptest.Server`s
 ## CI and coverage
 
 - Every push ([`ci.yml`](../.github/workflows/ci.yml)): `golangci-lint` (incl. `gofumpt`, `errcheck`, `staticcheck`), `govulncheck`, L1, L2 short (`Fuzz`: every target 10 s with `-fuzzminimizetime 2s`, a failing input is attached to the run as artifact `fuzz-failure`), L3 including the 30 s capacity test (`Capacity`, `WSP_CAPACITY=30s` with `-race`, a job of its own next to `Player`), L4, L5.
-- Nightly ([`nightly.yml`](../.github/workflows/nightly.yml), not a required check): L2 long, capacity 5 minutes, native arm64 run.
+- Weekly ([`weekly.yml`](../.github/workflows/weekly.yml), not a required check; skipped when `main` has no new commit since the last successful run): L2 long, capacity 5 minutes, native arm64 run.
   - L2 long: every fuzz target (found with `go test -list '^Fuzz' ./...`) for 10 minutes with `-fuzzminimizetime 2s` (the default 60s stalls `FuzzRewrite`); a failing input is attached to the run as an artifact.
-  - Capacity: `TestCapacity` in `internal/server/capacitytest` with `-race`. `WSP_CAPACITY` sets the duration (`5m` nightly; `30s` or `1` for the 30s run on push); unset, the test skips, so plain `go test ./...` does not run it. Bounds: every segment arrives, in order and unaltered, within 3 target durations of being published; goroutines grow by at most 20 and the heap in use (after GC) by at most 32 MiB over the first sample after the warm-up; `goleak` after shutdown.
+  - Capacity: `TestCapacity` in `internal/server/capacitytest` with `-race`. `WSP_CAPACITY` sets the duration (`5m` weekly; `30s` or `1` for the 30s run on push); unset, the test skips, so plain `go test ./...` does not run it. Bounds: every segment arrives, in order and unaltered, within 3 target durations of being published; goroutines grow by at most 20 and the heap in use (after GC) by at most 32 MiB over the first sample after the warm-up; `goleak` after shutdown.
   - arm64: `go test -race ./...` on `ubuntu-26.04-arm`; no QEMU fallback, the job fails if the runner is not arm64.
 - Coverage target 80% for `internal/hls`, `internal/dash`, `internal/config`, `internal/route`, `internal/server`; none for `cmd/`.
