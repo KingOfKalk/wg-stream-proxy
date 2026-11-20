@@ -23,9 +23,8 @@ import (
 // failure dialog. Its segment is served under /clip/ from the embedded
 // clips and reaches no upstream.
 
-// kindClip is the kind of /clip/ requests in /debug/requests and the debug
-// line. It is never a metric label: /clip/ requests are not channel
-// requests (spec 7.3).
+// kindClip is the kind of /clip/ requests in the debug line.
+// It is never a metric label: /clip/ requests are not channel requests (spec 7.3).
 const kindClip metrics.Kind = "clip"
 
 // clipContentType is the Content-Type of clip segments.

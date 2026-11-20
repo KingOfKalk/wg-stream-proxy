@@ -46,9 +46,8 @@ func testCLI(env map[string]string) (*cli, *syncBuffer, *syncBuffer) {
 		stdout: out,
 		stderr: errOut,
 		env: config.Env{
-			LookupEnv:   func(k string) (string, bool) { v, ok := env[k]; return v, ok },
-			DirExists:   func(string) bool { return false },
-			UserHomeDir: func() (string, error) { return "/nonexistent-home", nil },
+			LookupEnv: func(k string) (string, bool) { v, ok := env[k]; return v, ok },
+			DirExists: func(string) bool { return false },
 		},
 		readFile: os.ReadFile,
 		ctx:      context.Background(),
@@ -130,7 +129,8 @@ func TestCheckListsAllErrors(t *testing.T) {
 		"channels.d/tv.toml": "[[channel]]\nname = \"News\"\nurl = \"https://tv.example.com/news.m3u8\"\n",
 		"tunnels/gr.conf":    "[Interface]\nPostUp = true\n",
 	})
-	c, out, errOut := testCLI(map[string]string{"WG_STREAM_PROXY_SIGNING_KEY": "tiny-key-value"})
+	tinyKey := writeKeyFile(t, "tiny-key-value")
+	c, out, errOut := testCLI(map[string]string{"WG_STREAM_PROXY_SIGNING_KEY_FILE": tinyKey})
 	if code := c.run([]string{"check", "--config-dir", dir}); code != 1 {
 		t.Fatalf("exit code = %d, want 1", code)
 	}
@@ -163,6 +163,18 @@ func TestCheckMissingConfigDir(t *testing.T) {
 	}
 }
 
+// TestMissingConfigDirHasNoHomeFallback: without --config-dir, the variable
+// and /etc/wg-stream-proxy there is no XDG or home fallback.
+func TestMissingConfigDirHasNoHomeFallback(t *testing.T) {
+	c, _, errOut := testCLI(map[string]string{"XDG_CONFIG_HOME": t.TempDir(), "HOME": t.TempDir()})
+	if code := c.run([]string{"check"}); code != 1 {
+		t.Fatalf("exit code = %d, want 1", code)
+	}
+	if !strings.Contains(errOut.String(), "set --config-dir or WG_STREAM_PROXY_CONFIG_DIR") {
+		t.Errorf("stderr = %q, want the config dir hint", errOut)
+	}
+}
+
 func TestServeStartupErrors(t *testing.T) {
 	busy, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -180,9 +192,6 @@ func TestServeStartupErrors(t *testing.T) {
 		{"default command, missing config dir", nil, map[string]string{"WG_STREAM_PROXY_CONFIG_DIR": "/nonexistent/wsp"}, 1, "config dir"},
 		{"invalid config", []string{"--config-dir", good, "--log-level", "loud"}, nil, 1, "log_level"},
 		{"listen error", []string{"serve", "--config-dir", good, "--listen", busy.Addr().String()}, nil, 1, "listen"},
-		{"signing key conflict", []string{"--config-dir", good}, map[string]string{
-			"WG_STREAM_PROXY_SIGNING_KEY": strings.Repeat("k", 32), "WG_STREAM_PROXY_SIGNING_KEY_FILE": "/k",
-		}, 1, "set only one"},
 		{"unknown flag", []string{"serve", "--bogus"}, nil, 2, "bogus"},
 		{"extra argument", []string{"serve", "extra"}, nil, 2, "unexpected arguments"},
 		{"check extra argument", []string{"check", "extra"}, nil, 2, "unexpected arguments"},
@@ -224,7 +233,7 @@ func TestServe(t *testing.T) {
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	c, out, errOut := testCLI(map[string]string{"WG_STREAM_PROXY_LISTEN": "127.0.0.1:0"})
+	c, out, errOut := testCLI(nil)
 	c.ctx = ctx
 	client := &http.Client{Transport: &http.Transport{}}
 	defer client.CloseIdleConnections()
@@ -237,7 +246,7 @@ func TestServe(t *testing.T) {
 			list = get(t, client, "http://"+addr.String()+"/playlist.m3u8")
 		}()
 	}
-	if code := c.run([]string{"--config-dir", dir, "--log-format", "json", "--log-level", "debug"}); code != 0 {
+	if code := c.run([]string{"--config-dir", dir, "--listen", "127.0.0.1:0", "--log-format", "json", "--log-level", "debug"}); code != 0 {
 		t.Fatalf("exit code = %d, want 0; stderr:\n%s", code, errOut)
 	}
 	if want := "wg-stream-proxy dev\nsource: https://github.com/KingOfKalk/wg-stream-proxy\n"; health != want {
@@ -290,10 +299,7 @@ func TestServeReloadsOnSIGHUP(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	c, _, errOut := testCLI(map[string]string{
-		"WG_STREAM_PROXY_LISTEN":           "127.0.0.1:0",
-		"WG_STREAM_PROXY_SIGNING_KEY_FILE": keyFile,
-	})
+	c, _, errOut := testCLI(map[string]string{"WG_STREAM_PROXY_SIGNING_KEY_FILE": keyFile})
 	c.ctx = ctx
 	c.hangup = make(chan os.Signal)
 	reloaded := make(chan error)
@@ -328,7 +334,7 @@ func TestServeReloadsOnSIGHUP(t *testing.T) {
 			after = get(t, client, list)
 		}()
 	}
-	if code := c.run([]string{"--config-dir", dir}); code != 0 {
+	if code := c.run([]string{"--config-dir", dir, "--listen", "127.0.0.1:0"}); code != 0 {
 		t.Fatalf("exit code = %d, want 0; stderr:\n%s", code, errOut)
 	}
 	if strings.Contains(before, "/c/sport") || !strings.Contains(after, "/c/sport") {
@@ -349,39 +355,38 @@ func TestServeReloadsOnSIGHUP(t *testing.T) {
 
 func TestReloadLoaderKeepsRestartSettings(t *testing.T) {
 	dir := writeDir(t, map[string]string{"config.toml": ""})
-	oldTunnels := filepath.Join(dir, "tunnels")
 	key := []byte(strings.Repeat("k", 32))
+	same := writeKeyFile(t, string(key))
+	changed := writeKeyFile(t, strings.Repeat("n", 32))
+	short := writeKeyFile(t, "short")
+	keyEnv := func(file string) map[string]string {
+		return map[string]string{"WG_STREAM_PROXY_SIGNING_KEY_FILE": file}
+	}
 	tests := []struct {
 		name      string
 		env       map[string]string
 		generated bool
 		want      []string
 	}{
-		{"nothing changed", map[string]string{"WG_STREAM_PROXY_SIGNING_KEY": string(key)}, false, nil},
+		{"nothing changed", keyEnv(same), false, nil},
 		{"random key stays random", nil, true, nil},
-		{
-			"tunnels dir moved",
-			map[string]string{"WG_STREAM_PROXY_TUNNELS_DIR": t.TempDir(), "WG_STREAM_PROXY_SIGNING_KEY": string(key)},
-			false,
-			[]string{"tunnels dir changed, restart required"},
-		},
-		{"key set", map[string]string{"WG_STREAM_PROXY_SIGNING_KEY": string(key)}, true, []string{"signing key changed"}},
-		{"key changed", map[string]string{"WG_STREAM_PROXY_SIGNING_KEY": strings.Repeat("n", 32)}, false, []string{"signing key changed"}},
+		{"key set", keyEnv(same), true, []string{"signing key changed"}},
+		{"key changed", keyEnv(changed), false, []string{"signing key changed"}},
 		{"key removed", nil, false, []string{"signing key changed"}},
-		{"key invalid", map[string]string{"WG_STREAM_PROXY_SIGNING_KEY": "short"}, false, []string{"signing key: restart required"}},
+		{"key invalid", keyEnv(short), false, []string{"signing key: restart required"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			c, _, _ := testCLI(tt.env)
 			var logs syncBuffer
 			log := newLogger(&logs, config.LogFormatText, slog.LevelInfo)
-			first := config.Options{Paths: config.Paths{ConfigDir: dir, TunnelsDir: oldTunnels}}
-			cfg, err := c.reloadLoader(config.Flags{ConfigDir: dir}, first, log, key, tt.generated)()
+			first := config.Options{Paths: config.Paths{ConfigDir: dir, TunnelsDir: filepath.Join(dir, "tunnels")}}
+			cfg, err := c.reloadLoader(first, log, key, tt.generated)()
 			if err != nil {
 				t.Fatalf("load: %v", err)
 			}
-			if got := cfg.Paths().TunnelsDir; got != oldTunnels {
-				t.Errorf("tunnels dir = %s, want the old %s", got, oldTunnels)
+			if got := cfg.Paths().TunnelsDir; got != first.Paths.TunnelsDir {
+				t.Errorf("tunnels dir = %s, want %s", got, first.Paths.TunnelsDir)
 			}
 			out := logs.String()
 			if len(tt.want) == 0 && out != "" {
@@ -397,4 +402,14 @@ func TestReloadLoaderKeepsRestartSettings(t *testing.T) {
 			}
 		})
 	}
+}
+
+// writeKeyFile writes a signing key file and returns its path.
+func writeKeyFile(t *testing.T, content string) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "key")
+	if err := os.WriteFile(p, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return p
 }

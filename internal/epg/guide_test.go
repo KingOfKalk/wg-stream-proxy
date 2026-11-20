@@ -246,7 +246,7 @@ func TestGuideFirstFetch(t *testing.T) {
 		t.Errorf("etags %q %q modified %v", out.ETag, out.GzipETag, out.Modified)
 	}
 	st := e.g.Status()
-	if len(st) != 2 || st[0].Name != "gr" || st[0].Fetches[ResultOK] != 1 || st[0].Bytes == 0 || st[0].FilteredBytes == 0 || !st[0].Updated.Equal(filterNow) {
+	if len(st) != 2 || st[0].Name != "gr" || st[0].Fetches[ResultOK] != 1 || !st[0].Updated.Equal(filterNow) {
 		t.Errorf("status %+v", st)
 	}
 	if !strings.Contains(e.logs.String(), "epg source fetched") || !strings.Contains(e.logs.String(), "url=https://epg.example.org/gr.xml.gz") {
@@ -340,7 +340,7 @@ func TestGuideStartsWithoutGuide(t *testing.T) {
 		t.Fatalf("guide without any good copy: %s", out.Plain)
 	}
 	st := e.g.Status()
-	if st[0].Fetches[ResultInvalid] != 1 || st[1].Fetches[ResultInvalid] != 1 || st[0].Bytes != 0 || !st[0].Updated.IsZero() {
+	if st[0].Fetches[ResultInvalid] != 1 || st[1].Fetches[ResultInvalid] != 1 || !st[0].Updated.IsZero() {
 		t.Errorf("status %+v", st)
 	}
 	if logs := e.logs.String(); !strings.Contains(logs, "serving_copy_age=none") || strings.Contains(logs, "not xmltv") {

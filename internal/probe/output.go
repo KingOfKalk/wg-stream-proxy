@@ -118,8 +118,6 @@ func (r *Report) modeNote() string {
 	switch r.Mode {
 	case ModeProxy:
 		return " (via running proxy)"
-	case ModeStandalone:
-		return " (standalone)"
 	}
 	return ""
 }

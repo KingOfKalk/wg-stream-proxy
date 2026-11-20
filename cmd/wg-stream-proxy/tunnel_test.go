@@ -210,7 +210,7 @@ func TestServeDebugListener(t *testing.T) {
 	dir := writeDir(t, map[string]string{"config.toml": "[debug]\nlisten = \"127.0.0.1:0\"\n"})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	c, _, errOut := testCLI(map[string]string{"WG_STREAM_PROXY_LISTEN": "127.0.0.1:0"})
+	c, _, errOut := testCLI(nil)
 	c.ctx = ctx
 	client := &http.Client{Transport: &http.Transport{}}
 	defer client.CloseIdleConnections()
@@ -224,7 +224,7 @@ func TestServeDebugListener(t *testing.T) {
 			mainPprof = get(t, client, "http://"+mainAddr.String()+"/debug/pprof/")
 		}()
 	}
-	if code := c.run([]string{"--config-dir", dir}); code != 0 {
+	if code := c.run([]string{"--config-dir", dir, "--listen", "127.0.0.1:0"}); code != 0 {
 		t.Fatalf("exit code = %d, want 0; stderr:\n%s", code, errOut)
 	}
 	if tunnels != `{"tunnels":[]}`+"\n" {
@@ -242,11 +242,11 @@ func TestServeDebugListenerOffByDefault(t *testing.T) {
 	dir := writeDir(t, map[string]string{"config.toml": ""})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	c, _, errOut := testCLI(map[string]string{"WG_STREAM_PROXY_LISTEN": "127.0.0.1:0"})
+	c, _, errOut := testCLI(nil)
 	c.ctx = ctx
 	c.listening = func(net.Addr) { cancel() }
 	c.debugListening = func(addr net.Addr) { t.Errorf("debug listener opened on %s", addr) }
-	if code := c.run([]string{"--config-dir", dir}); code != 0 {
+	if code := c.run([]string{"--config-dir", dir, "--listen", "127.0.0.1:0"}); code != 0 {
 		t.Fatalf("exit code = %d, want 0; stderr:\n%s", code, errOut)
 	}
 	if strings.Contains(errOut.String(), "debug endpoints") {
@@ -261,8 +261,8 @@ func TestServeDebugListenError(t *testing.T) {
 	}
 	defer func() { _ = busy.Close() }()
 	dir := debugConfig(t, busy.Addr().String())
-	c, _, errOut := testCLI(map[string]string{"WG_STREAM_PROXY_LISTEN": "127.0.0.1:0"})
-	if code := c.run([]string{"--config-dir", dir}); code != 1 {
+	c, _, errOut := testCLI(nil)
+	if code := c.run([]string{"--config-dir", dir, "--listen", "127.0.0.1:0"}); code != 1 {
 		t.Errorf("exit code = %d, want 1", code)
 	}
 	if !strings.Contains(errOut.String(), `msg="cannot listen" addr=`+busy.Addr().String()) {

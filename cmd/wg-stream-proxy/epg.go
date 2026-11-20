@@ -7,10 +7,13 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/KingOfKalk/wg-stream-proxy/internal/config"
 	"github.com/KingOfKalk/wg-stream-proxy/internal/epg"
+	"github.com/KingOfKalk/wg-stream-proxy/internal/route"
+	"github.com/KingOfKalk/wg-stream-proxy/internal/tunnel"
 )
 
 // epgCmd runs epg ids (spec 7.2). It takes the config flags of serve and
@@ -107,7 +110,7 @@ func (c *cli) loadEPG(cfg *config.Config, name string) (*epg.Index, error) {
 	if src.Route != config.RouteDirect {
 		_, _ = fmt.Fprintf(c.stderr, "wg-stream-proxy: epg: source %q uses tunnel %q: starting it in this process; a running proxy with the same tunnel key may stall until its next handshake\n", src.Name, src.Route)
 	}
-	rt, closeRoute, err := c.standaloneRoute(cfg, src.Route)
+	rt, closeRoute, err := c.epgRoute(cfg, src.Route)
 	if err != nil {
 		return nil, err
 	}
@@ -135,4 +138,62 @@ func formatIDs(x *epg.Index) string {
 		b.WriteString("\n")
 	}
 	return b.String()
+}
+
+// epgLogLevel is the log level of the EPG commands: warnings and errors
+// (a tunnel that fails to start), debug if the config asks for it. The
+// start of the tunnel shows in the timing, not as a log line.
+func epgLogLevel(cfg *config.Config) slog.Level {
+	if cfg.LogLevel() <= slog.LevelDebug {
+		return slog.LevelDebug
+	}
+	return slog.LevelWarn
+}
+
+// configError is an invalid tunnel file found by epgRoute.
+type configError struct{ error }
+
+// epgRoute returns the route name (direct or a tunnel of cfg) in this
+// process, for the EPG commands, which run without the proxy. Only the
+// tunnel of the route is loaded; it starts with the first request. close
+// stops it and closes the connections. An invalid tunnel file gives a configError.
+func (c *cli) epgRoute(cfg *config.Config, name string) (rt *route.Route, closeRoute func(), err error) {
+	log := newLogger(c.stderr, cfg.LogFormat(), epgLogLevel(cfg))
+	nets := map[string]route.Network{}
+	activity := map[string]route.Activity{}
+	closeTunnel := func() {}
+	for _, tf := range cfg.Tunnels() {
+		if tf.Name != name {
+			continue
+		}
+		mgr, err := tunnel.Load([]config.Tunnel{tf}, tunnel.Options{
+			ConnectTimeout: cfg.Upstream().ConnectTimeout,
+			IdleTimeout:    cfg.IdleTimeout(),
+			Logger:         log,
+		})
+		if err != nil {
+			return nil, nil, configError{err}
+		}
+		closeTunnel = func() { _ = mgr.Close() }
+		t, _ := mgr.Tunnel(name)
+		nets[name], activity[name] = t, t
+	}
+	allow := cfg.AllowPrivate()
+	for n, prefixes := range c.allowPrivate {
+		allow[n] = append(allow[n], prefixes...)
+	}
+	set, err := route.NewSet(route.Host(), nets, route.Options{Upstream: cfg.Upstream(), AllowPrivate: allow, Activity: activity})
+	if err != nil {
+		closeTunnel()
+		return nil, nil, err
+	}
+	rt, ok := set.Route(name)
+	if !ok {
+		closeTunnel()
+		return nil, nil, fmt.Errorf("unknown route %q", name)
+	}
+	return rt, func() {
+		set.CloseIdleConnections()
+		closeTunnel()
+	}, nil
 }

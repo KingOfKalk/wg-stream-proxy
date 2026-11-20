@@ -261,11 +261,6 @@ type EPGSource struct {
 	Name string
 	// Fetches counts the fetches by result.
 	Fetches map[string]uint64
-	// Duration is the time of the last fetch.
-	Duration time.Duration
-	// Bytes is the XML size of the copy in use before filtering,
-	// FilteredBytes after it; 0 without a copy.
-	Bytes, FilteredBytes int64
 	// Updated is when the copy in use was fetched; zero without one.
 	Updated time.Time
 }
@@ -278,15 +273,6 @@ var (
 	epgFetchesDesc = prometheus.NewDesc("wsp_epg_fetches_total",
 		"Fetches of an EPG source by result: ok or why it failed.",
 		[]string{"source", "result"}, nil)
-	epgDurationDesc = prometheus.NewDesc("wsp_epg_fetch_duration_seconds",
-		"Time of the last fetch of an EPG source, download and filter.",
-		[]string{"source"}, nil)
-	epgBytesDesc = prometheus.NewDesc("wsp_epg_source_bytes",
-		"XML size of the EPG source copy in use, before filtering (after decompression); 0 without a copy.",
-		[]string{"source"}, nil)
-	epgFilteredDesc = prometheus.NewDesc("wsp_epg_filtered_bytes",
-		"Size of what the proxy keeps of the EPG source copy in use; 0 without a copy.",
-		[]string{"source"}, nil)
 	epgUpdatedDesc = prometheus.NewDesc("wsp_epg_last_success_timestamp_seconds",
 		"Time the EPG source copy in use was fetched, 0 without a copy.",
 		[]string{"source"}, nil)
@@ -299,9 +285,6 @@ type epgCollector struct {
 
 func (c epgCollector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- epgFetchesDesc
-	ch <- epgDurationDesc
-	ch <- epgBytesDesc
-	ch <- epgFilteredDesc
 	ch <- epgUpdatedDesc
 }
 
@@ -317,9 +300,6 @@ func (c epgCollector) Collect(ch chan<- prometheus.Metric) {
 		if !s.Updated.IsZero() {
 			updated = float64(s.Updated.UnixNano()) / 1e9
 		}
-		ch <- prometheus.MustNewConstMetric(epgDurationDesc, prometheus.GaugeValue, s.Duration.Seconds(), s.Name)
-		ch <- prometheus.MustNewConstMetric(epgBytesDesc, prometheus.GaugeValue, float64(s.Bytes), s.Name)
-		ch <- prometheus.MustNewConstMetric(epgFilteredDesc, prometheus.GaugeValue, float64(s.FilteredBytes), s.Name)
 		ch <- prometheus.MustNewConstMetric(epgUpdatedDesc, prometheus.GaugeValue, updated, s.Name)
 	}
 }

@@ -8,15 +8,9 @@ import (
 	"path/filepath"
 )
 
-// Environment variables read by Resolve (spec 4 and 5.1).
-const (
-	EnvConfigDir     = "WG_STREAM_PROXY_CONFIG_DIR"
-	EnvTunnelsDir    = "WG_STREAM_PROXY_TUNNELS_DIR"
-	EnvListen        = "WG_STREAM_PROXY_LISTEN"
-	EnvLogLevel      = "WG_STREAM_PROXY_LOG_LEVEL"
-	EnvLogFormat     = "WG_STREAM_PROXY_LOG_FORMAT"
-	EnvPublicBaseURL = "WG_STREAM_PROXY_PUBLIC_BASE_URL"
-)
+// EnvConfigDir names the config directory (spec 5.1); the container image
+// sets it.
+const EnvConfigDir = "WG_STREAM_PROXY_CONFIG_DIR"
 
 // systemConfigDir is used if it exists and nothing else is configured.
 const systemConfigDir = "/etc/wg-stream-proxy"
@@ -32,9 +26,8 @@ type Flags struct {
 
 // Env gives access to the process environment; injected for tests.
 type Env struct {
-	LookupEnv   func(key string) (string, bool)
-	DirExists   func(path string) bool
-	UserHomeDir func() (string, error)
+	LookupEnv func(key string) (string, bool)
+	DirExists func(path string) bool
 }
 
 // OSEnv returns the Env of the running process.
@@ -45,7 +38,6 @@ func OSEnv() Env {
 			fi, err := os.Stat(p)
 			return err == nil && fi.IsDir()
 		},
-		UserHomeDir: os.UserHomeDir,
 	}
 }
 
@@ -61,13 +53,12 @@ type Paths struct {
 	TunnelsDir string
 }
 
-// Overrides are settings from flags or environment that beat
-// config.toml (spec 5.1). Empty strings mean "not set".
+// Overrides are settings from flags that beat config.toml (spec 5.1).
+// Empty strings mean "not set".
 type Overrides struct {
-	Listen        string
-	LogLevel      string
-	LogFormat     string
-	PublicBaseURL string
+	Listen    string
+	LogLevel  string
+	LogFormat string
 }
 
 // Options are the inputs of Load.
@@ -76,24 +67,19 @@ type Options struct {
 	Overrides Overrides
 }
 
-// Resolve determines directories and overrides from flags and environment
-// (spec 5.1). Empty flag and environment values count as not set.
+// Resolve determines directories and overrides from flags and the
+// environment (spec 5.1). Empty flag and environment values count as not set.
 func Resolve(flags Flags, env Env) (Options, error) {
 	dir, err := configDir(flags, env)
 	if err != nil {
 		return Options{}, err
 	}
-	tunnels := env.get(EnvTunnelsDir)
-	if tunnels == "" {
-		tunnels = filepath.Join(dir, "tunnels")
-	}
 	return Options{
-		Paths: Paths{ConfigDir: dir, TunnelsDir: tunnels},
+		Paths: Paths{ConfigDir: dir, TunnelsDir: filepath.Join(dir, "tunnels")},
 		Overrides: Overrides{
-			Listen:        first(flags.Listen, env.get(EnvListen)),
-			LogLevel:      first(flags.LogLevel, env.get(EnvLogLevel)),
-			LogFormat:     first(flags.LogFormat, env.get(EnvLogFormat)),
-			PublicBaseURL: env.get(EnvPublicBaseURL),
+			Listen:    flags.Listen,
+			LogLevel:  flags.LogLevel,
+			LogFormat: flags.LogFormat,
 		},
 	}, nil
 }
@@ -105,15 +91,8 @@ func configDir(flags Flags, env Env) (string, error) {
 	if env.DirExists(systemConfigDir) {
 		return systemConfigDir, nil
 	}
-	if x := env.get("XDG_CONFIG_HOME"); x != "" {
-		return filepath.Join(x, "wg-stream-proxy"), nil
-	}
-	home, err := env.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("config dir: no --config-dir, %s, %s, XDG_CONFIG_HOME or home directory: %w",
-			EnvConfigDir, systemConfigDir, err)
-	}
-	return filepath.Join(home, ".config", "wg-stream-proxy"), nil
+	return "", fmt.Errorf("config dir: set --config-dir or %s (or create %s)",
+		EnvConfigDir, systemConfigDir)
 }
 
 // first returns the first non-empty value.

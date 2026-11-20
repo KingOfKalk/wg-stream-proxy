@@ -98,11 +98,6 @@ type SourceStatus struct {
 	Name string
 	// Fetches counts the fetches by result (Results).
 	Fetches map[string]uint64
-	// Duration is the time of the last fetch, 0 before the first.
-	Duration time.Duration
-	// Bytes is the XML size of the last good fetch before filtering,
-	// FilteredBytes what was kept of it; both 0 without a copy.
-	Bytes, FilteredBytes int64
 	// Updated is when the copy in use was fetched; zero without one.
 	Updated time.Time
 }
@@ -143,8 +138,7 @@ type sourceState struct {
 	force bool
 	epoch uint64
 
-	fetches  map[string]uint64
-	duration time.Duration
+	fetches map[string]uint64
 }
 
 // NewGuide returns a Guide without sources; Update sets them.
@@ -223,9 +217,9 @@ func (g *Guide) Status() []SourceStatus {
 	out := make([]SourceStatus, 0, len(g.sources))
 	for _, s := range g.sources {
 		st := g.state[s.Name]
-		ss := SourceStatus{Name: s.Name, Fetches: maps.Clone(st.fetches), Duration: st.duration}
+		ss := SourceStatus{Name: s.Name, Fetches: maps.Clone(st.fetches)}
 		if st.copy != nil {
-			ss.Bytes, ss.FilteredBytes, ss.Updated = st.copy.Read, st.copy.Size, st.copyAt
+			ss.Updated = st.copyAt
 		}
 		out = append(out, ss)
 	}
@@ -338,7 +332,7 @@ func (g *Guide) fetchSource(ctx context.Context, src config.EPGSource, epoch uin
 		g.mu.Unlock()
 		return
 	}
-	st.tried, st.failed, st.duration = start, err != nil, d
+	st.tried, st.failed = start, err != nil
 	st.fetches[result]++
 	if st.epoch == epoch {
 		st.force = false

@@ -97,7 +97,7 @@ func watchServe(t *testing.T, dir string, test func(list string, clk *manualCloc
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	c, _, errOut := testCLI(map[string]string{"WG_STREAM_PROXY_LISTEN": "127.0.0.1:0"})
+	c, _, errOut := testCLI(nil)
 	c.ctx = ctx
 	c.hangup = make(chan os.Signal)
 	clk := newManualClock()
@@ -110,7 +110,7 @@ func watchServe(t *testing.T, dir string, test func(list string, clk *manualCloc
 			test("http://"+addr.String()+"/playlist.m3u8", clk, reloads)
 		}()
 	}
-	if code := c.run([]string{"--config-dir", dir}); code != 0 {
+	if code := c.run([]string{"--config-dir", dir, "--listen", "127.0.0.1:0"}); code != 0 {
 		t.Fatalf("exit code = %d, want 0; stderr:\n%s", code, errOut)
 	}
 	return clk, errOut

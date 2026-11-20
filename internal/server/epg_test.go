@@ -171,7 +171,8 @@ func TestEPGEndToEnd(t *testing.T) {
 		}
 	}
 	if logs := e.logs.String(); !strings.Contains(logs, `msg="epg source fetched" source=gr route=direct url=`+upSrv.URL+"/…/epg.xml.gz") ||
-		!strings.Contains(logs, `msg="epg guide updated" channels=2 programmes=2`) {
+		!strings.Contains(logs, `msg="epg guide updated" channels=2 programmes=2`) ||
+		!strings.Contains(logs, "filtered_bytes=") {
 		t.Errorf("logs:\n%s", logs)
 	}
 
@@ -181,9 +182,6 @@ func TestEPGEndToEnd(t *testing.T) {
 		`wsp_epg_fetches_total{result="ok",source="gr"} 1`,
 		`wsp_epg_fetches_total{result="status",source="de"} 0`,
 		`wsp_epg_last_success_timestamp_seconds{source="de"} ` + strconv.FormatFloat(float64(epgNow.Unix()), 'g', -1, 64),
-		`wsp_epg_filtered_bytes{source="gr"} `,
-		`wsp_epg_source_bytes{source="gr"} ` + strconv.Itoa(len(xmltv("gr", "a.example", "b.example", "off.example", "x.example"))),
-		`wsp_epg_fetch_duration_seconds{source="de"} 0`,
 	} {
 		if !strings.Contains(m, line) {
 			t.Errorf("metrics lack %q", line)

@@ -263,8 +263,8 @@ func TestDebugProbeHostAndOrigin(t *testing.T) {
 	}
 }
 
-// TestDebugProbeIsNoChannelRequest: a probe counts in no request metric, is
-// not in /debug/requests, and logs one line with the logged URL form only.
+// TestDebugProbeIsNoChannelRequest: a probe counts in no request metric and
+// logs one line with the logged URL form only.
 func TestDebugProbeIsNoChannelRequest(t *testing.T) {
 	e := newProbeEnv(t)
 	url := "http://upstream.test/live/master.m3u8?token=secret-token"
@@ -272,10 +272,6 @@ func TestDebugProbeIsNoChannelRequest(t *testing.T) {
 		t.Fatalf("status %d: %s", code, body)
 	}
 
-	code, body := send(t, e.client, http.MethodGet, e.debugURL+"/debug/requests", nil)
-	if code != http.StatusOK || !strings.Contains(body, `"requests":[]`) {
-		t.Errorf("GET /debug/requests = %d %s, want no requests", code, body)
-	}
 	_, metrics := send(t, e.client, http.MethodGet, e.url+"/metrics", nil)
 	for _, name := range []string{"wsp_upstream_requests_total{", "wsp_active_requests{", "wsp_upstream_phase_seconds_count{", "wsp_upstream_errors_total{"} {
 		if strings.Contains(metrics, name) {

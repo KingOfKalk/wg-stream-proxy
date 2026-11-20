@@ -378,7 +378,7 @@ Bounded labels only (clip names are fixed, no channel ids on new series):
 | `wsp_error_clips_total` | counter | `clip` | Error clips served, per text |
 
 - Logs: one info line per session when it ends (`channel`, `result`, `wait`, `segments`); the existing failure warn line gets `clip=<name>`.
-- `/debug/requests`: `/s/` and `/clip/` requests appear like `/r/` with `kind` `clip`.
+- Debug `request` log line: `/s/` and `/clip/` requests appear like `/r/` with `kind` `clip`.
 
 ### 6.7 Memory and CPU on the Pi
 

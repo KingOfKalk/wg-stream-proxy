@@ -63,7 +63,7 @@ func TestCommandHelp(t *testing.T) {
 	}{
 		{"serve", configFlags},
 		{"check", configFlags},
-		{"probe", append([]string{"-route", "-header", "-json", "-standalone", "<url>"}, configFlags...)},
+		{"probe", append([]string{"-route", "-header", "-json", "<url>"}, configFlags...)},
 		{"healthcheck", configFlags},
 		{"epg", []string{"epg ids"}},
 		{"epg ids", configFlags},

@@ -163,8 +163,8 @@ func logosDir(configDir string) string {
 // The commands that only talk to a running proxy (healthcheck, tunnel
 // list|stop, probe) use it, so they keep working while the proxy serves
 // its loaded config and a newer version with a broken channel or tunnel
-// file is rejected by the reload (5.6). Overrides (flags and
-// environment, Resolve) apply like in Load.
+// file is rejected by the reload (5.6). Overrides (flags,
+// Resolve) apply like in Load.
 func LoadAddresses(opts Options) (listen, debugListen string, err error) {
 	p := opts.Paths
 	fi, err := os.Stat(p.ConfigDir)

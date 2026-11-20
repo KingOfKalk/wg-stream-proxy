@@ -44,14 +44,14 @@ var topics = map[string]topic{
 	},
 	"check": {
 		usage: "check [flags]",
-		desc:  "Validate config.toml, the channel files, the tunnel files and the signing key variables. Lists every error and starts nothing.",
+		desc:  "Validate config.toml, the channel files, the tunnel files and the signing key variable. Lists every error and starts nothing.",
 		flags: func() *flag.FlagSet { fs, _ := configFlagSet("check"); return fs },
 	},
 	"probe": {
 		usage: "probe [flags] <url>",
 		desc: "Test a URL through a route without adding a channel: fetch it like the proxy would (private-range guard, [upstream] timeouts and limits) and report the final URL (host and file name only), status, content type, the detected format (HLS master or media, raw or ICY, or a refused playlist format) and where the time went (tunnel start, DNS, connect, TLS, first byte). For an HLS playlist the first variant and the first segment are probed too. " +
 			"Exit code 0 if the proxy would serve the URL, 1 if not, 2 for usage errors. The URL may come before or after the flags.\n\n" +
-			"If the proxy runs and [debug] listen is set, the running proxy makes the requests through its running tunnel (a changed channel, tunnel or config file counts only after its reload). Without a debug listener, or if nothing listens there, probe runs standalone and starts the tunnel of the route itself, which can stall streams of a running proxy with the same tunnel key; --standalone forces this. The output says which mode ran.",
+			"Needs [debug] listen in config.toml and a running proxy: the running proxy makes the requests through its running tunnel (a changed channel, tunnel or config file counts only after its reload). Without a debug listener, or if nothing listens there, probe exits with an error.",
 		flags: func() *flag.FlagSet { return newProbeFlags().fset },
 	},
 	"epg": {
@@ -112,9 +112,9 @@ func configFlagSet(name string) (*flag.FlagSet, *config.Flags) {
 	fs.Usage = func() {}
 	var f config.Flags
 	fs.StringVar(&f.ConfigDir, "config-dir", "", "config directory (env "+config.EnvConfigDir+")")
-	fs.StringVar(&f.Listen, "listen", "", "listen address [host]:port (env "+config.EnvListen+")")
-	fs.StringVar(&f.LogLevel, "log-level", "", "debug, info, warn or error (env "+config.EnvLogLevel+")")
-	fs.StringVar(&f.LogFormat, "log-format", "", "text or json (env "+config.EnvLogFormat+")")
+	fs.StringVar(&f.Listen, "listen", "", "listen address [host]:port")
+	fs.StringVar(&f.LogLevel, "log-level", "", "debug, info, warn or error")
+	fs.StringVar(&f.LogFormat, "log-format", "", "text or json")
 	return fs, &f
 }
 

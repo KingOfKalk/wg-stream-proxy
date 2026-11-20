@@ -192,7 +192,7 @@ flowchart TB
   reload as `SIGHUP`; no change, no reload.
 - Tunnel lifecycle: lazy start, idle close, drain (section 6).
 - Signing key: signs and verifies `/r/` and `/p/` URLs (spec 4, 4.1). Changing it needs
-  a restart, like `listen` and the tunnels dir location.
+  a restart, like `listen`.
 - `/healthz` and `/metrics` (Prometheus, `wsp_` prefix, spec 7.3).
 
 **Data plane**: moves bytes for players.
@@ -233,7 +233,7 @@ sequenceDiagram
     end
 
     P->>S: GET /playlist.m3u8
-    S->>C: enabled channels (optional ?group=)
+    S->>C: enabled channels
     C-->>S: channels in file order
     S->>L: render
     Note over L: header with EPG link,<br/>extra lines, EXTINF line,<br/>absolute /c/{id} URL per channel
@@ -244,7 +244,7 @@ sequenceDiagram
 
 - Each entry points to `/c/{id}.m3u8` if `upstream.type = "hls"` or the
   upstream URL path contains `.m3u8`, otherwise to `/c/{id}` (spec 6). URLs are absolute: `public_base_url`, else
-  `X-Forwarded-*`, else the request `Host` (spec 7.1).
+  the request scheme and `Host` (spec 7.1).
 - `#KODIPROP` and other `extra` lines appear only here, never in
   playlists under `/c/` or `/r/`.
 
@@ -626,13 +626,11 @@ Requests go down the layers, responses travel back up.
   `/c/` and `/r/` request (status, bytes, `route.Trace` of its upstream
   requests); when the request ends, `Server.requestFinished` hands the
   finished request to its consumers: the timing histograms
-  (`wsp_upstream_phase_seconds`), the debug line and, while the debug
-  listener is on, a fixed ring of the last 256 requests
-  (`/debug/requests`). The tunnel manager
+  (`wsp_upstream_phase_seconds`) and the debug line. The tunnel manager
   reports each successful start (`wsp_tunnel_start_seconds`); the tunnel
   gauges are read from the tunnels at scrape time, so nothing polls the
   devices. `/healthz` only says that the process serves. The debug
-  endpoints (profiler, recent requests, tunnel states and cool-down) run
+  endpoints (profiler, tunnel states and cool-down) run
   on their own listener, never on the main one (spec 7.1).
 
 ### 7.2 Channels, routes and tunnels
@@ -929,7 +927,7 @@ run time.
 | `internal/clips` | Built-in error clip segments (`go:embed`, rendered by `generate.sh`); error clips on `/c/` ([#115](https://github.com/KingOfKalk/wg-stream-proxy/issues/115)) | exists |
 | `internal/metrics` | Private Prometheus registry with the `wsp_` metrics (spec 7.3) and the Go and process metrics; tunnel gauges read at scrape time ([#18](https://github.com/KingOfKalk/wg-stream-proxy/issues/18)) | exists |
 | `internal/epg` | Downloads an EPG file through a route, streams the XMLTV channel list (plain or gzip), lists its channel ids for `epg ids` (spec 7.2); EPG proxy mode (spec 6.1, [#87](https://github.com/KingOfKalk/wg-stream-proxy/issues/87)): streaming XMLTV filter that writes the kept elements again from tokens (`Filter`), merge in source priority (`Merge`), refresh scheduling with last good copies (`Guide`) | exists |
-| `internal/probe` | `probe` command (spec 7.2): fetches a URL through a route with the rules of serving, detects the format (HLS master or media, raw or ICY, refused) with `hls.Detect` and `hls.Unsupported`, follows the first variant and segment, reports timing from `route.Trace`; run by the command or by `POST /debug/probe` of the server ([#122](https://github.com/KingOfKalk/wg-stream-proxy/issues/122)) | exists |
+| `internal/probe` | `probe` command (spec 7.2): fetches a URL through a route with the rules of serving, detects the format (HLS master or media, raw or ICY, refused) with `hls.Detect` and `hls.Unsupported`, follows the first variant and segment, reports timing from `route.Trace`; run by `POST /debug/probe` of the running server, which the command calls ([#122](https://github.com/KingOfKalk/wg-stream-proxy/issues/122)) | exists |
 
 ## 9. Versions
 
@@ -1064,11 +1062,11 @@ flowchart TB
 
 - **One instance only**: tunnel state lives in memory, and VPN providers
   often limit connections per key ([deploy.md](deploy.md)).
-- Every variant uses the same config layout (spec 5.1) and env vars,
+- Every variant uses the same config layout (spec 5.1),
   default `/etc/wg-stream-proxy` (mounted read-only in the container).
   Tunnel files must be readable by the process but not world-readable.
-  The signing key comes from `WG_STREAM_PROXY_SIGNING_KEY_FILE` or
-  `WG_STREAM_PROXY_SIGNING_KEY`; without one, `/r/` URLs do not survive a
+  The signing key comes from the file named by
+  `WG_STREAM_PROXY_SIGNING_KEY_FILE`; without one, `/r/` URLs do not survive a
   restart.
 - The process needs no root and no capabilities: the tunnels are in
   userspace, so there is no TUN device and no routing table change.

@@ -89,8 +89,7 @@ func (s *Server) epgStatus() []metrics.EPGSource {
 	out := make([]metrics.EPGSource, len(st))
 	for i, ss := range st {
 		out[i] = metrics.EPGSource{
-			Name: ss.Name, Fetches: ss.Fetches, Duration: ss.Duration,
-			Bytes: ss.Bytes, FilteredBytes: ss.FilteredBytes, Updated: ss.Updated,
+			Name: ss.Name, Fetches: ss.Fetches, Updated: ss.Updated,
 		}
 	}
 	return out

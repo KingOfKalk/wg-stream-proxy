@@ -22,14 +22,10 @@ type Options struct {
 	BaseURL string
 	// EPGURL is [epg] url; empty omits the EPG link from the header.
 	EPGURL string
-	// Group, if not empty, lists only the channels of this group (exact
-	// match, ?group=).
-	Group string
 }
 
 // Render returns the channel list for channels in their given order.
-// Disabled channels and, with Options.Group, channels of other groups are
-// omitted. Lines end with LF; there is no BOM.
+// Disabled channels are omitted. Lines end with LF; there is no BOM.
 func Render(channels []config.Channel, opts Options) []byte {
 	var b strings.Builder
 	b.WriteString("#EXTM3U")
@@ -39,7 +35,7 @@ func Render(channels []config.Channel, opts Options) []byte {
 	}
 	b.WriteByte('\n')
 	for _, ch := range channels {
-		if !ch.Enabled() || opts.Group != "" && ch.Group() != opts.Group {
+		if !ch.Enabled() {
 			continue
 		}
 		writeChannel(&b, ch, opts.BaseURL)
