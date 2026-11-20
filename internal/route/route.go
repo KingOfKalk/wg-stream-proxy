@@ -93,4 +93,3 @@ func (r *Route) CloseIdleConnections() {
 	r.transport.CloseIdleConnections()
 	r.icyTransport.CloseIdleConnections()
 }
-
