@@ -618,8 +618,7 @@ Requests go down the layers, responses travel back up.
 - **Control plane**: `cmd/wg-stream-proxy` turns `SIGHUP` and the changes
   that `server.Watch` sees in the config files into `Reloader.Reload`. It
   loads all files (`config.Load`, `tunnel.Parse`); if they are valid, `Manager.Apply` swaps the tunnel set,
-  `route.Set.Next` builds the next routes (unchanged routes keep their
-  pools), and the new generation is swapped in for new requests. Running
+  `route.NewSet` builds new routes (empty pools), and the new generation is swapped in for new requests. Running
   requests finish on the old one. An invalid config changes nothing.
 - **Observability plane**: `metrics.Metrics` is a private Prometheus
   registry. `Server.proxy` writes the request counters and records every

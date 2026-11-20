@@ -33,8 +33,6 @@ type runEnv struct {
 
 	mu      sync.Mutex
 	tunnels map[string]*recorder
-	// wraps counts the WrapTunnel calls per tunnel name.
-	wraps map[string]int
 }
 
 func (e *runEnv) tunnel(name string) *recorder {
@@ -56,7 +54,7 @@ func loadDir(t *testing.T, dir string) *config.Config {
 // adjust the options.
 func startRun(t *testing.T, dir string, shutdown time.Duration, mods ...func(*RunOptions)) *runEnv {
 	t.Helper()
-	e := &runEnv{logs: &syncBuffer{}, direct: &recorder{n: route.Host()}, tunnels: map[string]*recorder{}, wraps: map[string]int{}}
+	e := &runEnv{logs: &syncBuffer{}, direct: &recorder{n: route.Host()}, tunnels: map[string]*recorder{}}
 	e.reloader = NewReloader(func() (*config.Config, error) {
 		return config.Load(config.Options{Paths: config.Paths{ConfigDir: dir, TunnelsDir: filepath.Join(dir, "tunnels")}})
 	})
@@ -81,7 +79,6 @@ func startRun(t *testing.T, dir string, shutdown time.Duration, mods ...func(*Ru
 			r := &recorder{n: n}
 			e.mu.Lock()
 			e.tunnels[name] = r
-			e.wraps[name]++
 			e.mu.Unlock()
 			return r
 		},

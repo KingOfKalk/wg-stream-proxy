@@ -147,7 +147,7 @@ func Run(ctx context.Context, opts RunOptions) (err error) {
 	if st.direct == nil {
 		st.direct = route.Host()
 	}
-	routes, _, err := st.buildRoutes(nil, cfg)
+	routes, err := st.buildRoutes(cfg)
 	if err != nil {
 		return err
 	}
