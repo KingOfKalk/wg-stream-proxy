@@ -131,7 +131,7 @@ flowchart LR
   `tvg_id`s and the programmes that have not ended, merges the copies in
   priority order and serves the guide from memory at `/epg.xml.gz`, which
   the channel list then links. A failed source keeps its last good copy.
-  The CLI (`epg ids`, `epg match`, `import --match-epg`) downloads one
+  The CLI (`epg ids`) downloads one
   source, or `epg.url`, through its route (spec 7.2).
 
 ## 3. Control plane and data plane
@@ -319,7 +319,7 @@ sequenceDiagram
   passed through; the player decrypts.
 - Status mapping (spec 3.4): upstream `2xx`/`4xx` pass through, `5xx` and
   connection errors give `502`, timeouts `504`. A `GET` of `/c/` gets an
-  error clip instead (spec 3.4): a 5 s VOD playlist of a built-in segment
+  error clip instead (spec 3.4): a VOD playlist of one built-in 4.8 s segment
   served under `/clip/`, so Kodi shows the error as text.
 
 ### 4.3 Radio: raw and ICY stream
@@ -893,18 +893,16 @@ flowchart TD
     config["internal/config<br/>Resolve, Load"]:::done
     wgquick["internal/config/wgquick<br/>Parse, UAPIConfig"]:::done
     metrics["internal/metrics<br/>Prometheus"]:::done
-    importer["internal/importer<br/>M3U import"]:::done
-    epg["internal/epg<br/>epg ids, epg match,<br/>Guide: filter, merge"]:::done
-    clips["internal/clips<br/>clip segments, Repeat"]:::done
+    epg["internal/epg<br/>epg ids,<br/>Guide: filter, merge"]:::done
+    clips["internal/clips<br/>error clip segments"]:::done
     probe["internal/probe<br/>probe command"]:::done
 
-    main --> server & config & importer & epg & probe & route & tunnel & hls
+    main --> server & config & epg & probe & route & tunnel & hls
     server --> playlist & hls & dash & route & tunnel & metrics & clips & epg
     playlist --> config
     route --> config
     tunnel -. "implements route Network" .-> route
     tunnel --> config & wgquick & netstack
-    importer --> config & epg
     epg --> config & route
     probe --> hls & route & tunnel
 
@@ -916,7 +914,7 @@ run time.
 
 | Package | Role | Status |
 |---|---|---|
-| `cmd/wg-stream-proxy` | Subcommand dispatch; `serve`, `check`, `probe`, `import`, `healthcheck`, `epg`, `tunnel` and `version` work | exists |
+| `cmd/wg-stream-proxy` | Subcommand dispatch; `serve`, `check`, `probe`, `healthcheck`, `epg`, `tunnel` and `version` work | exists |
 | `internal/config` | Config dir resolution (`Resolve`), loading and validation of `config.toml` and channel files (`Load`), slugs (`Slug`), route resolution | exists |
 | `internal/config/wgquick` | Tunnel file parser (`Parse`), UAPI conversion (`UAPIConfig`), `AllowedIPs` check (`Allows`) | exists |
 | `internal/hls` | Type detection (`Detect`), playlist rewriter (`Rewrite`), signed `/r/` URLs and prefix-signed `/p/` URLs (`Signer`), signing key (`LoadSigningKey`); pure functions, no I/O | exists |
@@ -926,10 +924,9 @@ run time.
 | `internal/route` | One route per tunnel plus `direct`, `http.Transport` settings, guard, upstream header rules, timeouts, status mapping ([#12](https://github.com/KingOfKalk/wg-stream-proxy/issues/12)); raw and ICY ([#15](https://github.com/KingOfKalk/wg-stream-proxy/issues/15)). Defines the `Network` interface (resolve + dial a resolved `IP:port`) that tunnels and `direct` implement | exists |
 | `internal/server` | `/playlist.m3u8`, `/c/`, `/r/`, `/p/` and `/time` ([#86](https://github.com/KingOfKalk/wg-stream-proxy/issues/86)), `/healthz`, `/epg.xml.gz` and `/epg.xml` with the `epg.Guide` it runs and updates on reload ([#87](https://github.com/KingOfKalk/wg-stream-proxy/issues/87)), absolute URL base, graceful shutdown (`Run`) ([#14](https://github.com/KingOfKalk/wg-stream-proxy/issues/14)); `/logos/`, `healthcheck` ([#19](https://github.com/KingOfKalk/wg-stream-proxy/issues/19)); `/metrics` ([#18](https://github.com/KingOfKalk/wg-stream-proxy/issues/18)); `SIGHUP` reload (`Reloader`); debug endpoints on their own listener ([#68](https://github.com/KingOfKalk/wg-stream-proxy/issues/68)), incl. `POST /debug/probe` for the `probe` command ([#122](https://github.com/KingOfKalk/wg-stream-proxy/issues/122)) | exists |
 | `internal/playlist` | Renders the channel list (spec 6) | exists |
-| `internal/clips` | Built-in clip segments (`go:embed`, rendered by `generate.sh`), `Repeat` for a segment at a position in a stream of copies (timestamps, continuity counters); error clips on `/c/` ([#115](https://github.com/KingOfKalk/wg-stream-proxy/issues/115)) | exists |
+| `internal/clips` | Built-in error clip segments (`go:embed`, rendered by `generate.sh`); error clips on `/c/` ([#115](https://github.com/KingOfKalk/wg-stream-proxy/issues/115)) | exists |
 | `internal/metrics` | Private Prometheus registry with the `wsp_` metrics (spec 7.3) and the Go and process metrics; tunnel gauges read at scrape time ([#18](https://github.com/KingOfKalk/wg-stream-proxy/issues/18)) | exists |
-| `internal/importer` | `import` of an existing M3U file (spec 7.2), `--match-epg` with an `epg.Index`; pure function, no I/O | exists |
-| `internal/epg` | Downloads an EPG file through a route, streams the XMLTV channel list (plain or gzip), ranks EPG names for `epg match` and `import --match-epg` (spec 7.2, [#21](https://github.com/KingOfKalk/wg-stream-proxy/issues/21)); EPG proxy mode (spec 6.1, [#87](https://github.com/KingOfKalk/wg-stream-proxy/issues/87)): streaming XMLTV filter that writes the kept elements again from tokens (`Filter`), merge in source priority (`Merge`), refresh scheduling with last good copies (`Guide`) | exists |
+| `internal/epg` | Downloads an EPG file through a route, streams the XMLTV channel list (plain or gzip), lists its channel ids for `epg ids` (spec 7.2); EPG proxy mode (spec 6.1, [#87](https://github.com/KingOfKalk/wg-stream-proxy/issues/87)): streaming XMLTV filter that writes the kept elements again from tokens (`Filter`), merge in source priority (`Merge`), refresh scheduling with last good copies (`Guide`) | exists |
 | `internal/probe` | `probe` command (spec 7.2): fetches a URL through a route with the rules of serving, detects the format (HLS master or media, raw or ICY, refused) with `hls.Detect` and `hls.Unsupported`, follows the first variant and segment, reports timing from `route.Trace`; run by `POST /debug/probe` of the running server, which the command calls ([#122](https://github.com/KingOfKalk/wg-stream-proxy/issues/122)) | exists |
 
 ## 9. Versions

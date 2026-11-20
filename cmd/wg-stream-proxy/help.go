@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/KingOfKalk/wg-stream-proxy/internal/config"
-	"github.com/KingOfKalk/wg-stream-proxy/internal/importer"
 )
 
 // description is the canonical one-line description of the program.
@@ -21,8 +20,7 @@ var commands = []struct{ name, summary string }{
 	{"serve", "run the proxy (default)"},
 	{"check", "validate the config"},
 	{"probe", "test a URL through a route"},
-	{"import", "convert an M3U file to one channel file"},
-	{"epg", "list or match EPG ids"},
+	{"epg", "list EPG ids"},
 	{"healthcheck", "query /healthz on the listen address"},
 	{"tunnel", "list tunnels or stop one (needs [debug] listen)"},
 	{"version", "print version and source URL"},
@@ -56,28 +54,17 @@ var topics = map[string]topic{
 			"Needs [debug] listen in config.toml and a running proxy: the running proxy makes the requests through its running tunnel (a changed channel, tunnel or config file counts only after its reload). Without a debug listener, or if nothing listens there, probe exits with an error.",
 		flags: func() *flag.FlagSet { return newProbeFlags().fset },
 	},
-	"import": {
-		usage: "import <file.m3u> [flags]",
-		desc:  "Convert an M3U file to a channel file, on stdout or in a new file that is never overwritten. Flags may come before or after the file.",
-		flags: func() *flag.FlagSet { return newImportFlags().fset },
-	},
 	"epg": {
-		usage: "epg ids | epg match [flags]",
-		desc: "List or match EPG ids from an EPG source of config.toml: the [[epg.source]] named by --source, by default the first one, or [epg] url. A source on a tunnel starts that tunnel in this process.\n\n" +
+		usage: "epg ids [flags]",
+		desc: "List the EPG ids of an EPG source of config.toml: the [[epg.source]] named by --source, by default the first one, or [epg] url. A source on a tunnel starts that tunnel in this process.\n\n" +
 			"commands:\n" +
-			"  epg ids    list the id and display names of every EPG channel\n" +
-			"  epg match  suggest a tvg_id per channel as TOML, write nothing\n\n" +
+			"  epg ids  list the id and display names of every EPG channel\n\n" +
 			"Run \"wg-stream-proxy help epg <command>\" for the flags.",
 	},
 	"epg ids": {
 		usage: "epg ids [flags]",
 		desc:  "List the id and display names of every EPG channel of the EPG source, sorted by id.",
 		flags: func() *flag.FlagSet { fs, _, _ := epgFlagSet("epg ids"); return fs },
-	},
-	"epg match": {
-		usage: "epg match [flags]",
-		desc:  "Suggest a tvg_id per channel from the EPG as TOML snippets. Writes nothing.",
-		flags: func() *flag.FlagSet { fs, _, _ := epgFlagSet("epg match"); return fs },
 	},
 	"healthcheck": {
 		usage: "healthcheck [flags]",
@@ -129,25 +116,6 @@ func configFlagSet(name string) (*flag.FlagSet, *config.Flags) {
 	fs.StringVar(&f.LogLevel, "log-level", "", "debug, info, warn or error")
 	fs.StringVar(&f.LogFormat, "log-format", "", "text or json")
 	return fs, &f
-}
-
-// importFlags are the flags of import.
-type importFlags struct {
-	fset      *flag.FlagSet
-	opts      importer.Options
-	out       string
-	configDir string
-	matchEPG  bool
-}
-
-func newImportFlags() *importFlags {
-	f := &importFlags{fset: flag.NewFlagSet("import", flag.ContinueOnError)}
-	f.fset.Usage = func() {}
-	f.fset.StringVar(&f.opts.Tunnel, "tunnel", "", "tunnel name or direct, written at the top of the channel file")
-	f.fset.StringVar(&f.out, "out", "", "write to this new file instead of stdout (never overwritten)")
-	f.fset.BoolVar(&f.matchEPG, "match-epg", false, "keep tvg_id only if the EPG (the first [[epg.source]] or [epg] url in config.toml) has it, else suggest the best match in a comment")
-	f.fset.StringVar(&f.configDir, "config-dir", "", "config directory for --match-epg (env "+config.EnvConfigDir+")")
-	return f
 }
 
 // topHelp returns the help of the program: the description, the usage

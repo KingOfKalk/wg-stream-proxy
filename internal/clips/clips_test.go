@@ -12,17 +12,17 @@ import (
 )
 
 // The tests parse the embedded segments without ffmpeg and check the format
-// of docs/clips.md 6.4: MPEG-TS, 0.96 s = 24 frames of 25 fps video = 45
-// AAC frames, one IDR first, timestamps from 0.
+// of docs/clips.md 6.4: MPEG-TS, 4.8 s = 120 frames of 25 fps video = 225
+// AAC frames, one IDR first, timestamps from 10 s.
 
 const (
 	tsPacketSize = 188
-	ticksPerSec  = 90000 // PTS/DTS clock
-	frameTicks   = 3600  // one video frame at 25 fps
-	aacTicks     = 1920  // one AAC frame of 1024 samples at 48 kHz
-	segmentTicks = 86400 // 0.96 s
-	videoFrames  = 24
-	aacFrames    = 45
+	frameTicks   = 3600   // one video frame at 25 fps
+	aacTicks     = 1920   // one AAC frame of 1024 samples at 48 kHz
+	startTicks   = 900000 // 10 s: the first PTS and DTS
+	pcrLead      = 86400  // 0.96 s: the first PCR leads the first DTS
+	videoFrames  = 120
+	aacFrames    = 225
 
 	streamTypeH264 = 0x1b
 	streamTypeAAC  = 0x0f // ADTS
@@ -252,12 +252,12 @@ func adtsFrames(t *testing.T, b []byte) int {
 }
 
 func TestNames(t *testing.T) {
-	want := []string{Starting, Connecting, Waiting, TunnelUnreachable, ChannelNotAvailable, ChannelBlocked}
+	want := []string{TunnelUnreachable, ChannelNotAvailable, ChannelBlocked}
 	if got := Names(); !slices.Equal(got, want) {
 		t.Fatalf("Names() = %v, want %v", got, want)
 	}
-	if len(want) != 6 {
-		t.Fatalf("%d clips, want the six of docs/clips.md decision 3", len(want))
+	if len(want) != 3 {
+		t.Fatalf("%d clips, want the three of docs/clips.md decision 3", len(want))
 	}
 	// No stray or missing file in segments/.
 	entries, err := fs.ReadDir(files, "segments")
@@ -276,7 +276,7 @@ func TestNames(t *testing.T) {
 }
 
 func TestSegmentUnknown(t *testing.T) {
-	for _, name := range []string{"", "nope", "../clips_test", "starting.ts", "Starting"} {
+	for _, name := range []string{"", "nope", "../clips_test", "starting", "tunnel-unreachable.ts", "Channel-Blocked"} {
 		if b, ok := Segment(name); ok || b != nil {
 			t.Errorf("Segment(%q) = %d bytes, %v; want nothing", name, len(b), ok)
 		}
@@ -284,9 +284,9 @@ func TestSegmentUnknown(t *testing.T) {
 }
 
 func TestSegmentIsACopy(t *testing.T) {
-	a, _ := Segment(Starting)
+	a, _ := Segment(ChannelBlocked)
 	a[0] = 0
-	if b, _ := Segment(Starting); b[0] != 0x47 {
+	if b, _ := Segment(ChannelBlocked); b[0] != 0x47 {
 		t.Fatal("modifying a returned segment changed the embedded one")
 	}
 }
@@ -300,8 +300,8 @@ func TestSegments(t *testing.T) {
 			if !ok {
 				t.Fatal("Segment not found")
 			}
-			if len(data) < 5000 || len(data) > 20000 {
-				t.Errorf("%d bytes, docs/clips.md 6.4 says 12-16 KB per text", len(data))
+			if len(data) < 30000 || len(data) > 70000 {
+				t.Errorf("%d bytes, docs/clips.md 6.4 says about 48-51 KB per text", len(data))
 			}
 			p := parseTS(t, data)
 
@@ -318,7 +318,7 @@ func TestSegments(t *testing.T) {
 				t.Errorf("PIDs (PMT, video, audio) %v, first segment has %v", pids, firstPIDs)
 			}
 
-			// Video: 24 frames, PTS = DTS (no B-frames), 0 to 0.96 s.
+			// Video: 120 frames, PTS = DTS (no B-frames), from 10 s for 4.8 s.
 			if len(p.video) != videoFrames {
 				t.Fatalf("%d video PES, want %d", len(p.video), videoFrames)
 			}
@@ -326,12 +326,12 @@ func TestSegments(t *testing.T) {
 				if e.streamID != 0xe0 {
 					t.Errorf("video PES %d: stream id %#x", n, e.streamID)
 				}
-				if want := int64(n * frameTicks); e.pts != want || e.dts != want {
+				if want := int64(startTicks + n*frameTicks); e.pts != want || e.dts != want {
 					t.Errorf("video PES %d: pts %d dts %d, want both %d", n, e.pts, e.dts, want)
 				}
 			}
-			if last := p.video[videoFrames-1]; last.pts+frameTicks != segmentTicks {
-				t.Errorf("video ends at %d ticks, want %d (0.96 s)", last.pts+frameTicks, segmentTicks)
+			if last := p.video[videoFrames-1]; last.pts+frameTicks != startTicks+videoFrames*frameTicks {
+				t.Errorf("video ends at %d ticks, want %d", last.pts+frameTicks, startTicks+videoFrames*frameTicks)
 			}
 
 			// IDR (NAL type 5) in the first video PES together with SPS (7)
@@ -353,7 +353,7 @@ func TestSegments(t *testing.T) {
 				}
 			}
 
-			// SPS and PPS identical across the six files.
+			// SPS and PPS identical across the files.
 			params := [2][]byte{nalUnit(p.video[0].payload, 7), nalUnit(p.video[0].payload, 8)}
 			if i == 0 {
 				firstParams = params
@@ -375,7 +375,7 @@ func TestSegments(t *testing.T) {
 				if e.streamID != 0xc0 {
 					t.Errorf("audio PES %d: stream id %#x", n, e.streamID)
 				}
-				if want := int64(frames * aacTicks); e.pts != want {
+				if want := int64(startTicks + frames*aacTicks); e.pts != want {
 					t.Errorf("audio PES %d: pts %d, want %d", n, e.pts, want)
 				}
 				frames += adtsFrames(t, e.payload)
@@ -383,24 +383,17 @@ func TestSegments(t *testing.T) {
 			if frames != aacFrames {
 				t.Errorf("%d AAC frames, want %d", frames, aacFrames)
 			}
-			if frames*aacTicks != segmentTicks {
-				t.Errorf("audio is %d ticks, video %d", frames*aacTicks, segmentTicks)
+			if frames*aacTicks != videoFrames*frameTicks {
+				t.Errorf("audio is %d ticks, video %d", frames*aacTicks, videoFrames*frameTicks)
 			}
 
-			// The PCR is on the video PID and leads the first DTS by at most 1 s.
-			// ffmpeg's muxer starts it 0.96 s before the first DTS, so it wraps
-			// modulo 2^33 right at the start of the segment (documented in clips.go).
+			// The PCR is on the video PID and leads the first DTS by 0.96 s (the
+			// muxer delay); with the start at 10 s it does not wrap below zero.
 			if p.firstPCR < 0 {
 				t.Error("no PCR on the video PID")
-			} else if lead := (p.video[0].dts - p.firstPCR) & (1<<33 - 1); lead != segmentTicks {
-				t.Errorf("first PCR leads the first DTS by %d ticks, want %d", lead, segmentTicks)
+			} else if want := int64(startTicks - pcrLead); p.firstPCR != want {
+				t.Errorf("first PCR %d, want %d (0.96 s before the first DTS)", p.firstPCR, want)
 			}
 		})
-	}
-}
-
-func TestErrors(t *testing.T) {
-	if got, want := Errors(), Names()[3:]; !slices.Equal(got, want) {
-		t.Fatalf("Errors() = %v, want %v", got, want)
 	}
 }

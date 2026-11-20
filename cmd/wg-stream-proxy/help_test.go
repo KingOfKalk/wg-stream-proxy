@@ -9,7 +9,7 @@ import (
 
 const wantDescription = "Route each IPTV and internet radio channel through its own userspace WireGuard tunnel (or direct) and serve them as one M3U playlist for Kodi, VLC and other players."
 
-var allCommands = []string{"serve", "check", "probe", "import", "epg", "healthcheck", "tunnel", "version", "help"}
+var allCommands = []string{"serve", "check", "probe", "epg", "healthcheck", "tunnel", "version", "help"}
 
 func TestTopLevelHelp(t *testing.T) {
 	tests := []struct {
@@ -65,10 +65,8 @@ func TestCommandHelp(t *testing.T) {
 		{"check", configFlags},
 		{"probe", append([]string{"-route", "-header", "-json", "<url>"}, configFlags...)},
 		{"healthcheck", configFlags},
-		{"import", []string{"-tunnel", "-out", "-match-epg", "-config-dir"}},
-		{"epg", []string{"epg ids", "epg match"}},
+		{"epg", []string{"epg ids"}},
 		{"epg ids", configFlags},
-		{"epg match", configFlags},
 		{"tunnel", []string{"tunnel list", "tunnel stop"}},
 		{"tunnel list", configFlags},
 		{"tunnel stop", configFlags},
@@ -165,7 +163,6 @@ func TestFlagErrorPointsToHelp(t *testing.T) {
 	}{
 		{[]string{"serve", "--bogus"}, `see "wg-stream-proxy help serve"`},
 		{[]string{"epg", "ids", "--bogus"}, `see "wg-stream-proxy help epg ids"`},
-		{[]string{"import", "x.m3u", "--bogus"}, `see "wg-stream-proxy help import"`},
 	}
 	for _, tt := range tests {
 		t.Run(strings.Join(tt.args, " "), func(t *testing.T) {
