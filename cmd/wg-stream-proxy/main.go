@@ -106,7 +106,7 @@ func (c *cli) run(args []string) int {
 	case "epg":
 		return c.epgCmd(args)
 	default:
-		_, _ = fmt.Fprintf(c.stderr, "wg-stream-proxy: unknown command %q\n\n%s", cmd, topHelp())
+		_, _ = fmt.Fprintf(c.stderr, "wg-stream-proxy: unknown command %q\n\n%s", cmd, usage)
 		return 2
 	}
 }

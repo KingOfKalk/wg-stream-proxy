@@ -14,89 +14,41 @@ import (
 // description is the canonical one-line description of the program.
 const description = "Route each IPTV and internet radio channel through its own userspace WireGuard tunnel (or direct) and serve them as one M3U playlist for Kodi, VLC and other players."
 
-// commands lists the top-level commands with their one-line summary, in
-// the order of the help output.
-var commands = []struct{ name, summary string }{
-	{"serve", "run the proxy (default)"},
-	{"check", "validate the config"},
-	{"probe", "test a URL through a route"},
-	{"epg", "list EPG ids"},
-	{"healthcheck", "query /healthz on the listen address"},
-	{"tunnel", "list tunnels or stop one (needs [debug] listen)"},
-	{"version", "print version and source URL"},
-	{"help", "show help for the program or a command"},
-}
+// usage is the help of the program: the commands with one line each.
+const usage = description + `
 
-// topic is the help of one command or subcommand.
-type topic struct {
-	usage string // after "wg-stream-proxy "
-	desc  string
-	// flags builds the flag set of the command; nil if it has none.
+usage: wg-stream-proxy [command] [flags]
+
+commands:
+  serve        run the proxy until SIGINT or SIGTERM; SIGHUP reloads (default)
+  check        validate config, channel and tunnel files; start nothing
+  probe        test a <url> through a route of the running proxy (needs [debug] listen)
+  epg          epg ids: list the EPG ids of a source of config.toml
+  healthcheck  query /healthz on the listen address
+  tunnel       tunnel list, tunnel stop <name>: through the debug endpoints (needs [debug] listen)
+  version      print version and source URL
+  help         help [command]: show this text, or the flags of a command
+
+Run "wg-stream-proxy help <command>" for the flags of a command.
+`
+
+// topics maps a command path ("epg ids") to its usage line (after
+// "wg-stream-proxy ") and its flags, nil if it has none.
+var topics = map[string]struct {
+	usage string
 	flags func() *flag.FlagSet
-}
-
-// topics maps a command path ("epg ids") to its help.
-var topics = map[string]topic{
-	"serve": {
-		usage: "serve [flags]",
-		desc:  "Run the proxy until SIGINT or SIGTERM; SIGHUP reloads the config. Without a command, serve runs.",
-		flags: func() *flag.FlagSet { fs, _ := configFlagSet("serve"); return fs },
-	},
-	"check": {
-		usage: "check [flags]",
-		desc:  "Validate config.toml, the channel files, the tunnel files and the signing key variable. Lists every error and starts nothing.",
-		flags: func() *flag.FlagSet { fs, _ := configFlagSet("check"); return fs },
-	},
-	"probe": {
-		usage: "probe [flags] <url>",
-		desc: "Test a URL through a route without adding a channel: fetch it like the proxy would (private-range guard, [upstream] timeouts and limits) and report the final URL (host and file name only), status, content type, the detected format (HLS master or media, raw or ICY, or a refused playlist format) and where the time went (tunnel start, DNS, connect, TLS, first byte). For an HLS playlist the first variant and the first segment are probed too. " +
-			"Exit code 0 if the proxy would serve the URL, 1 if not, 2 for usage errors. The URL may come before or after the flags.\n\n" +
-			"Needs [debug] listen in config.toml and a running proxy: the running proxy makes the requests through its running tunnel (a changed channel, tunnel or config file counts only after its reload). Without a debug listener, or if nothing listens there, probe exits with an error.",
-		flags: func() *flag.FlagSet { return newProbeFlags().fset },
-	},
-	"epg": {
-		usage: "epg ids [flags]",
-		desc: "List the EPG ids of an EPG source of config.toml: the [[epg.source]] named by --source, by default the first one, or [epg] url. A source on a tunnel starts that tunnel in this process.\n\n" +
-			"commands:\n" +
-			"  epg ids  list the id and display names of every EPG channel\n\n" +
-			"Run \"wg-stream-proxy help epg <command>\" for the flags.",
-	},
-	"epg ids": {
-		usage: "epg ids [flags]",
-		desc:  "List the id and display names of every EPG channel of the EPG source, sorted by id.",
-		flags: func() *flag.FlagSet { fs, _, _ := epgFlagSet("epg ids"); return fs },
-	},
-	"healthcheck": {
-		usage: "healthcheck [flags]",
-		desc:  "Query /healthz on the listen address. Prints nothing and exits 0 if it answers 200, else prints one line on stderr and exits 1.",
-		flags: func() *flag.FlagSet { fs, _ := configFlagSet("healthcheck"); return fs },
-	},
-	"tunnel": {
-		usage: "tunnel list | tunnel stop <name> [flags]",
-		desc: "List the tunnels or stop one through the debug endpoints of the running proxy (needs [debug] listen).\n\n" +
-			"commands:\n" +
-			"  tunnel list         list the tunnels and their state\n" +
-			"  tunnel stop <name>  cool down a tunnel and wait until it is stopped\n\n" +
-			"Run \"wg-stream-proxy help tunnel <command>\" for the flags.",
-	},
-	"tunnel list": {
-		usage: "tunnel list [flags]",
-		desc:  "List the tunnels and their state (needs [debug] listen).",
-		flags: func() *flag.FlagSet { fs, _ := configFlagSet("tunnel list"); return fs },
-	},
-	"tunnel stop": {
-		usage: "tunnel stop <name> [flags]",
-		desc:  "Cool down a tunnel and wait until it is stopped (needs [debug] listen). The name may come before or after the flags.",
-		flags: func() *flag.FlagSet { fs, _ := configFlagSet("tunnel stop"); return fs },
-	},
-	"version": {
-		usage: "version",
-		desc:  "Print the version and the source URL.",
-	},
-	"help": {
-		usage: "help [command]",
-		desc:  "Show the commands of the program, or the description and flags of a command such as \"epg ids\". \"<command> -h\" does the same.",
-	},
+}{
+	"serve":       {"serve [flags]", func() *flag.FlagSet { fs, _ := configFlagSet("serve"); return fs }},
+	"check":       {"check [flags]", func() *flag.FlagSet { fs, _ := configFlagSet("check"); return fs }},
+	"probe":       {"probe [flags] <url>", func() *flag.FlagSet { return newProbeFlags().fset }},
+	"epg":         {"epg ids [flags]", nil},
+	"epg ids":     {"epg ids [flags]", func() *flag.FlagSet { fs, _, _ := epgFlagSet("epg ids"); return fs }},
+	"healthcheck": {"healthcheck [flags]", func() *flag.FlagSet { fs, _ := configFlagSet("healthcheck"); return fs }},
+	"tunnel":      {"tunnel list | tunnel stop <name> [flags]", nil},
+	"tunnel list": {"tunnel list [flags]", func() *flag.FlagSet { fs, _ := configFlagSet("tunnel list"); return fs }},
+	"tunnel stop": {"tunnel stop <name> [flags]", func() *flag.FlagSet { fs, _ := configFlagSet("tunnel stop"); return fs }},
+	"version":     {"version", nil},
+	"help":        {"help [command]", nil},
 }
 
 // isHelpFlag reports whether arg asks for help like the flag package does.
@@ -118,39 +70,20 @@ func configFlagSet(name string) (*flag.FlagSet, *config.Flags) {
 	return fs, &f
 }
 
-// topHelp returns the help of the program: the description, the usage
-// and the list of commands.
-func topHelp() string {
-	var b strings.Builder
-	b.WriteString(description + "\n\nusage: wg-stream-proxy [command] [flags]\n\ncommands:\n")
-	for _, c := range commands {
-		fmt.Fprintf(&b, "  %-12s %s\n", c.name, c.summary)
-	}
-	b.WriteString("\nRun \"wg-stream-proxy help <command>\" for the description and flags of a command.\n")
-	return b.String()
-}
-
-// topicHelp returns the help of a command: its usage, description and
-// flags.
-func topicHelp(name string) string {
-	t := topics[name]
-	var b strings.Builder
-	b.WriteString("usage: wg-stream-proxy " + t.usage + "\n\n" + t.desc + "\n")
-	if t.flags != nil {
-		fs := t.flags()
-		fs.SetOutput(&b)
-		b.WriteString("\nflags:\n")
-		fs.PrintDefaults()
-	}
-	return b.String()
-}
-
 // help prints the help of a command (name is its path, "" for the
 // program) to stdout and returns the exit code.
 func (c *cli) help(name string) int {
-	text := topHelp()
-	if name != "" {
-		text = topicHelp(name)
+	text := usage
+	if t, ok := topics[name]; ok {
+		var b strings.Builder
+		b.WriteString("usage: wg-stream-proxy " + t.usage + "\n")
+		if t.flags != nil {
+			fs := t.flags()
+			fs.SetOutput(&b)
+			b.WriteString("\nflags:\n")
+			fs.PrintDefaults()
+		}
+		text = b.String()
 	}
 	if _, err := fmt.Fprint(c.stdout, text); err != nil {
 		_, _ = fmt.Fprintf(c.stderr, "wg-stream-proxy: help: %v\n", err)
@@ -165,11 +98,8 @@ func (c *cli) helpCmd(args []string) int {
 		return c.help("help")
 	}
 	name := strings.Join(args, " ")
-	if name == "" {
-		return c.help("")
-	}
-	if _, ok := topics[name]; !ok {
-		_, _ = fmt.Fprintf(c.stderr, "wg-stream-proxy: help: unknown command %q\n\n%s", name, topHelp())
+	if _, ok := topics[name]; !ok && name != "" {
+		_, _ = fmt.Fprintf(c.stderr, "wg-stream-proxy: help: unknown command %q\n\n%s", name, usage)
 		return 2
 	}
 	return c.help(name)
