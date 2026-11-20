@@ -74,8 +74,8 @@ func TestFold(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := Fold(tt.in); got != tt.want {
-				t.Errorf("Fold(%q) = %q, want %q", tt.in, got, tt.want)
+			if got := fold(tt.in); got != tt.want {
+				t.Errorf("fold(%q) = %q, want %q", tt.in, got, tt.want)
 			}
 		})
 	}

@@ -96,7 +96,7 @@ tvg_id = "ertworld.example"
 epg_source = "gr"
 ```
 
-- Without `epg_source` a channel's guide comes from the first source that has its `tvg_id`. Find the ids of a source with `wg-stream-proxy epg ids --source de`; `epg match --source de` suggests them per channel.
+- Without `epg_source` a channel's guide comes from the first source that has its `tvg_id`. Find the ids of a source with `wg-stream-proxy epg ids --source de`.
 - A source that fails keeps serving its last good copy (`epg source failed` in the log, `wsp_epg_last_success_timestamp_seconds` in the metrics); it is tried again after 10 minutes.
 - The guide is there once a source was fetched after the start (a few seconds); before that `/epg.xml.gz` answers `503`.
 - Kodi's IPTV Simple Client uses the `x-tvg-url` of the channel list only if its EPG settings have no XMLTV location; otherwise set "Location" to "Remote path" and "XMLTV URL" to `http://<pi>:2349/epg.xml.gz` ([README](https://github.com/kodi-pvr/pvr.iptvsimple/blob/Omega/README.md)). Its "Auto refresh mode" (see [Changes in Kodi](#changes-in-kodi)) reloads the XMLTV file together with the playlist; a guide that changes every few hours does not need it more often than the playlist.
@@ -111,7 +111,7 @@ Kodi's IPTV Simple Client puts a channel into its Radio section only if the `#EX
 attrs = { radio = "true" }
 ```
 
-The playlist then has `#EXTINF:-1 tvg-name="Example Radio" group-title="Radio" radio="true",Example Radio`. `import` keeps `radio="true"` from an M3U as an attr.
+The playlist then has `#EXTINF:-1 tvg-name="Example Radio" group-title="Radio" radio="true",Example Radio`.
 
 ## HLS channels in Kodi
 

@@ -10,8 +10,7 @@ import (
 )
 
 // FuzzParse checks that Open and Parse never panic, and that a parsed
-// index is consistent: sorted unique ids, no empty ids or names, and
-// matching any name never fails.
+// index is consistent: sorted unique ids, no empty ids or names.
 func FuzzParse(f *testing.F) {
 	plain, err := readFixture()
 	if err != nil {
@@ -40,7 +39,6 @@ func FuzzParse(f *testing.F) {
 				if n == "" {
 					t.Fatalf("empty name in %q", c.ID)
 				}
-				x.Match(n, 3)
 			}
 		}
 	})

@@ -20,11 +20,10 @@ var greek = map[rune]string{
 	'φ': "f", 'χ': "ch", 'ψ': "ps", 'ω': "o",
 }
 
-// Fold applies steps 1 and 2 of the id slug (spec 5.2) to a name: accents
+// fold applies steps 1 and 2 of the id slug (spec 5.2) to a name: accents
 // removed, Greek letters mapped to Latin, Unicode NFKD, combining marks
-// removed, lowercase. All other characters are kept. EPG matching
-// (spec 7.2) builds on it.
-func Fold(name string) string {
+// removed, lowercase. All other characters are kept.
+func fold(name string) string {
 	// Step 1: remove accents, then map Greek letters.
 	var b strings.Builder
 	for _, r := range stripMarks(norm.NFD.String(name)) {
@@ -44,7 +43,7 @@ func Fold(name string) string {
 // result is empty if the name has no usable characters.
 func Slug(name string) string {
 	// Steps 1 and 2.
-	s := Fold(name)
+	s := fold(name)
 
 	// Step 3: runs outside [a-z0-9] become "-", trim, truncate, trim.
 	var b strings.Builder

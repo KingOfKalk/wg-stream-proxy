@@ -15,7 +15,7 @@
 - One extended M3U channel list (`/playlist.m3u8`) for Kodi (IPTV Simple Client), VLC and other players.
 - HLS and MPEG-DASH (without DRM) passthrough with playlist and manifest rewriting; raw passthrough for radio and MPEG-TS.
 - Fail closed: a channel never silently bypasses its tunnel.
-- Migration from an existing M3U file via `import`.
+- To convert an existing M3U file, run the `import` command of the 0.4.x image once (the command is gone since 0.5).
 - Capacity: 3 concurrent viewers (household use).
 
 ### 1.2 Non-goals
@@ -420,9 +420,7 @@ Served only on their own listener `debug.listen` (5.3), off by default and never
 wg-stream-proxy serve                 # default
 wg-stream-proxy check                 # validate config, exit 0/1
 wg-stream-proxy probe [--route R] [--header K=V]... [--json] [--standalone] <url>   # fetch a URL through a route, report format and timing, exit 0/1/2
-wg-stream-proxy import <file.m3u> [--tunnel T] [--match-epg [--config-dir DIR]] [--out FILE]
 wg-stream-proxy epg ids [--source S]  # list id and display-name of an EPG source (config flags as for check)
-wg-stream-proxy epg match [--source S]  # suggest tvg_id per channel, print TOML, write nothing
 wg-stream-proxy healthcheck           # GET /healthz on the listen address, exit 0/1
 wg-stream-proxy tunnel list           # tunnels and their state, from the debug endpoints (7.1)
 wg-stream-proxy tunnel stop <name>    # cool-down of a tunnel (7.1)
@@ -449,28 +447,9 @@ wg-stream-proxy help [command]        # description and command list, or the fla
 - Exit code 0 if the proxy would serve the URL (every step `ok`), 1 if not (failed step, invalid config, tunnel that does not start), 2 for usage errors (no or several URLs, invalid URL, header or route, flag errors).
 - Standalone with a tunnel route starts a second WireGuard device with the key of the tunnel; if the proxy has that tunnel up, the provider's server switches to the new endpoint and its streams can stall until the next handshake.
 
-`import`:
-- Input: UTF-8 (invalid bytes become U+FFFD with a warning), optional BOM, lines end at LF, CRLF or CR; lines with control characters other than tab are dropped with a warning.
-- `tvg-id`, `tvg-logo`, `group-title` to their fields, `tvg-name` dropped (generated from `name`), other `#EXTINF` attributes to `playlist.attrs`. Attribute names are case-insensitive for this mapping; values may be quoted or unquoted. The name is the text after the first comma outside quotes and may contain commas.
-- `#KODIPROP:inputstream.adaptive.stream_headers=`, `#EXTVLCOPT:http-user-agent=`, `#EXTVLCOPT:http-referrer=`, `url|Header=Value` to `upstream.headers`. Header lists are `Name=Value` pairs separated by `&`, values percent-decoded; a later value replaces an earlier one, the `|` part comes last.
-- Other `#<DIRECTIVE>:key=value` lines to `playlist.extra.<DIRECTIVE>` (keys quoted); non-matching lines dropped with a warning. Directive lines after the previous channel's URL belong to the next channel.
-- Values shared by all channels of the output (at least two) are written once as `[defaults.*]`, a shared `group` once at the top of the file.
-- Commented-out URLs (`#http...`) become `enabled = false`. Other comment lines are dropped with a warning, also between `#EXTINF` and its URL.
-- A channel is dropped with a warning if its `#EXTINF` has no name, no URL line follows, or the URL is not an absolute `http(s)` URL; a URL without `#EXTINF` is dropped too. If no channel is left, `import` exits 1.
-- `id` is written only where the slug of `name` (5.2) is empty or already used by an earlier channel: the slug (or `channel`) with the first free suffix `-2`, `-3`, ...
-- `--tunnel` is written as the file-level `tunnel`; without it, the route follows 5.2.
-- `url-tvg` and `x-tvg-url` of `#EXTM3U` are written as a TOML comment for `[epg] url` in `config.toml`; other header attributes are dropped with a warning.
-- Output on stdout, or in `--out FILE`, which must not exist yet (never overwritten, exit 1). Warnings go to stderr with file and line.
-- `--match-epg`: keep `tvg_id` if it exists in the EPG; else drop it with a warning (if there was one) and add the best suggestion as a TOML comment in the channel's `[channel.playlist]` table (`# tvg_id = "<id>"  # EPG: <name>`; none if nothing matches). Needs an EPG source in `config.toml`: the first `[[epg.source]]`, else `epg.url` (read like `check`: `--config-dir`, `WG_STREAM_PROXY_CONFIG_DIR`); without `--match-epg`, `import` reads no config and makes no request.
-
-The EPG commands (`epg ids`, `epg match`, `import --match-epg`) download one EPG file: the `[[epg.source]]` named by `--source` (`epg ids` and `epg match`), by default the first one, else `epg.url`; `--source` with a name that is not an `[[epg.source]]` exits 2. The file is fetched through the source's route (`epg.url`: `direct`): the private-range guard (with the route's `[upstream.allow_private]`) and the `[upstream]` timeouts apply. A source on a tunnel starts that tunnel in the command's process, with a note on stderr: like `probe --standalone`, a running proxy with the same tunnel key may stall until its next handshake. The file is plain XMLTV or gzip (recognised by its magic bytes), read as a stream, at most 200 MiB after decompression (else error); only the `<channel>` elements before the first `<programme>` are read (XMLTV DTD order).
+`epg ids` downloads one EPG file: the `[[epg.source]]` named by `--source`, by default the first one, else `epg.url`; `--source` with a name that is not an `[[epg.source]]` exits 2. The file is fetched through the source's route (`epg.url`: `direct`): the private-range guard (with the route's `[upstream.allow_private]`) and the `[upstream]` timeouts apply. A source on a tunnel starts that tunnel in the command's process, with a note on stderr: like `probe --standalone`, a running proxy with the same tunnel key may stall until its next handshake. The file is plain XMLTV or gzip (recognised by its magic bytes), read as a stream, at most 200 MiB after decompression (else error); only the `<channel>` elements before the first `<programme>` are read (XMLTV DTD order).
 
 `epg ids`: one line per EPG channel, sorted by id: the id, then its display names, separated by tabs.
-
-`epg match`: names normalised (5.2 slug steps 1-2, then only letters and digits kept), EPG display names ranked by similarity.
-- Similarity: `1 - d / n`, with `d` the Levenshtein distance of the two normalised names and `n` the length of the longer one. An EPG channel scores by its best display name (its id if it has none); below 0.6 it is no suggestion; an exact normalised match scores 1 and ranks first; ties order by EPG id.
-- Output per channel (all channels, in config order): the best suggestion as a `[channel.playlist]` snippet with `tvg_id`, up to two alternatives as comments, no suggestion as a comment line. A channel whose `tvg_id` is in the EPG is only reported. Nothing is written.
-
 ### 7.3 Metrics (prefix `wsp_`)
 
 - `tunnel_up{tunnel}`: 1 while the device runs and the last handshake is younger than 180s.
@@ -512,7 +491,7 @@ Only `/c/`, `/r/` and `/p/` requests of enabled channels count; `channel` is the
 
 ## 9. Engineering rules
 
-- Layout: `cmd/wg-stream-proxy/`, `internal/{config,tunnel,route,hls,dash,playlist,server,importer,epg,metrics,clips}`, `examples/config/`, `testdata/`, `deploy/`, `docs/`.
+- Layout: `cmd/wg-stream-proxy/`, `internal/{config,tunnel,route,hls,dash,playlist,server,epg,metrics,clips}`, `examples/config/`, `testdata/`, `deploy/`, `docs/`.
 - Dependencies: stdlib `net/http`, `log/slog`, `wireguard-go`, gVisor netstack, a TOML parser, Prometheus client. No web framework.
 - `internal/clips` embeds the built-in error clips (design: [clips.md](clips.md)): three 4.8 s MPEG-TS files in `internal/clips/segments/`, rendered by `internal/clips/generate.sh` (pinned image, Inter 4.1 by version and checksum) and committed. Change a text by editing the script, rerunning it and committing the result. Only rendered pixels ship, not the font (SIL OFL 1.1).
 - gVisor stays at the version in `wireguard-go`'s `go.mod` and is only updated together with it (excluded from automatic bumps).

@@ -1,5 +1,0 @@
-﻿#EXTM3U
-#EXTINF:-1 group-title="Line Ends",CRLF Channel
-https://crlf.example.com/a.m3u8
-
-#EXTINF:-1 group-title="Line Ends",CR Channelhttp://cr.example.com/b

@@ -1,5 +1,0 @@
-#EXTM3U
-#EXTINF:-1,Uses File Stem
-https://stem.example.com/a.m3u8
-#EXTINF:-1 group-title="Own Group",Has Group
-https://stem.example.com/b.m3u8

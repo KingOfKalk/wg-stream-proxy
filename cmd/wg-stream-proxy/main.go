@@ -101,8 +101,6 @@ func (c *cli) run(args []string) int {
 		return c.healthcheck(args)
 	case "tunnel":
 		return c.tunnelCmd(args)
-	case "import":
-		return c.importM3U(args)
 	case "probe":
 		return c.probeCmd(args)
 	case "epg":
