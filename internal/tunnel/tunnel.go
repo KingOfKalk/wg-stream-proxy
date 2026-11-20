@@ -45,9 +45,6 @@ import (
 	"github.com/KingOfKalk/wg-stream-proxy/internal/tunnel/netstack"
 )
 
-// DefaultIPv6ConnectTimeout is the default for Options.IPv6ConnectTimeout.
-const DefaultIPv6ConnectTimeout = 2 * time.Second
-
 // handshakeFresh is the age up to which a handshake counts as current for
 // Up (spec 7.3, wsp_tunnel_up).
 const handshakeFresh = 180 * time.Second
@@ -65,10 +62,6 @@ var (
 	// the tunnel has no address of its family (fail closed, spec 5.5).
 	// Nothing is sent.
 	ErrNotAllowed = errors.New("address not reachable through tunnel")
-	// ErrIPv6Unreachable: an IPv6 connection through a tunnel that also
-	// carries IPv4 was not established within IPv6ConnectTimeout. The
-	// tunnel's IPv6 path is likely broken; callers fall back to IPv4.
-	ErrIPv6Unreachable = errors.New("no IPv6 connection through tunnel")
 	// ErrNoDNS: the tunnel file has no DNS server inside AllowedIPs, so
 	// host names cannot be resolved inside the tunnel.
 	ErrNoDNS = errors.New("tunnel has no reachable DNS server")
@@ -105,11 +98,6 @@ type Options struct {
 	// ConnectTimeout bounds a tunnel start including the first handshake
 	// ([upstream] connect_timeout). Required.
 	ConnectTimeout time.Duration
-	// IPv6ConnectTimeout bounds an IPv6 TCP connect through a tunnel that
-	// also carries IPv4, so a broken IPv6 path fails before the caller's
-	// connect timeout and the caller can fall back to IPv4. 0 means
-	// DefaultIPv6ConnectTimeout.
-	IPv6ConnectTimeout time.Duration
 	// IdleTimeout stops a running tunnel after this long without activity
 	// ([tunnels] idle_timeout, spec 2.1). 0 disables idle close.
 	IdleTimeout time.Duration
@@ -215,12 +203,6 @@ func loadFile(f config.Tunnel) (*wgquick.Tunnel, []wgquick.Warning, error) {
 func New(tunnels []*wgquick.Tunnel, opts Options) (*Manager, error) {
 	if err := checkTimeouts(opts.ConnectTimeout, opts.IdleTimeout); err != nil {
 		return nil, err
-	}
-	switch {
-	case opts.IPv6ConnectTimeout < 0:
-		return nil, errors.New("tunnel: IPv6 connect timeout must not be negative")
-	case opts.IPv6ConnectTimeout == 0:
-		opts.IPv6ConnectTimeout = DefaultIPv6ConnectTimeout
 	}
 	if opts.Logger == nil {
 		opts.Logger = slog.New(slog.DiscardHandler)
@@ -543,28 +525,9 @@ func (t *Tunnel) DialContext(ctx context.Context, network, address string) (net.
 		return nil, err
 	}
 	target := netip.AddrPortFrom(addr, ap.Port())
-	if addr.Is4() || !t.cfg.HasIPv4() {
-		c, err := r.net.DialContextTCPAddrPort(ctx, target)
-		if err != nil {
-			// Never a typed nil in the net.Conn interface.
-			return nil, err
-		}
-		return c, nil
-	}
-	// IPv6 with IPv4 as fallback: bound the attempt.
-	dctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	var expired atomic.Bool
-	timer := t.m.opts.Clock.AfterFunc(t.m.opts.IPv6ConnectTimeout, func() {
-		expired.Store(true)
-		cancel()
-	})
-	c, err := r.net.DialContextTCPAddrPort(dctx, target)
-	timer.Stop()
-	if err != nil && expired.Load() && ctx.Err() == nil {
-		return nil, fmt.Errorf("tunnel %q: %s: %w", t.cfg.Name, target, ErrIPv6Unreachable)
-	}
+	c, err := r.net.DialContextTCPAddrPort(ctx, target)
 	if err != nil {
+		// Never a typed nil in the net.Conn interface.
 		return nil, err
 	}
 	return c, nil
