@@ -140,6 +140,7 @@ type file struct {
 	endless  bool        // stream until the client goes away
 	hang     bool        // send nothing until the client goes away
 	stall    bool        // send the body, then nothing until the client goes away
+	icy      bool        // Shoutcast v1: "ICY 200 OK", ctype and body on the hijacked connection, then close
 }
 
 // seen is a request the fixture received.
@@ -207,6 +208,14 @@ func (u *upstream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", f.ctype)
 	}
 	switch {
+	case f.icy:
+		c, _, err := http.NewResponseController(w).Hijack()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		_, _ = io.WriteString(c, "ICY 200 OK\r\nicy-name:Test Radio\r\ncontent-type:"+f.ctype+"\r\n\r\n"+f.body)
+		_ = c.Close()
 	case f.location != "":
 		http.Redirect(w, r, f.location, http.StatusFound)
 	case f.hang:

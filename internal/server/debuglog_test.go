@@ -161,8 +161,8 @@ url = "http://` + closed + `/seg.ts?token=secret-token"
 		}},
 		{"warm", map[string]string{
 			"channel": "seg", "route": "gr", "status": "200", "bytes": "7", "tunnel_start": "-",
-			// A raw channel uses the ICY transport: no keep-alive.
-			"connect_attempts": "1", "conn_reused": "false", "ttfb": ">0",
+			// The pooled connection of the cold request (ICY transport, #131).
+			"connect_attempts": "0", "conn_reused": "true", "ttfb": ">0",
 		}},
 		{"direct", map[string]string{
 			"channel": "direct", "route": "direct", "status": "200", "bytes": "7", "tunnel_start": "-",
