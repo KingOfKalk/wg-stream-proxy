@@ -264,3 +264,60 @@ func TestRewriteOutputLimit(t *testing.T) {
 		}
 	}
 }
+
+// TestRewriteResolvesLikeNetURL checks the fast paths of the resolver
+// against url.ResolveReference: escapes, dot segments, other schemes,
+// hosts, user info, fragments, spaces, non-ASCII bytes and colons must
+// resolve exactly as net/url does.
+func TestRewriteResolvesLikeNetURL(t *testing.T) {
+	heads := []string{
+		"", "a/", "./", "../", "../../x/", "a/./", "a/../", "/", "/abs/../",
+		"//cdn.example.org/", "//u@cdn.example.org", "//[::1]:80/",
+		"http://Example.COM/", "HTTPS://h.example:8080/p/", "http://h.example:x/",
+		"http://[fe80::1%25eth0]/", "http://u:p@h.example/", "http://h.example/../a/",
+		"http:", "http:///", "http://h%41.example/", "http://h.example:99999999/",
+		"%41/", "%2F/", "a%2fb/", "%zz/", "a b/", "\xc3\xa9/", "a:b/", "mailto:", "skd://k/",
+	}
+	files := []string{"seg.ts", "", ".", "..", "a$&+,;=@b", "a:b", "%41.ts", "a%2F", "a b", "\xc3\xa9.ts", "a\tb", "a\\b"}
+	queries := []string{"", "?", "?a=1&b=2", "?a=%41", "?%zz", "?x y", "?a#f", "#frag", "#%zz", "?a/b/../c"}
+	finals := []string{
+		"https://origin.example.com/live/a/index.m3u8?s=1",
+		"http://Origin.Example.com:8080/a/../b/./c/master.m3u8",
+		"https://origin.example.com",
+		"https://u:p@[2001:db8::1]:443/live/a b/x.m3u8#frag",
+	}
+	for _, fs := range finals {
+		final := mustParse(t, fs)
+		for _, h := range heads {
+			for _, f := range files {
+				for _, q := range queries {
+					raw := h + f + q
+					if raw == "" || raw[0] == '#' {
+						continue // an empty line and a comment are not URIs
+					}
+					var got []string
+					out, err := Rewrite([]byte(raw+"\n"), final, func(dst, abs []byte) []byte {
+						got = append(got, string(abs))
+						return append(dst, "X"...)
+					})
+					if s := uriScheme([]byte(raw)); s != "" && !isHTTPScheme(s) {
+						if err != nil || len(got) != 0 || string(out) != raw+"\n" {
+							t.Fatalf("final %q, %q: other scheme not passed through: out %q, err %v", fs, raw, out, err)
+						}
+						continue
+					}
+					ref, perr := url.Parse(raw)
+					if perr != nil {
+						if !errors.Is(err, ErrInvalidURI) {
+							t.Fatalf("final %q, %q: error %v, want ErrInvalidURI", fs, raw, err)
+						}
+						continue
+					}
+					if want := final.ResolveReference(ref).String(); err != nil || len(got) != 1 || got[0] != want {
+						t.Fatalf("final %q, %q: resolved %q (err %v), want %q", fs, raw, got, err, want)
+					}
+				}
+			}
+		}
+	}
+}

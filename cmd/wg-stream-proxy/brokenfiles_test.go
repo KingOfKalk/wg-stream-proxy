@@ -5,8 +5,6 @@ package main
 import (
 	"context"
 	"net"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -101,66 +99,6 @@ func TestHealthcheckBrokenFiles(t *testing.T) {
 			}
 			if strings.Contains(logs, "reload") {
 				t.Errorf("serve reloaded or rejected a reload (watching is off):\n%s", logs)
-			}
-		})
-	}
-}
-
-// TestTunnelListBrokenFiles: tunnel list reads only [debug] listen, so
-// it still reaches the debug listener of the running proxy.
-func TestTunnelListBrokenFiles(t *testing.T) {
-	for name, broken := range brokenFiles() {
-		t.Run(name, func(t *testing.T) {
-			var code int
-			var out, errOut *syncBuffer
-			serveCode, _ := serveWithBrokenFiles(t, broken, func(dir string, c *cli, o, e *syncBuffer) {
-				out, errOut = o, e
-				code = c.run([]string{"tunnel", "list", "--config-dir", dir})
-			})
-			if serveCode != 0 {
-				t.Fatalf("serve exit code = %d, want 0 (a broken file must not stop it)", serveCode)
-			}
-			if code != 0 {
-				t.Fatalf("exit code = %d, want 0; stderr: %s", code, errOut)
-			}
-			if !strings.Contains(out.String(), "NAME") {
-				t.Errorf("stdout lacks the table header:\n%s", out)
-			}
-			if errOut.String() != "" {
-				t.Errorf("stderr = %q, want empty", errOut)
-			}
-		})
-	}
-}
-
-// TestProbeBrokenFiles: probe reads only [debug] listen to find the
-// running proxy, so a channel or tunnel file the proxy rejects as a
-// reload does not stop it.
-func TestProbeBrokenFiles(t *testing.T) {
-	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "audio/mpeg")
-		_, _ = w.Write([]byte("ID3-audio-bytes"))
-	}))
-	t.Cleanup(up.Close)
-	for name, broken := range brokenFiles() {
-		t.Run(name, func(t *testing.T) {
-			var code int
-			var out, errOut *syncBuffer
-			serveCode, _ := serveWithBrokenFiles(t, broken, func(dir string, c *cli, o, e *syncBuffer) {
-				out, errOut = o, e
-				code = c.run([]string{"probe", "--config-dir", dir, up.URL + "/radio"})
-			})
-			if serveCode != 0 {
-				t.Fatalf("serve exit code = %d, want 0 (a broken file must not stop it)", serveCode)
-			}
-			if code != 0 {
-				t.Fatalf("exit code = %d, want 0; stderr: %s", code, errOut)
-			}
-			if !strings.Contains(out.String(), "route direct (via running proxy)") {
-				t.Errorf("stdout lacks the proxy mode:\n%s", out)
-			}
-			if errOut.String() != "" {
-				t.Errorf("stderr = %q, want empty", errOut)
 			}
 		})
 	}

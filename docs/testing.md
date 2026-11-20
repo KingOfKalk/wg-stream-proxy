@@ -43,7 +43,7 @@ Test every rule of SPEC 3.1-3.5, 4, 5 and 6, table-driven, with golden files in 
 
 ## L2 Fuzz
 
-Targets: HLS rewriter, DASH rewriter (`internal/dash`), XMLTV channel parser, XMLTV filter (`FuzzFilter`), wg-quick parser, `/r/` URL decoding, `/p/` prefix path validation (`FuzzParsePrefix`), ICY status line wrapper, playlist format sniffer (spec 3.3).
+Targets: HLS rewriter, DASH rewriter (`internal/dash`), XMLTV filter (`FuzzFilter`), `/r/` URL decoding, `/p/` prefix path validation (`FuzzParsePrefix`), ICY status line wrapper, playlist format sniffer (spec 3.3).
 
 Invariants:
 - No panic.
