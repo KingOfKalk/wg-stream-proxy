@@ -1,4 +1,0 @@
-#EXTM3U
-#KODIPROP:inputstream.adaptive.stream_headers=User-Agent=OKHTTP
-#EXTINF:-1 tvg-id="solo" group-title="Solo" parent-code="0000",Solo
-https://single.example.com/solo.m3u8

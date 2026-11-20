@@ -91,69 +91,22 @@ const wantIDs = "daserste.example\tDas Erste\tARD Das Erste\n" +
 	"radio-one.example\tRadio One\n" +
 	"skai.example\tΣΚΑΪ\n"
 
-const wantMatch = `# ert-world (ERT World) in greek.toml: tvg_id "ertworld.example" is in the EPG
-
-# skai (ΣΚΑΪ) in greek.toml
-# current tvg_id "skai-old" is not in the EPG
-[channel.playlist]
-tvg_id = "skai.example"  # ΣΚΑΪ (1.00)
-
-# ert-world-hd (ERT World HD) in greek.toml
-[channel.playlist]
-tvg_id = "ertworld-hd.example"  # ERT World HD (1.00)
-# alternatives:
-# tvg_id = "ertworld.example"  # ERT World (0.80)
-
-# unknown-thing (Unknown Thing) in greek.toml: no match
-`
-
-func TestEPGIDsAndMatch(t *testing.T) {
+func TestEPGIDs(t *testing.T) {
 	srv := epgServer(t)
 	for _, file := range []string{"/epg.xml.gz", "/epg.xml"} {
-		dir := epgConfigDir(t, "[epg]\nurl = \""+srv.URL+file+"\"\n")
-		tests := []struct {
-			name string
-			args []string
-			want string
-		}{
-			{"ids", []string{"epg", "ids", "--config-dir", dir}, wantIDs},
-			{"match", []string{"epg", "match", "--config-dir", dir}, wantMatch},
-		}
-		for _, tt := range tests {
-			t.Run(tt.name+file, func(t *testing.T) {
-				c, out, errOut := epgCLI()
-				if code := c.run(tt.args); code != 0 {
-					t.Fatalf("exit code = %d, want 0; stderr: %s", code, errOut)
-				}
-				if out.String() != tt.want {
-					t.Errorf("stdout:\n%s\nwant:\n%s", out, tt.want)
-				}
-				if errOut.String() != "" {
-					t.Errorf("stderr = %q, want empty", errOut)
-				}
-			})
-		}
-	}
-}
-
-func TestEPGMatchWritesNothing(t *testing.T) {
-	srv := epgServer(t)
-	dir := epgConfigDir(t, "[epg]\nurl = \""+srv.URL+"/epg.xml.gz\"\n")
-	before, err := os.ReadFile(dir + "/channels.d/greek.toml")
-	if err != nil {
-		t.Fatal(err)
-	}
-	c, _, errOut := epgCLI()
-	if code := c.run([]string{"epg", "match", "--config-dir", dir}); code != 0 {
-		t.Fatalf("exit code = %d; stderr: %s", code, errOut)
-	}
-	after, _ := os.ReadFile(dir + "/channels.d/greek.toml")
-	if !bytes.Equal(before, after) {
-		t.Error("epg match changed the channel file")
-	}
-	entries, _ := os.ReadDir(dir + "/channels.d")
-	if len(entries) != 1 {
-		t.Errorf("channels.d has %d files, want 1", len(entries))
+		t.Run(file, func(t *testing.T) {
+			dir := epgConfigDir(t, "[epg]\nurl = \""+srv.URL+file+"\"\n")
+			c, out, errOut := epgCLI()
+			if code := c.run([]string{"epg", "ids", "--config-dir", dir}); code != 0 {
+				t.Fatalf("exit code = %d, want 0; stderr: %s", code, errOut)
+			}
+			if out.String() != wantIDs {
+				t.Errorf("stdout:\n%s\nwant:\n%s", out, wantIDs)
+			}
+			if errOut.String() != "" {
+				t.Errorf("stderr = %q, want empty", errOut)
+			}
+		})
 	}
 }
 
@@ -168,8 +121,9 @@ func TestEPGErrors(t *testing.T) {
 		wantCode   int
 		wantStderr string
 	}{
-		{"no subcommand", good, true, []string{"epg"}, 2, "want a subcommand: ids or match"},
-		{"unknown subcommand", good, true, []string{"epg", "bogus"}, 2, "want a subcommand: ids or match"},
+		{"no subcommand", good, true, []string{"epg"}, 2, "want the subcommand ids"},
+		{"unknown subcommand", good, true, []string{"epg", "bogus"}, 2, "want the subcommand ids"},
+		{"removed subcommand match", good, true, []string{"epg", "match"}, 2, "want the subcommand ids"},
 		{"extra argument", good, true, []string{"epg", "ids", "extra"}, 2, "unexpected arguments: extra"},
 		{"no epg url", "", true, []string{"epg", "ids"}, 1, "no [[epg.source]] or [epg] url in config.toml"},
 		{"not found", "[epg]\nurl = \"" + srv.URL + "/missing\"\n", true, []string{"epg", "ids"}, 1, "status 404"},
@@ -215,10 +169,9 @@ func TestEPGSources(t *testing.T) {
 	}{
 		{"first source by default", sources, []string{"ids"}, 1, "", "status 404"},
 		{"named source", sources, []string{"ids", "--source", "de"}, 0, wantIDs, ""},
-		{"named source for match", sources, []string{"match", "--source", "de"}, 0, wantMatch, ""},
 		{"source on a tunnel", sources, []string{"ids", "--source", "vpn"}, 0, wantIDs, `source "vpn" uses tunnel "gr": starting it in this process`},
 		{"unknown source", sources, []string{"ids", "--source", "nope"}, 2, "", `unknown EPG source "nope" (want one of: gr, de, vpn)`},
-		{"source in link mode", "[epg]\nurl = \"" + srv.URL + "/epg.xml.gz\"\n", []string{"match", "--source", "gr"}, 2, "", `unknown EPG source "gr": config.toml has no [[epg.source]]`},
+		{"source in link mode", "[epg]\nurl = \"" + srv.URL + "/epg.xml.gz\"\n", []string{"ids", "--source", "gr"}, 2, "", `unknown EPG source "gr": config.toml has no [[epg.source]]`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -240,111 +193,4 @@ func TestEPGSources(t *testing.T) {
 			}
 		})
 	}
-}
-
-const importEPGM3U = `#EXTM3U
-#EXTINF:-1 tvg-id="ertworld.example",ERT World
-https://a.example.com/ertworld.m3u8
-#EXTINF:-1 tvg-id="skai-old",ΣΚΑΪ
-https://a.example.com/skai.m3u8
-#EXTINF:-1,Das Erste
-https://a.example.com/daserste.m3u8
-#EXTINF:-1,Unknown Thing
-https://a.example.com/unknown.m3u8
-`
-
-const importEPGTOML = `tunnel = "direct"
-
-[[channel]]
-name = "ERT World"
-url = "https://a.example.com/ertworld.m3u8"
-
-[channel.playlist]
-tvg_id = "ertworld.example"
-
-[[channel]]
-name = "ΣΚΑΪ"
-url = "https://a.example.com/skai.m3u8"
-
-[channel.playlist]
-# tvg_id = "skai.example"  # EPG: ΣΚΑΪ
-
-[[channel]]
-name = "Das Erste"
-url = "https://a.example.com/daserste.m3u8"
-
-[channel.playlist]
-# tvg_id = "daserste.example"  # EPG: Das Erste
-
-[[channel]]
-name = "Unknown Thing"
-url = "https://a.example.com/unknown.m3u8"
-`
-
-func TestImportMatchEPG(t *testing.T) {
-	srv := epgServer(t)
-	dir := epgConfigDir(t, "[epg]\nurl = \""+srv.URL+"/epg.xml.gz\"\n")
-	in := dir + "/in.m3u"
-	if err := os.WriteFile(in, []byte(importEPGM3U), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	t.Run("match", func(t *testing.T) {
-		c, out, errOut := epgCLI()
-		if code := c.run([]string{"import", in, "--tunnel", "direct", "--match-epg", "--config-dir", dir}); code != 0 {
-			t.Fatalf("exit code = %d; stderr: %s", code, errOut)
-		}
-		if out.String() != importEPGTOML {
-			t.Errorf("stdout:\n%s\nwant:\n%s", out, importEPGTOML)
-		}
-		if want := `warning: ` + in + `:4: tvg-id "skai-old" is not in the EPG, dropped`; !strings.Contains(errOut.String(), want) {
-			t.Errorf("stderr = %q, want %q", errOut, want)
-		}
-	})
-	t.Run("config dir from env", func(t *testing.T) {
-		c, out, errOut := epgCLI()
-		c.env.LookupEnv = func(k string) (string, bool) {
-			if k == "WG_STREAM_PROXY_CONFIG_DIR" {
-				return dir, true
-			}
-			return "", false
-		}
-		if code := c.run([]string{"import", "--match-epg", "--tunnel", "direct", in}); code != 0 {
-			t.Fatalf("exit code = %d; stderr: %s", code, errOut)
-		}
-		if out.String() != importEPGTOML {
-			t.Errorf("stdout:\n%s", out)
-		}
-	})
-	t.Run("without flag no EPG access", func(t *testing.T) {
-		c, out, _ := testCLI(nil) // no loopback exception: a download would fail
-		if code := c.run([]string{"import", in, "--tunnel", "direct"}); code != 0 {
-			t.Fatalf("exit code = %d", code)
-		}
-		if !strings.Contains(out.String(), `tvg_id = "skai-old"`) || strings.Contains(out.String(), "# tvg_id") {
-			t.Errorf("stdout:\n%s", out)
-		}
-	})
-	t.Run("no epg url", func(t *testing.T) {
-		bare := epgConfigDir(t, "")
-		c, out, errOut := epgCLI()
-		code := c.run([]string{"import", in, "--match-epg", "--config-dir", bare})
-		if code != 1 || out.String() != "" || !strings.Contains(errOut.String(), "import: --match-epg: no [[epg.source]] or [epg] url in config.toml") {
-			t.Errorf("code = %d, stdout %q, stderr %q", code, out, errOut)
-		}
-	})
-	t.Run("no config dir", func(t *testing.T) {
-		c, out, errOut := epgCLI()
-		code := c.run([]string{"import", in, "--match-epg", "--config-dir", dir + "/missing"})
-		if code != 1 || out.String() != "" || errOut.String() == "" {
-			t.Errorf("code = %d, stdout %q, stderr %q", code, out, errOut)
-		}
-	})
-	t.Run("download fails", func(t *testing.T) {
-		c, out, errOut := testCLI(nil) // guard blocks the loopback server
-		code := c.run([]string{"import", in, "--match-epg", "--config-dir", dir})
-		if code != 1 || out.String() != "" || !strings.Contains(errOut.String(), "private address blocked") {
-			t.Errorf("code = %d, stdout %q, stderr %q", code, out, errOut)
-		}
-	})
 }

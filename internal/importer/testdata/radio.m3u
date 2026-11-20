@@ -1,5 +1,0 @@
-#EXTM3U
-#EXTINF:-1 tvg-id="radio-one" group-title="Radio" radio="true",Radio One
-https://radio.example.com/one.mp3
-#EXTINF:-1 tvg-id="radio-two" group-title="Radio" radio="true",Radio Two
-https://radio.example.com/two.mp3

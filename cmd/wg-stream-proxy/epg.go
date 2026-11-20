@@ -7,27 +7,20 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"path/filepath"
 	"strings"
 
 	"github.com/KingOfKalk/wg-stream-proxy/internal/config"
 	"github.com/KingOfKalk/wg-stream-proxy/internal/epg"
-	"github.com/KingOfKalk/wg-stream-proxy/internal/importer"
 )
 
-// matchCandidates is the number of suggestions per channel in epg match:
-// the best one and its alternatives.
-const matchCandidates = 3
-
-// epgCmd runs epg ids and epg match (spec 7.2). Both take the config
-// flags of serve and check plus --source and print to stdout; nothing is
-// written.
+// epgCmd runs epg ids (spec 7.2). It takes the config flags of serve and
+// check plus --source and prints to stdout; nothing is written.
 func (c *cli) epgCmd(args []string) int {
 	if len(args) > 0 && isHelpFlag(args[0]) {
 		return c.help("epg")
 	}
-	if len(args) == 0 || args[0] != "ids" && args[0] != "match" {
-		_, _ = fmt.Fprintln(c.stderr, "wg-stream-proxy: epg: want a subcommand: ids or match")
+	if len(args) == 0 || args[0] != "ids" {
+		_, _ = fmt.Fprintln(c.stderr, "wg-stream-proxy: epg: want the subcommand ids")
 		return 2
 	}
 	sub := args[0]
@@ -58,21 +51,14 @@ func (c *cli) epgCmd(args []string) int {
 		}
 		return 1
 	}
-	var out string
-	if sub == "ids" {
-		out = formatIDs(x)
-	} else {
-		out = formatMatches(cfg.Channels(), x)
-	}
-	if _, err := c.stdout.Write([]byte(out)); err != nil {
+	if _, err := c.stdout.Write([]byte(formatIDs(x))); err != nil {
 		_, _ = fmt.Fprintf(c.stderr, "wg-stream-proxy: epg %s: %v\n", sub, err)
 		return 1
 	}
 	return 0
 }
 
-// epgFlagSet returns the flags of epg ids and epg match: the config
-// flags and --source.
+// epgFlagSet returns the flags of epg ids: the config flags and --source.
 func epgFlagSet(name string) (*flag.FlagSet, *config.Flags, *string) {
 	fs, fp := configFlagSet(name)
 	source := fs.String("source", "", "name of the [[epg.source]] to read (default: the first one, or [epg] url)")
@@ -150,48 +136,3 @@ func formatIDs(x *epg.Index) string {
 	}
 	return b.String()
 }
-
-// formatMatches renders the epg match output: per channel a TOML snippet
-// for its [channel.playlist] table with the best suggestion, and the
-// alternatives as comments. Channels whose tvg_id is in the EPG are only
-// reported.
-func formatMatches(chs []config.Channel, x *epg.Index) string {
-	var b strings.Builder
-	for i, ch := range chs {
-		if i > 0 {
-			b.WriteString("\n")
-		}
-		head := fmt.Sprintf("# %s (%s) in %s", ch.ID(), oneLine(ch.Name()), filepath.Base(ch.File()))
-		cur := ch.TVGID()
-		if cur != "" && x.Has(cur) {
-			b.WriteString(head + ": tvg_id " + importer.Quote(cur) + " is in the EPG\n")
-			continue
-		}
-		cands := x.Match(ch.Name(), matchCandidates)
-		if len(cands) == 0 {
-			b.WriteString(head + ": no match\n")
-			continue
-		}
-		b.WriteString(head + "\n")
-		if cur != "" {
-			b.WriteString("# current tvg_id " + importer.Quote(cur) + " is not in the EPG\n")
-		}
-		b.WriteString("[channel.playlist]\n")
-		b.WriteString("tvg_id = " + importer.Quote(cands[0].ID) + "  # " + describe(cands[0]) + "\n")
-		if len(cands) > 1 {
-			b.WriteString("# alternatives:\n")
-			for _, c := range cands[1:] {
-				b.WriteString("# tvg_id = " + importer.Quote(c.ID) + "  # " + describe(c) + "\n")
-			}
-		}
-	}
-	return b.String()
-}
-
-// describe returns the display name and score of a candidate for a comment.
-func describe(c epg.Candidate) string {
-	return fmt.Sprintf("%s (%.2f)", oneLine(c.Name), c.Score)
-}
-
-// oneLine collapses whitespace, so foreign text stays on one comment line.
-func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }

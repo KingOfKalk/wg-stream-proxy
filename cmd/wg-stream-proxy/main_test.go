@@ -95,9 +95,23 @@ func TestUnknownCommandPrintsUsage(t *testing.T) {
 	if !strings.Contains(stderr, `unknown command "bogus"`) {
 		t.Errorf("stderr = %q, want unknown command error", stderr)
 	}
-	for _, cmd := range []string{"serve", "check", "import", "epg", "healthcheck", "version"} {
+	for _, cmd := range []string{"serve", "check", "epg", "healthcheck", "version"} {
 		if !strings.Contains(stderr, cmd) {
 			t.Errorf("usage in stderr lacks %q: %q", cmd, stderr)
 		}
+	}
+}
+
+func TestImportCommandIsGone(t *testing.T) {
+	code, stdout, stderr := runCmd(t, "import", "channels.m3u")
+
+	if code != 2 {
+		t.Errorf("exit code = %d, want 2", code)
+	}
+	if stdout != "" {
+		t.Errorf("stdout = %q, want empty", stdout)
+	}
+	if !strings.Contains(stderr, `unknown command "import"`) {
+		t.Errorf("stderr = %q, want unknown command error", stderr)
 	}
 }
