@@ -12,6 +12,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/KingOfKalk/wg-stream-proxy/internal/config"
 )
 
 // Limits (spec 3.4).
@@ -160,7 +162,7 @@ func (r *Route) follow(ctx context.Context, t http.RoundTripper, u *url.URL, req
 		case err != nil:
 			// The Location value may carry tokens; it is not logged.
 			return nil, u, errBadRedirect
-		case next.Scheme != "http" && next.Scheme != "https" || next.Host == "":
+		case !config.IsHTTPURL(next):
 			return nil, u, fmt.Errorf("%w: scheme %q", errBadRedirect, next.Scheme)
 		case len(next.String()) > MaxURLLen:
 			return nil, u, ErrURLTooLong
@@ -192,7 +194,7 @@ func parseUpstreamURL(s string) (*url.URL, error) {
 	if err != nil {
 		return nil, errInvalidURL
 	}
-	if u.Scheme != "http" && u.Scheme != "https" || u.Host == "" {
+	if !config.IsHTTPURL(u) {
 		return nil, errInvalidURL
 	}
 	return u, nil

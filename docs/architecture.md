@@ -301,7 +301,7 @@ sequenceDiagram
 
 - Steps 2-8: `/c/` fetches the channel URL through the channel's route.
   The first request on a stopped tunnel starts it (section 6).
-- Step 9: type detection (spec 3.1, `hls.Detect`): configured
+- Step 9: type detection (spec 3.1, `hls.Classify`): configured
   `upstream.type`, else `Content-Type`, else `#EXTM3U` at the start of the
   body, otherwise raw. Here: HLS, so `hls.Rewrite` replaces every
   `http(s)` and relative URI with `/r/{channel}/{sig}/{b64url}/{name}`
@@ -551,7 +551,7 @@ flowchart TB
     end
     subgraph l3["3 · Content"]
         proxy["Server.proxy<br/>fetch, then respond"]:::data
-        det["hls.Detect<br/>HLS, DASH or raw"]:::data
+        det["hls.Classify<br/>HLS, DASH, raw or refused"]:::data
         rw["hls.Rewrite + Signer<br/>URIs to signed /r/"]:::data
         drw["dash.Rewrite + Signer<br/>bases to prefix-signed /p/"]:::data
         pipe["stream<br/>io.Copy + flush"]:::data
@@ -607,7 +607,7 @@ Requests go down the layers, responses travel back up.
 |---|---|---|---|
 | 1 HTTP | Routing of the paths, absolute base URL, `/logos/` from disk, `/healthz`; graceful shutdown waits for running handlers | `internal/server`, `internal/playlist` | 6, 7.1 |
 | 2 Generation | The immutable `generation`: one `config.Config` plus the `route.Set` built for it, in an `atomic.Pointer`. Every request takes it once and keeps it to its end | `internal/server`, `internal/config` | 5.6 |
-| 3 Content | `Server.proxy`: fetch through the channel's route, then `hls.Detect`; playlists go through `hls.Rewrite` with a `Signer.PathBuilder`, DASH manifests through `dash.Rewrite` with `Signer.PrefixPath`, playlists `hls.Unsupported` names are refused with `502`, everything else goes through `stream` (`io.Copy` + flush). Status mapping, the `206` refetch | `internal/hls`, `internal/server` | 3.1-3.4, 4 |
+| 3 Content | `Server.proxy`: fetch through the channel's route, then `hls.Classify` (shared with `probe`); playlists go through `hls.Rewrite` with a `Signer.PathBuilder`, DASH manifests through `dash.Rewrite` with `Signer.PrefixPath`, playlists `hls.Unsupported` names are refused with `502`, everything else goes through `stream` (`io.Copy` + flush). Status mapping, the `206` refetch | `internal/hls`, `internal/server` | 3.1-3.4, 4 |
 | 4 Routes | One `Route` per tunnel plus `direct`. `Fetch` applies the upstream header rules, redirects and timeouts; the route's `dial` resolves, runs `Guard.Check` and connects Happy-Eyeballs style. Two `http.Transport`s per route: the normal pool, and the ICY transport for `/c/` of raw and `auto` channels, which checks the status line of every response and keeps a connection alive until it carries an ICY answer | `internal/route` | 2.1, 3.3-3.5 |
 | 5 Tunnels | `tunnel.Manager` with one `Tunnel` per tunnel file: lazy start, idle close, drain, reload (`Apply`). `direct` is `route.Host()`: host resolver and dialer | `internal/tunnel`, `internal/tunnel/netstack`, `internal/config/wgquick` | 2.1, 5.5 |
 | 6 Host network | One UDP socket per running tunnel to its peer; plain TCP for `direct`. No TUN device, no routing table change | wireguard-go `conn` | 1.1, 2.1 |
@@ -843,7 +843,7 @@ sequenceDiagram
     R->>U: GET through netstack, device, UDP
     U-->>R: 200, headers
     R-->>S: response, body with read_timeout
-    S->>S: hls.Detect: not a playlist
+    S->>S: hls.Classify: not a playlist
     S->>M: Response(200)
     Note right of M: upstream_requests_total
     loop until the body ends
@@ -885,8 +885,9 @@ flowchart TD
     main["cmd/wg-stream-proxy<br/>subcommands"]:::done
     server["internal/server<br/>HTTP handlers, Run, reload"]:::done
     playlist["internal/playlist<br/>channel list"]:::done
-    hls["internal/hls<br/>Detect, Rewrite, Signer"]:::done
+    hls["internal/hls<br/>Classify, Rewrite, Signer"]:::done
     dash["internal/dash<br/>MPD Rewrite"]:::done
+    xmlw["internal/xmlw<br/>XML writer"]:::done
     route["internal/route<br/>routes, guard, upstream rules"]:::done
     tunnel["internal/tunnel<br/>Manager, Tunnel, DNS"]:::done
     netstack["internal/tunnel/netstack<br/>copy of wireguard-go's"]:::done
@@ -903,7 +904,8 @@ flowchart TD
     route --> config
     tunnel -. "implements route Network" .-> route
     tunnel --> config & wgquick & netstack
-    epg --> config & route
+    epg --> config & route & xmlw
+    dash --> xmlw
     probe --> hls & route & tunnel
 
     classDef done fill:#2a8a68,stroke:#1a5e46,color:#ffffff
@@ -917,8 +919,9 @@ run time.
 | `cmd/wg-stream-proxy` | Subcommand dispatch; `serve`, `check`, `probe`, `healthcheck`, `epg`, `tunnel` and `version` work | exists |
 | `internal/config` | Config dir resolution (`Resolve`), loading and validation of `config.toml` and channel files (`Load`), slugs (`Slug`), route resolution | exists |
 | `internal/config/wgquick` | Tunnel file parser (`Parse`), UAPI conversion (`UAPIConfig`), `AllowedIPs` check (`Allows`) | exists |
-| `internal/hls` | Type detection (`Detect`), playlist rewriter (`Rewrite`), signed `/r/` URLs and prefix-signed `/p/` URLs (`Signer`), signing key (`LoadSigningKey`); pure functions, no I/O | exists |
+| `internal/hls` | Type detection (`Detect`; `Classify`, the decision of serving and `probe`), playlist rewriter (`Rewrite`), signed `/r/` URLs and prefix-signed `/p/` URLs (`Signer`), signing key (`LoadSigningKey`); pure functions, no I/O | exists |
 | `internal/dash` | DASH manifest rewriter (`Rewrite`, spec 3.6): token-level XML, `BaseURL` to prefix URLs, DRM refused ([#86](https://github.com/KingOfKalk/wg-stream-proxy/issues/86)); pure function, no I/O | exists |
+| `internal/xmlw` | Writes XML again from `encoding/xml` tokens for `dash` and `epg`: tags, escaping, the plain-name check ([#139](https://github.com/KingOfKalk/wg-stream-proxy/issues/139)); which elements and attributes are kept is the caller's policy; pure functions, no I/O | exists |
 | `internal/tunnel` | One `wireguard-go` device + gVisor netstack per tunnel, DNS inside the tunnel, lazy start ([#11](https://github.com/KingOfKalk/wg-stream-proxy/issues/11)); idle close and drain ([#16](https://github.com/KingOfKalk/wg-stream-proxy/issues/16)); reload (`Manager.Apply`); state snapshots and cool-down (`Manager.Cooldown`, [#68](https://github.com/KingOfKalk/wg-stream-proxy/issues/68)) | exists |
 | `internal/tunnel/netstack` | Trimmed copy of wireguard-go's `tun/netstack` (MIT) that drops packets sent after `Close` ([#47](https://github.com/KingOfKalk/wg-stream-proxy/issues/47), spec 9) | exists |
 | `internal/route` | One route per tunnel plus `direct`, `http.Transport` settings, guard, upstream header rules, timeouts, status mapping ([#12](https://github.com/KingOfKalk/wg-stream-proxy/issues/12)); raw and ICY ([#15](https://github.com/KingOfKalk/wg-stream-proxy/issues/15)). Defines the `Network` interface (resolve + dial a resolved `IP:port`) that tunnels and `direct` implement | exists |
@@ -927,7 +930,7 @@ run time.
 | `internal/clips` | Built-in error clip segments (`go:embed`, rendered by `generate.sh`); error clips on `/c/` ([#115](https://github.com/KingOfKalk/wg-stream-proxy/issues/115)) | exists |
 | `internal/metrics` | Private Prometheus registry with the `wsp_` metrics (spec 7.3) and the Go and process metrics; tunnel gauges read at scrape time ([#18](https://github.com/KingOfKalk/wg-stream-proxy/issues/18)) | exists |
 | `internal/epg` | Downloads an EPG file through a route, streams the XMLTV channel list (plain or gzip), lists its channel ids for `epg ids` (spec 7.2); EPG proxy mode (spec 6.1, [#87](https://github.com/KingOfKalk/wg-stream-proxy/issues/87)): streaming XMLTV filter that writes the kept elements again from tokens (`Filter`), merge in source priority (`Merge`), refresh scheduling with last good copies (`Guide`) | exists |
-| `internal/probe` | `probe` command (spec 7.2): fetches a URL through a route with the rules of serving, detects the format (HLS master or media, raw or ICY, refused) with `hls.Detect` and `hls.Unsupported`, follows the first variant and segment, reports timing from `route.Trace`; run by `POST /debug/probe` of the running server, which the command calls ([#122](https://github.com/KingOfKalk/wg-stream-proxy/issues/122)) | exists |
+| `internal/probe` | `probe` command (spec 7.2): fetches a URL through a route with the rules of serving, detects the format (HLS master or media, raw or ICY, refused) with `hls.Classify` like serving, follows the first variant and segment, reports timing from `route.Trace`; run by `POST /debug/probe` of the running server, which the command calls ([#122](https://github.com/KingOfKalk/wg-stream-proxy/issues/122)) | exists |
 
 ## 9. Versions
 

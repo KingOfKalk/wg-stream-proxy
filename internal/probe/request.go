@@ -19,7 +19,7 @@ var ErrInvalidURL = errors.New("the URL must be absolute with scheme http or htt
 // CheckURL returns ErrInvalidURL unless raw is an absolute http(s) URL.
 func CheckURL(raw string) error {
 	u, err := url.Parse(raw)
-	if err != nil || u.Scheme != "http" && u.Scheme != "https" || u.Host == "" {
+	if err != nil || !config.IsHTTPURL(u) {
 		return ErrInvalidURL
 	}
 	return nil
