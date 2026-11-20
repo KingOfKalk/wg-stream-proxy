@@ -56,6 +56,7 @@ docker run -d --name wg-stream-proxy -p 2349:2349 \
 
 Compose: [`deploy/compose/compose.yaml`](../deploy/compose/compose.yaml) (`read_only`, `cap_drop: [ALL]`, config mounted read-only, signing key file, healthcheck); put the config dir next to it as `./config`, then `docker compose up -d`.
 
+- Stop: `docker compose down` sends `SIGTERM`, on which the proxy drains in-flight requests for up to 30 s ([spec 2.1](spec.md#21-tunnels)); the service sets `stop_grace_period: 35s` so Docker's default 10 s does not cut the drain short.
 - Reload: `docker kill -s HUP wg-stream-proxy`.
 - LibreELEC 12+ on Raspberry Pi 4/5: the Docker add-on runs the `linux/arm64` image.
 
