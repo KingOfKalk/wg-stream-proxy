@@ -41,19 +41,12 @@ func Load(opts Options) (*Config, error) {
 		routes[t.Name] = true
 	}
 
-	var raw rawConfig
-	src := filepath.Join(p.ConfigDir, "config.toml")
-	data, err := os.ReadFile(src)
-	switch {
-	case err == nil:
-		if derrs := decodeTOML(src, data, &raw); derrs != nil {
-			// Report decode errors only; do not validate a partially
-			// decoded file.
-			errs = append(errs, derrs...)
-			raw = rawConfig{}
-		}
-	case !errors.Is(err, fs.ErrNotExist):
-		errs = append(errs, err)
+	raw, src, rerrs := readConfigToml(p)
+	if len(rerrs) > 0 {
+		// Report decode errors only; do not validate a partially
+		// decoded file.
+		errs = append(errs, rerrs...)
+		raw = rawConfig{}
 	}
 	errs = append(errs, c.applySettings(raw, src, opts.Overrides, routes)...)
 
@@ -161,4 +154,78 @@ func listFiles(dir, suffix string) ([]string, []error) {
 // logosDir returns the local logo directory (spec 5.1).
 func logosDir(configDir string) string {
 	return filepath.Join(configDir, "assets", "logos")
+}
+
+// LoadAddresses reads only the listen address of the proxy and of the
+// debug listener (spec 5.3, 7.2): config.toml is decoded and its errors
+// count, but the tunnel and channel files are neither read nor
+// validated, and neither are the settings that address no listener.
+// The commands that only talk to a running proxy (healthcheck, tunnel
+// list|stop, probe) use it, so they keep working while the proxy serves
+// its loaded config and a newer version with a broken channel or tunnel
+// file is rejected by the reload (5.6). Overrides (flags and
+// environment, Resolve) apply like in Load.
+func LoadAddresses(opts Options) (listen, debugListen string, err error) {
+	p := opts.Paths
+	fi, err := os.Stat(p.ConfigDir)
+	if err != nil {
+		return "", "", fmt.Errorf("config dir: %w", err)
+	}
+	if !fi.IsDir() {
+		return "", "", fmt.Errorf("config dir %s: not a directory", p.ConfigDir)
+	}
+
+	raw, src, rerrs := readConfigToml(p)
+	if len(rerrs) > 0 {
+		return "", "", errors.Join(rerrs...)
+	}
+
+	var errs []error
+	fail := func(key, origin, format string, args ...any) {
+		if origin == overrideSource {
+			key += " " + overrideSource
+		} else {
+			key = origin + ": " + key
+		}
+		errs = append(errs, fmt.Errorf("%s: %s", key, fmt.Sprintf(format, args...)))
+	}
+
+	listen, origin := defaultListen, src
+	switch {
+	case opts.Overrides.Listen != "":
+		listen, origin = opts.Overrides.Listen, overrideSource
+	case raw.Listen != nil:
+		listen = *raw.Listen
+	}
+	if !validListen(listen) {
+		fail("listen", origin, "invalid address %q: use [host]:port", listen)
+	}
+
+	if v := raw.Debug.Listen; v != nil && *v != "" {
+		debugListen = *v
+		if !validListen(debugListen) {
+			fail("debug.listen", src, "invalid address %q: use [host]:port", debugListen)
+		}
+	}
+	if len(errs) > 0 {
+		return "", "", errors.Join(errs...)
+	}
+	return listen, debugListen, nil
+}
+
+// readConfigToml reads and decodes config.toml (spec 5.3): a missing
+// file counts as empty, the errors carry file and position. A partially
+// decoded raw value must not be validated; the errors say what is wrong.
+func readConfigToml(p Paths) (raw rawConfig, src string, errs []error) {
+	src = filepath.Join(p.ConfigDir, "config.toml")
+	data, err := os.ReadFile(src)
+	switch {
+	case err == nil:
+		if derrs := decodeTOML(src, data, &raw); derrs != nil {
+			return rawConfig{}, src, derrs
+		}
+	case !errors.Is(err, fs.ErrNotExist):
+		return rawConfig{}, src, []error{err}
+	}
+	return raw, src, nil
 }

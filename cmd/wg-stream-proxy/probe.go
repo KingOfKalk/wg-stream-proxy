@@ -102,30 +102,36 @@ func (c *cli) probeCmd(args []string) int {
 		c.printErrors(err)
 		return 1
 	}
+	if !f.standalone {
+		// The mode needs only the debug listener address, read without
+		// the tunnel and channel files (spec 7.2): the running proxy
+		// answers with its own loaded config, so a broken file of the
+		// newer version does not send the command standalone.
+		_, debugListen, err := config.LoadAddresses(opts)
+		if err != nil {
+			c.printErrors(err)
+			return 1
+		}
+		if debugListen == "" {
+			c.standaloneNote(f, "[debug] listen is not set")
+		} else if code, done := c.probeViaProxy(debugListen, f, target); done {
+			return code
+		}
+	}
 	cfg, err := config.Load(opts)
 	if err != nil {
 		c.printErrors(err)
 		return 1
 	}
-	if !f.standalone {
-		code, done := c.probeViaProxy(cfg, f, target)
-		if done {
-			return code
-		}
-	}
 	return c.probeStandalone(cfg, f, target)
 }
 
 // probeViaProxy sends the probe to the debug listener of the running
-// proxy. It returns done=false if there is none to use: no [debug]
-// listen, or nothing listens there (a note on stderr says so). An answer
-// with an error is reported, not worked around.
-func (c *cli) probeViaProxy(cfg *config.Config, f *probeFlags, target string) (code int, done bool) {
-	if cfg.DebugListen() == "" {
-		c.standaloneNote(f, "[debug] listen is not set")
-		return 0, false
-	}
-	base, err := localURL(cfg.DebugListen(), "")
+// proxy. It returns done=false if there is none to use: nothing listens
+// there (a note on stderr says so). An answer with an error is
+// reported, not worked around.
+func (c *cli) probeViaProxy(debugListen string, f *probeFlags, target string) (code int, done bool) {
+	base, err := localURL(debugListen, "")
 	if err != nil {
 		return c.probeFail(1, err.Error()), true
 	}
@@ -146,7 +152,7 @@ func (c *cli) probeViaProxy(cfg *config.Config, f *probeFlags, target string) (c
 	var de *dialError
 	switch {
 	case errors.As(err, &de):
-		c.standaloneNote(f, "nothing listens on [debug] listen "+cfg.DebugListen())
+		c.standaloneNote(f, "nothing listens on [debug] listen "+debugListen)
 		return 0, false
 	case errors.As(err, &se):
 		return c.probeStatusFailed(se), true
