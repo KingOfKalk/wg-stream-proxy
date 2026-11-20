@@ -520,3 +520,109 @@ func TestLoadEPGSources(t *testing.T) {
 		t.Errorf("defaults: refresh %v, sources %v", cfg.EPGRefresh(), cfg.EPGSources())
 	}
 }
+
+// TestLoadAddresses: LoadAddresses reads only listen and [debug] listen
+// from config.toml, without the tunnel and channel files (spec 7.2: the
+// commands that only talk to a running proxy must survive a config edit
+// the serving proxy rejects).
+func TestLoadAddresses(t *testing.T) {
+	tests := []struct {
+		name    string
+		files   map[string]string
+		ov      Overrides
+		listen  string
+		debug   string
+		wantErr string // "" for no error
+	}{
+		{
+			name: "broken channel and tunnel files are not read",
+			files: map[string]string{
+				"config.toml":               "listen = \":8080\"\n[debug]\nlisten = \"127.0.0.1:2350\"\n",
+				"channels.d/broken.toml":    "[[chanel]]\nname = \"News\"\n",
+				"tunnels/my_tunnel.conf":    "[Interface]\n",
+				"channels.d/_reserved.toml": "x",
+			},
+			listen: ":8080",
+			debug:  "127.0.0.1:2350",
+		},
+		{
+			name:   "defaults",
+			files:  map[string]string{"config.toml": ""},
+			listen: ":2349",
+		},
+		{
+			name:   "no config.toml",
+			files:  nil,
+			listen: ":2349",
+		},
+		{
+			name:   "listen override wins",
+			files:  map[string]string{"config.toml": "listen = \":8080\"\n"},
+			ov:     Overrides{Listen: ":1"},
+			listen: ":1",
+		},
+		{
+			name:    "unknown key in config.toml",
+			files:   map[string]string{"config.toml": "bogus = 1\n"},
+			wantErr: "bogus",
+		},
+		{
+			name:    "invalid listen",
+			files:   map[string]string{"config.toml": "listen = \"nope\"\n"},
+			wantErr: `listen: invalid address "nope"`,
+		},
+		{
+			name:    "invalid listen override",
+			files:   map[string]string{"config.toml": ""},
+			ov:      Overrides{Listen: "nope"},
+			wantErr: "listen (flag or environment)",
+		},
+		{
+			name:    "invalid debug listen",
+			files:   map[string]string{"config.toml": "[debug]\nlisten = \"nope\"\n"},
+			wantErr: "debug.listen",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := writeConfigDir(t, tt.files)
+			listen, debug, err := LoadAddresses(Options{
+				Paths:     Paths{ConfigDir: dir, TunnelsDir: filepath.Join(dir, "tunnels")},
+				Overrides: tt.ov,
+			})
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("LoadAddresses() error = %v, want %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("LoadAddresses() error = %v", err)
+			}
+			if listen != tt.listen || debug != tt.debug {
+				t.Errorf("LoadAddresses() = %q, %q; want %q, %q", listen, debug, tt.listen, tt.debug)
+			}
+		})
+	}
+	t.Run("config dir missing", func(t *testing.T) {
+		dir := filepath.Join(t.TempDir(), "missing")
+		_, _, err := LoadAddresses(Options{Paths: Paths{ConfigDir: dir}})
+		if err == nil || !strings.Contains(err.Error(), "config dir") {
+			t.Fatalf("LoadAddresses() error = %v, want config dir error", err)
+		}
+	})
+	t.Run("config dir is a file", func(t *testing.T) {
+		dir := writeConfigDir(t, map[string]string{"f": ""})
+		_, _, err := LoadAddresses(Options{Paths: Paths{ConfigDir: filepath.Join(dir, "f")}})
+		if err == nil || !strings.Contains(err.Error(), "not a directory") {
+			t.Fatalf("LoadAddresses() error = %v, want not a directory", err)
+		}
+	})
+	t.Run("config.toml unreadable", func(t *testing.T) {
+		dir := writeConfigDir(t, map[string]string{"config.toml/x": ""}) // config.toml is a directory
+		_, _, err := LoadAddresses(Options{Paths: Paths{ConfigDir: dir}})
+		if err == nil {
+			t.Fatal("LoadAddresses() error = nil, want the read error")
+		}
+	})
+}

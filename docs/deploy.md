@@ -41,7 +41,7 @@ Retention: after every push to `main`, the `Prune` job keeps all `edge` and `X.Y
 
 - Entry point `/wg-stream-proxy`, default command `serve`; other commands as arguments (`docker run --rm … check`).
 - Config dir `/etc/wg-stream-proxy` (`WG_STREAM_PROXY_CONFIG_DIR`), port 2349.
-- `HEALTHCHECK`: `wg-stream-proxy healthcheck` every 30s (every 1s for the first 30s). It loads the config like `serve` but does not see `serve` flags: set options in `config.toml` or as env vars (e.g. `WG_STREAM_PROXY_LISTEN`).
+- `HEALTHCHECK`: `wg-stream-proxy healthcheck` every 30s (every 1s for the first 30s). It resolves the listen address like `serve` (only `listen` and `[debug] listen` of `config.toml`, not the tunnel and channel files) but does not see `serve` flags: set options in `config.toml` or as env vars (e.g. `WG_STREAM_PROXY_LISTEN`).
 - Host files must be readable by UID 65532 (e.g. `chown -R 65532 config` and `chmod 640` on tunnel files and `signing.key`).
 
 <!-- x-release-please-start-version -->

@@ -268,6 +268,22 @@ func TestProbeInvalidConfig(t *testing.T) {
 	}
 }
 
+// TestProbeInvalidConfigToml: a config.toml that does not decode fails
+// the probe before any request: there is no address to trust.
+func TestProbeInvalidConfigToml(t *testing.T) {
+	dir := writeDir(t, map[string]string{"config.toml": "bogus = 1\n"})
+	c, out, errOut := probeCLI()
+
+	code := c.run([]string{"probe", "--config-dir", dir, "http://a.example/x"})
+
+	if code != 1 || out.String() != "" || !strings.Contains(errOut.String(), "invalid config") || !strings.Contains(errOut.String(), "bogus") {
+		t.Errorf("exit code = %d, stdout %q, stderr %q; want 1, nothing, the config errors", code, out, errOut)
+	}
+	if strings.Contains(errOut.String(), "standalone") {
+		t.Errorf("stderr = %q, must fail before the standalone fallback", errOut)
+	}
+}
+
 // TestProbeTunnelRoute: the route may be a tunnel; it starts for the
 // probe (the tunnel start shows in the timing), reaches an upstream only
 // the tunnel can reach, and stops afterwards (goleak checks that nothing

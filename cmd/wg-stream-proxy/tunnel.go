@@ -107,15 +107,17 @@ func (c *cli) tunnelFail(code int, msg string) int {
 }
 
 // debugBase returns the base URL of the debug listener of the config.
+// It reads only the address (a channel or tunnel file the proxy rejects
+// as a reload does not stop the command).
 func (c *cli) debugBase(opts config.Options) (string, error) {
-	cfg, err := config.Load(opts)
+	_, debugListen, err := config.LoadAddresses(opts)
 	if err != nil {
 		return "", errors.New(firstLine(err))
 	}
-	if cfg.DebugListen() == "" {
+	if debugListen == "" {
 		return "", errors.New("the debug listener is off: set [debug] listen in config.toml")
 	}
-	return localURL(cfg.DebugListen(), "")
+	return localURL(debugListen, "")
 }
 
 // tunnelList prints the tunnels of GET /debug/tunnels as a table.

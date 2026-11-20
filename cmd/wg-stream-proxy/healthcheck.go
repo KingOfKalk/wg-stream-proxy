@@ -26,11 +26,14 @@ func (c *cli) healthcheck(args []string) int {
 	if !ok {
 		return code
 	}
-	cfg, err := config.Load(opts)
+	// Only the listen address; the proxy's own config decides the rest
+	// (a channel or tunnel file the proxy rejects as a reload does not
+	// fail the healthcheck).
+	listen, _, err := config.LoadAddresses(opts)
 	if err != nil {
 		return c.healthFail(firstLine(err))
 	}
-	target, err := healthcheckURL(cfg.Listen())
+	target, err := healthcheckURL(listen)
 	if err != nil {
 		return c.healthFail(err.Error())
 	}
