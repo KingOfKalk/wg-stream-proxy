@@ -98,32 +98,6 @@ func location(tunnel string, line int) string {
 	return fmt.Sprintf("tunnel %q: ", tunnel)
 }
 
-// HasIPv4 reports whether the tunnel can carry IPv4: it has an IPv4
-// address and an IPv4 AllowedIPs prefix.
-func (t *Tunnel) HasIPv4() bool {
-	return t.hasFamily(netip.Addr.Is4)
-}
-
-// HasIPv6 reports whether the tunnel can carry IPv6: it has an IPv6
-// address and an IPv6 AllowedIPs prefix. It says nothing about whether
-// the upstream network routes IPv6.
-func (t *Tunnel) HasIPv6() bool {
-	return t.hasFamily(netip.Addr.Is6)
-}
-
-func (t *Tunnel) hasFamily(is func(netip.Addr) bool) bool {
-	return anyPrefix(t.Addresses, is) && anyPrefix(t.Peer.AllowedIPs, is)
-}
-
-func anyPrefix(ps []netip.Prefix, is func(netip.Addr) bool) bool {
-	for _, p := range ps {
-		if is(p.Addr()) {
-			return true
-		}
-	}
-	return false
-}
-
 // Allows reports whether addr lies within the peer's AllowedIPs.
 func (t *Tunnel) Allows(addr netip.Addr) bool {
 	addr = addr.Unmap()
