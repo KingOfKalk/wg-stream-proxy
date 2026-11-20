@@ -174,9 +174,9 @@ url = "http://upstream.test/seg.ts"
 	eventually(t, "two first_byte observations", phase("first_byte"))
 	body := scrape()
 	got := histogramCounts(body, "wsp_upstream_phase_seconds")
-	// A raw channel dials for every request (ICY transport, no pool); the
-	// host name is looked up through the tunnel each time.
-	want := map[string]int{`phase="dns",route="gr"`: 2, `phase="connect",route="gr"`: 2, `phase="first_byte",route="gr"`: 2}
+	// The second request reuses the pooled connection of the first (ICY
+	// transport, #131): one lookup and one connect.
+	want := map[string]int{`phase="dns",route="gr"`: 1, `phase="connect",route="gr"`: 1, `phase="first_byte",route="gr"`: 2}
 	if len(got) != len(want) {
 		t.Errorf("phase series = %v, want %v", got, want)
 	}

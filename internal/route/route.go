@@ -47,9 +47,10 @@ type Route struct {
 	transport *http.Transport
 	// icyTransport serves requests with Request.ICY: its connections
 	// accept a Shoutcast v1 "ICY" status line (spec 3.3). It has its own
-	// pool, so connections of the normal transport are never wrapped, and
-	// no keep-alive: the wrapper rewrites only the first response of a
-	// connection, so a connection must not carry a second request.
+	// pool, so connections of the normal transport are never wrapped. It
+	// keeps plain HTTP connections alive: the wrapper checks every
+	// response of such a connection, and a connection that carried an ICY
+	// answer takes no further request (icyConn).
 	icyTransport *http.Transport
 }
 
@@ -58,7 +59,6 @@ func newRoute(name string, n Network, opts Options) *Route {
 	r := routeSettings(name, n, opts)
 	r.transport = newTransport(r.dial)
 	r.icyTransport = newTransport(r.dialICY)
-	r.icyTransport.DisableKeepAlives = true
 	return r
 }
 

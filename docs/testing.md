@@ -51,7 +51,7 @@ Invariants:
 - Every URI line and every `URI="http..."` attribute in the output points to `/r/`; no other line changes.
 - DASH rewriter: the output passes the rewriter's checks again and rewrites again; every `BaseURL` and every segment reference that is not plain relative points to a prefix URL; no `Location`, `PatchLocation` or chaining property is left; `UTCTiming` is `direct` or the proxy's.
 - Prefix path validation: an accepted request reaches an upstream URL below the signed prefix (same scheme, host and port; after decoding no empty, `.` or `..` segment) and carries a query only with mode `q`.
-- ICY wrapper: a leading `ICY ` becomes `HTTP/1.0 `, every other input passes byte for byte, for any split into reads.
+- ICY wrapper: a leading `ICY ` becomes `HTTP/1.0 `, every other input passes byte for byte, for any split into reads; on a connection with two responses the second is checked like the first after a plain HTTP response, and no request follows an ICY response.
 - Clip segment rewrite: the input is untouched and keeps its length; shifting the output back by the inverse amounts gives the input byte for byte.
 - XMLTV filter: the guide parses strictly, has only the root `tv` and `<channel>` and `<programme>` elements of the wanted ids, plain names, no comments, processing instructions, declarations or CDATA, no ended programme, and filters to itself again.
 
@@ -61,7 +61,7 @@ Proxy in-process with a test config dir, fixture upstreams as `httptest.Server`s
 
 - HLS: master with variants, demuxed audio and subtitle renditions, AES-128 key, fMP4 init segment, sliding live window advancing over time, VOD with `ENDLIST`, gzip-compressed playlist.
 - DASH: a redirected live manifest with a relative Period `BaseURL` and `$RepresentationID$`/`$Time$` templates, found by `.mpd`, by `type = "dash"` and by the XML root on an `auto` channel; the segment URLs a player builds reach the upstream with the channel's headers; an absolute template with a query; `UTCTiming` and `/time`; `ContentProtection` (`drm`) and remote elements refused without leaking URLs.
-- HTTP edge cases: `HEAD` on `/c` and `/r`, `Range` passthrough on segments, `Range` not forwarded for `.m3u8`, `Content-Length` absent after decompression, `ICY 200 OK` raw stream, `Icy-MetaData` forwarding, 4xx and 5xx mapping, timeouts, 10 redirects ok and 11 fail, playlists the proxy does not rewrite refused with `502` on `auto` and `raw` channels and `/r/` while media (MPEG-TS, fMP4, MP3, AAC, Ogg) streams.
+- HTTP edge cases: `HEAD` on `/c` and `/r`, `Range` passthrough on segments, `Range` not forwarded for `.m3u8`, `Content-Length` absent after decompression, `ICY 200 OK` raw stream (also on a kept-alive connection after plain HTTP answers of the same host), `/c/` polls of `auto` and `raw` channels reuse one upstream connection, `Icy-MetaData` forwarding, 4xx and 5xx mapping, timeouts, 10 redirects ok and 11 fail, playlists the proxy does not rewrite refused with `502` on `auto` and `raw` channels and `/r/` while media (MPEG-TS, fMP4, MP3, AAC, Ogg) streams.
 - Routing and leaks:
   - Tunnel channel requests arrive at the server peer with the tunnel source address.
   - A recording direct dialer sees zero dials for tunnel channels, including segments, keys and redirects.

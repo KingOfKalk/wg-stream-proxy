@@ -104,8 +104,8 @@ Resources under `/r/` and `/p/` (4, 4.1) use the same detection (steps 2.2-2.5):
   - Media (MPEG-TS, fMP4, MP3, AAC, Ogg, ICY streams) matches none of these. A `warn` log line names channel, route, URL (8) and format (`pls`, `m3u`, `dash`, `xspf`, `asx`, `unknown`); metrics reason `unsupported` (7.3).
   - Rewriting PLS and plain M3U (internet radio) is a possible later feature.
 - Shoutcast v1 servers answer `ICY 200 OK`; the raw route's connection wrapper rewrites a leading `ICY ` status line to `HTTP/1.0 ` before Go's HTTP parser sees it.
-  - Used for `/c/` requests of `raw` and `auto` channels (the type of `auto` is only known from the response; the wrapper leaves `HTTP/` responses unchanged). These connections are not reused (one request per connection); `hls` and `dash` channels and `/r/` and `/p/` resources use the normal pool.
-  - Only the first bytes of each connection are checked, so a connection carries one request: an ICY response has no length and ends with its connection, and a server may answer one port with ICY or HTTP per path. Over `https` the wrapper sees TLS records and changes nothing (Shoutcast v1 has no TLS).
+  - Used for `/c/` requests of `raw` and `auto` channels (the type of `auto` is only known from the response; the wrapper leaves `HTTP/` responses unchanged). These connections have their own keep-alive pool, so repeated polls of an `auto` channel whose URL is a media playlist reuse a connection; `hls` and `dash` channels and `/r/` and `/p/` resources use the normal pool.
+  - The first bytes of every response are checked: a server may answer one port with ICY or HTTP per path, also on a kept-alive connection. A connection that carried an ICY response takes no further request (an ICY response has no length and ends with its connection); the next request uses a new connection, even if the server claimed keep-alive. Over `https` the wrapper sees TLS records and changes nothing (Shoutcast v1 has no TLS).
 - `Icy-MetaData` is forwarded from the client; `icy-*` response headers are copied back.
 
 ### 3.4 Upstream HTTP rules
