@@ -20,12 +20,8 @@ import (
 // Error clips (spec 3.4, design: docs/clips.md 6.2): a GET of /c/ of an
 // HLS channel answers a failure with a short VOD playlist of an error
 // clip instead of an HTTP error, so the player shows a text instead of a
-// failure dialog. Its segments are served under /clip/ from the embedded
-// clips and reach no upstream.
-
-// errorClipSegments is how often an error playlist lists its segment:
-// 5 × 0.96 s.
-const errorClipSegments = 5
+// failure dialog. Its segment is served under /clip/ from the embedded
+// clips and reaches no upstream.
 
 // kindClip is the kind of /clip/ requests in /debug/requests and the debug
 // line. It is never a metric label: /clip/ requests are not channel
@@ -94,22 +90,15 @@ func (s *Server) answerFailure(w http.ResponseWriter, r *http.Request, g *genera
 	s.metrics.ErrorClip(clip)
 }
 
-// errorPlaylist returns the VOD media playlist of an error clip: its
-// segment errorClipSegments times, at positions 0, 1, ….
+// errorPlaylist returns the VOD media playlist of an error clip: its one
+// segment of 4.8 s.
 func errorPlaylist(base, clip string) []byte {
-	b := []byte("#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:1\n#EXT-X-MEDIA-SEQUENCE:0\n#EXT-X-PLAYLIST-TYPE:VOD\n")
-	for n := range errorClipSegments {
-		b = append(b, "#EXTINF:"+clips.SegmentDuration+",\n"...)
-		b = append(b, base+"/clip/"+clip+"/"...)
-		b = strconv.AppendInt(b, int64(n), 10)
-		b = append(b, ".ts\n"...)
-	}
-	return append(b, "#EXT-X-ENDLIST\n"...)
+	return []byte("#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:5\n#EXT-X-MEDIA-SEQUENCE:0\n#EXT-X-PLAYLIST-TYPE:VOD\n" +
+		"#EXTINF:" + clips.SegmentDuration + ",\n" + base + "/clip/" + clip + ".ts\n#EXT-X-ENDLIST\n")
 }
 
-// handleClip serves /clip/{name}/{n}.ts: the built-in clip name at
-// position n (0 to clips.MaxPosition), timestamps and continuity counters
-// rewritten by clips.Repeat. Anything else is 404. No upstream is asked.
+// handleClip serves /clip/{name}.ts: the built-in clip name. Anything else
+// is 404. No upstream is asked.
 func (s *Server) handleClip(w http.ResponseWriter, r *http.Request) {
 	rec := &requestRecord{ResponseWriter: w, id: s.requestIDs.Add(1), start: time.Now()}
 	defer func() {
@@ -119,19 +108,10 @@ func (s *Server) handleClip(w http.ResponseWriter, r *http.Request) {
 			Phases: route.Phases{URL: r.URL.Path},
 		})
 	}()
-	name := r.PathValue("name")
-	num, ok := strings.CutSuffix(r.PathValue("file"), ".ts")
-	n, err := strconv.Atoi(num)
-	seg, known := clips.Segment(name)
-	if !known || !ok || err != nil || strconv.Itoa(n) != num || n < 0 || n > clips.MaxPosition {
+	name, ok := strings.CutSuffix(r.PathValue("file"), ".ts")
+	body, known := clips.Segment(name)
+	if !ok || !known {
 		http.NotFound(rec, r)
-		return
-	}
-	body, err := clips.Repeat(seg, n)
-	if err != nil {
-		// The embedded segments are checked by the clips tests.
-		s.log.Error("clip segment", "clip", name, "error", err)
-		http.Error(rec, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
 	h := rec.Header()

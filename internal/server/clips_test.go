@@ -114,13 +114,8 @@ func newClipEnv(t *testing.T, extra string) *directEnv {
 
 // wantErrorPlaylist is the error playlist of clip under base (spec 3.4).
 func wantErrorPlaylist(base, clip string) string {
-	var b strings.Builder
-	b.WriteString("#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:1\n#EXT-X-MEDIA-SEQUENCE:0\n#EXT-X-PLAYLIST-TYPE:VOD\n")
-	for n := range 5 {
-		b.WriteString("#EXTINF:0.960,\n" + base + "/clip/" + clip + "/" + strconv.Itoa(n) + ".ts\n")
-	}
-	b.WriteString("#EXT-X-ENDLIST\n")
-	return b.String()
+	return "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:5\n#EXT-X-MEDIA-SEQUENCE:0\n#EXT-X-PLAYLIST-TYPE:VOD\n" +
+		"#EXTINF:4.800,\n" + base + "/clip/" + clip + ".ts\n#EXT-X-ENDLIST\n"
 }
 
 // warnLines returns the warn lines of the log that name channel id.
@@ -248,39 +243,34 @@ func TestErrorClipsKeepHTTPErrors(t *testing.T) {
 	}
 }
 
-// TestClipSegments: /clip/{name}/{n}.ts serves the clip segment at
-// position n (clips.Repeat), without any upstream request; anything else
-// under /clip/ is 404.
+// TestClipSegments: /clip/{name}.ts serves the embedded segment of the
+// clip, without any upstream request; anything else under /clip/ is 404.
 func TestClipSegments(t *testing.T) {
 	e := newClipEnv(t, "")
 	for _, name := range clips.Names() {
-		seg, _ := clips.Segment(name)
-		for _, n := range []int{0, 4, clips.MaxPosition} {
-			path := "/clip/" + name + "/" + strconv.Itoa(n) + ".ts"
-			want, err := clips.Repeat(seg, n)
-			if err != nil {
-				t.Fatal(err)
-			}
-			resp, body := e.get(t, path, nil)
-			if resp.StatusCode != http.StatusOK || !bytes.Equal([]byte(body), want) {
-				t.Fatalf("GET %s: status %d, %d bytes, want 200 and %d bytes", path, resp.StatusCode, len(body), len(want))
-			}
-			if ct := resp.Header.Get("Content-Type"); ct != "video/mp2t" {
-				t.Errorf("GET %s: Content-Type %q", path, ct)
-			}
-			if cl := resp.Header.Get("Content-Length"); cl != strconv.Itoa(len(want)) {
-				t.Errorf("GET %s: Content-Length %q", path, cl)
-			}
+		path := "/clip/" + name + ".ts"
+		want, _ := clips.Segment(name)
+		resp, body := e.get(t, path, nil)
+		if resp.StatusCode != http.StatusOK || !bytes.Equal([]byte(body), want) {
+			t.Fatalf("GET %s: status %d, %d bytes, want 200 and %d bytes", path, resp.StatusCode, len(body), len(want))
+		}
+		if ct := resp.Header.Get("Content-Type"); ct != "video/mp2t" {
+			t.Errorf("GET %s: Content-Type %q", path, ct)
+		}
+		if cl := resp.Header.Get("Content-Length"); cl != strconv.Itoa(len(want)) {
+			t.Errorf("GET %s: Content-Length %q", path, cl)
 		}
 	}
-	resp, body := do(t, e.client, http.MethodHead, e.proxy.URL+"/clip/channel-blocked/1.ts", nil)
+	resp, body := do(t, e.client, http.MethodHead, e.proxy.URL+"/clip/channel-blocked.ts", nil)
 	if resp.StatusCode != http.StatusOK || body != "" || resp.Header.Get("Content-Length") == "" {
 		t.Errorf("HEAD: status %d, %d bytes, Content-Length %q", resp.StatusCode, len(body), resp.Header.Get("Content-Length"))
 	}
 	for _, path := range []string{
-		"/clip/nope/0.ts", "/clip/Starting/0.ts", "/clip/channel-blocked/64.ts", "/clip/channel-blocked/-1.ts",
-		"/clip/channel-blocked/+1.ts", "/clip/channel-blocked/01.ts", "/clip/channel-blocked/1", "/clip/channel-blocked/1.mp4",
-		"/clip/channel-blocked/.ts", "/clip/channel-blocked/", "/clip/channel-blocked/1.ts/x", "/clip/",
+		// The in-flight names, the old position form, and other spellings.
+		"/clip/starting.ts", "/clip/connecting.ts", "/clip/waiting.ts", "/clip/starting/0.ts",
+		"/clip/channel-blocked/0.ts", "/clip/channel-blocked/4.ts", "/clip/channel-blocked/63.ts",
+		"/clip/nope.ts", "/clip/Channel-Blocked.ts", "/clip/channel-blocked", "/clip/channel-blocked.mp4",
+		"/clip/.ts", "/clip/channel-blocked.ts/x", "/clip/",
 	} {
 		if resp, _ := e.get(t, path, nil); resp.StatusCode != http.StatusNotFound {
 			t.Errorf("GET %s: status %d, want 404", path, resp.StatusCode)
@@ -289,7 +279,7 @@ func TestClipSegments(t *testing.T) {
 	if n := len(e.up.requests()); n != 0 {
 		t.Errorf("upstream saw %d requests, want none", n)
 	}
-	if resp, _ := do(t, e.client, http.MethodPost, e.proxy.URL+"/clip/channel-blocked/0.ts", nil); resp.StatusCode != http.StatusMethodNotAllowed {
+	if resp, _ := do(t, e.client, http.MethodPost, e.proxy.URL+"/clip/channel-blocked.ts", nil); resp.StatusCode != http.StatusMethodNotAllowed {
 		t.Errorf("POST: status %d, want 405", resp.StatusCode)
 	}
 }
@@ -310,7 +300,7 @@ func TestClipRequestsRecorded(t *testing.T) {
 		t.Fatal(err)
 	}
 	rec := httptest.NewRecorder()
-	s.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/clip/tunnel-unreachable/2.ts", nil))
+	s.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/clip/tunnel-unreachable.ts", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status %d", rec.Code)
 	}
@@ -322,7 +312,7 @@ func TestClipRequestsRecorded(t *testing.T) {
 	if fr.Kind != "clip" || fr.Method != http.MethodGet || fr.Status != http.StatusOK || fr.Bytes != int64(rec.Body.Len()) || fr.Channel != "" {
 		t.Errorf("recent request %+v", fr)
 	}
-	if fr.Phases.URL != "/clip/tunnel-unreachable/2.ts" {
+	if fr.Phases.URL != "/clip/tunnel-unreachable.ts" {
 		t.Errorf("recent request url %q", fr.Phases.URL)
 	}
 	if !strings.Contains(logs.String(), `msg=request id=1 method=GET channel="" route="" kind=clip status=200`) {

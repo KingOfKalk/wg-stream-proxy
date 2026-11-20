@@ -2,7 +2,7 @@
 
 Design for the clips (error clips: v0.3; in-flight clips: parked, Later; [spec 10](spec.md#10-roadmap), [#83](https://github.com/KingOfKalk/wg-stream-proxy/issues/83), [#105](https://github.com/KingOfKalk/wg-stream-proxy/issues/105)). Companion to [spec.md](spec.md), [architecture.md](architecture.md) and [observability.md](observability.md).
 
-- Status: error clips are implemented. **In-flight clips are parked** (owner decision 2026-11-19, [#116](https://github.com/KingOfKalk/wg-stream-proxy/issues/116)): the design text below stays for a later start, but nothing is built and the `[clips]` table has only `error`. The settings `inflight` and `grace` that earlier drafts planned do not exist; they come back with the implementation. Spec sentences come with the implementation PRs (section 11).
+- Status: error clips are implemented. **In-flight clips are dropped** (owner decision 2026-11-19, [#116](https://github.com/KingOfKalk/wg-stream-proxy/issues/116)): the design text below stays as a record, but the code has no in-flight segments, no timestamp rewrite and no positions; the `[clips]` table has only `error`. The error clip is one 4.8 s segment per text (v0.5, [#134](https://github.com/KingOfKalk/wg-stream-proxy/issues/134)); where sections 4 and 6 mention repeated segments at positions 0-63, that is the earlier design.
 - Findings are from ffmpeg and VLC in throwaway containers (section 4) and from the Kodi sources (section 5). Kodi itself was not run.
 - Decisions: [section 10](#10-decisions); implementation plan: [section 11](#11-implementation-plan).
 
@@ -296,8 +296,8 @@ sequenceDiagram
 ### 6.2 Error clips
 
 - Where: `GET /c/` of channels listed with `.m3u8` (spec 6: HLS by config or URL). `HEAD`, `/r/` (segments, sub-playlists, keys) and other channels keep their HTTP errors: a failed segment is the player's to retry or skip, and tools want the status.
-- Answer: `200`, `Content-Type: application/vnd.apple.mpegurl`, `Cache-Control: no-store`, a VOD media playlist (`#EXT-X-PLAYLIST-TYPE:VOD`, `#EXT-X-ENDLIST`) with the error segment 5 times (4.8 s), timestamps shifted per position (6.3).
-- Segment URLs: `/clip/{name}/{n}.ts`, `{name}` one of the built-in clips, `{n}` the position (0-63). Unsigned and outside `/r/`: they reach no upstream.
+- Answer: `200`, `Content-Type: application/vnd.apple.mpegurl`, `Cache-Control: no-store`, a VOD media playlist (`#EXT-X-PLAYLIST-TYPE:VOD`, `#EXT-X-ENDLIST`) with the one 4.8 s error segment.
+- Segment URL: `/clip/{name}.ts`, `{name}` one of the three error clips. Unsigned and outside `/r/`: they reach no upstream.
 - Class per failure: [section 3.2](#32-what-a-failing-channel-returns).
 - Logs and metrics count the failure as today; the warn line gets `clip=<name>`.
 - Stateless: no session, no switchover. Prototype: the "Tunnel not reachable" segment 5 times with shifted timestamps; ffmpeg decoded 120 frames (4.8 s), VLC played 5 s, then both stopped.
@@ -350,12 +350,12 @@ sequenceDiagram
 | Container | MPEG-TS | fMP4 cannot precede anything in ffmpeg or VLC (4.2) |
 | Video | H.264 High, level 4.0, 1920x1080, 25 fps, `yuv420p`, one IDR per segment, no B-frames | HEVC breaks the switch in ffmpeg (case 7); a still needs no B-frames |
 | Audio | AAC-LC stereo 48 kHz, silent, 64 kbit/s | Without a track ffmpeg drops the real audio (case 6); layout and rate may differ from the stream (case 5) |
-| Segment | 0.96 s = 24 frames = exactly 45 AAC frames | Audio and video end together, so repeated segments join without gap or overlap |
+| Segment | 4.8 s = 120 frames = exactly 225 AAC frames | Audio and video end together; one segment is the whole error clip |
 | Look | near-black (`#101010`), one centered English text, `#E0E0E0`, 64 px, no animation | owner (decided) |
-| Size | 12-16 KB per text, 82 KB for six (4.4) | |
+| Size | 48-51 KB per text, 146 KB for three | |
 
-- Timestamps start at 0 in the file; the proxy shifts them per position.
-- The generator checks every segment with `ffprobe`: 24 video frames, 45 audio frames, one IDR at the start, identical SPS/PPS across texts.
+- Timestamps start at 10 s in the file (the PCR, 0.96 s earlier, does not wrap below zero); the proxy serves the file unchanged.
+- The generator checks every segment with `ffprobe`: 120 video frames, 225 audio frames, one IDR at the start, identical SPS/PPS across texts.
 
 ### 6.5 Radio and raw channels
 
@@ -404,7 +404,7 @@ Decided (decision 6):
 
 - A generator script, `internal/clips/generate.sh`, like [`testdata/media/generate.sh`](../testdata/media/generate.sh): it re-runs itself in a pinned image (`alpine:3.24.4` with `ffmpeg=8.1.3-r0` today) and renders all clips.
 - Font: Inter 4.1 ([release](https://github.com/rsms/inter/releases/tag/v4.1)), fetched by version: `Inter-4.1.zip`, SHA-256 `9883fdd4a49d4fb66bd8177ba6625ef9a64aa45899767dde3d36aa425756b11e`; the script uses `extras/ttf/Inter-Regular.ttf` (SHA-256 `40d692fce188e4471e2b3cba937be967878f631ad3ebbbdcd587687c7ebe0c82`) and checks both.
-- The rendered segments are committed (82 KB for six) and embedded with `go:embed`: every binary and the container image carry them, without files, downloads or config.
+- The rendered segments are committed (146 KB for three) and embedded with `go:embed`: every binary and the container image carry them, without files, downloads or config.
 - Changing a text: edit the script, rerun, commit in a PR.
 - Font licence: only rendered pixels ship, not the font. The SIL OFL allows that without conditions ([OFL-FAQ 1.1](https://openfontlicense.org/ofl-faq/): "video titling" is named; artwork is not restricted; acknowledgement not required). The docs credit Inter anyway.
 - Repo rules: AGENTS.md and CONTRIBUTING.md do not forbid committed generated files, and `testdata/media` (828 KB, rendered by its script) is the precedent. The output is not byte-reproducible across ffmpeg versions, which is why it is committed rather than rendered at build time.

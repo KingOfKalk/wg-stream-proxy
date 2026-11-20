@@ -1,7 +1,7 @@
 #!/bin/sh
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
-# Renders the built-in clip segments (docs/clips.md, sections 6.4 and 7)
+# Renders the built-in error clips (docs/clips.md, sections 6.4 and 7)
 # into segments/ in this directory. Run from anywhere on a host with Docker:
 #
 #   internal/clips/generate.sh
@@ -27,12 +27,9 @@ INTER_ZIP_SHA256=9883fdd4a49d4fb66bd8177ba6625ef9a64aa45899767dde3d36aa425756b11
 INTER_TTF=extras/ttf/Inter-Regular.ttf
 INTER_TTF_SHA256=40d692fce188e4471e2b3cba937be967878f631ad3ebbbdcd587687c7ebe0c82
 
-# One "name|text" per segment; the names are the file names and the names
+# One "name|text" per clip; the names are the file names and the names
 # in clips.go. Texts: docs/clips.md, decision 3.
-CLIPS='starting|Starting tunnel…
-connecting|Connecting to channel…
-waiting|Waiting for stream…
-tunnel-unreachable|Tunnel not reachable
+CLIPS='tunnel-unreachable|Tunnel not reachable
 channel-not-available|Channel not available
 channel-blocked|Channel blocked by configuration'
 
@@ -55,19 +52,20 @@ unzip -q -o -j -d "$work" "$work/inter.zip" "$INTER_TTF"
 font=$work/Inter-Regular.ttf
 echo "$INTER_TTF_SHA256  $font" | sha256sum -c -
 
-# Format (docs/clips.md, 6.4): 0.96 s = 24 frames at 25 fps = 46080 samples
-# at 48 kHz = exactly 45 AAC frames of 1024 samples. The video is H.264
+# Format (docs/clips.md, 6.4): 4.8 s = 120 frames at 25 fps = 230400 samples
+# at 48 kHz = exactly 225 AAC frames of 1024 samples. The video is H.264
 # High level 4.0 with one IDR frame and no B-frames, single-threaded and
-# bitexact for stable output.
+# bitexact for stable output. Timestamps start at 10 s, so that the PCR,
+# which the muxer starts 0.96 s earlier, never wraps below zero.
 SIZE=1920x1080
-DURATION=0.96
-V="-c:v libx264 -preset slow -tune stillimage -crf 28 -profile:v high -level 4.0 -g 24 -keyint_min 24 -sc_threshold 0 -bf 0 -threads 1"
+DURATION=4.8
+V="-c:v libx264 -preset slow -tune stillimage -crf 28 -profile:v high -level 4.0 -g 120 -keyint_min 120 -sc_threshold 0 -bf 0 -threads 1"
 A="-c:a aac -b:a 64k -ac 2 -ar 48000"
 COMMON="-fflags +bitexact -flags:v +bitexact -flags:a +bitexact"
 
 run() {
 	echo "+ ffmpeg $*"
-	ffmpeg -hide_banner -loglevel error -y "$@"
+	ffmpeg -nostdin -hide_banner -loglevel error -y "$@"
 }
 
 # probe TYPE ENTRIES FILE [ffprobe options]: "key=value" lines of the
@@ -93,25 +91,25 @@ check() {
 	[ "$got" = "codec_name=h264 has_b_frames=0 height=1080 level=40 pix_fmt=yuv420p profile=High r_frame_rate=25/1 width=1920 " ] || fail "$f video: $got"
 	got=$(probe a stream=codec_name,profile,channels,sample_rate "$f" | sort -u | tr '\n' ' ')
 	[ "$got" = "channels=2 codec_name=aac profile=LC sample_rate=48000 " ] || fail "$f audio: $got"
-	# 24 video frames, exactly 45 AAC frames.
+	# 120 video frames, exactly 225 AAC frames.
 	got=$(probe v stream=nb_read_packets "$f" -count_packets | sort -u | tr '\n' ' ')
-	[ "$got" = "nb_read_packets=24 " ] || fail "$f: video packets: $got, want 24"
+	[ "$got" = "nb_read_packets=120 " ] || fail "$f: video packets: $got, want 120"
 	got=$(probe a stream=nb_read_packets "$f" -count_packets | sort -u | tr '\n' ' ')
-	[ "$got" = "nb_read_packets=45 " ] || fail "$f: audio packets: $got, want 45"
-	# Timestamps start at 0 and both tracks end at 0.96 s (90 kHz ticks).
+	[ "$got" = "nb_read_packets=225 " ] || fail "$f: audio packets: $got, want 225"
+	# Timestamps start at 10 s and both tracks end at 14.8 s (90 kHz ticks).
 	got=$(probe v packet=pts,dts "$f" | first_last pts)
-	[ "$got" = "pts=0 pts=82800 " ] || fail "$f video pts: $got"
+	[ "$got" = "pts=900000 pts=1328400 " ] || fail "$f video pts: $got"
 	got=$(probe v packet=pts,dts "$f" | first_last dts)
-	[ "$got" = "dts=0 dts=82800 " ] || fail "$f video dts: $got"
+	[ "$got" = "dts=900000 dts=1328400 " ] || fail "$f video dts: $got"
 	got=$(probe a packet=pts,dts,duration "$f" | first_last pts)
-	[ "$got" = "pts=0 pts=84480 " ] || fail "$f audio pts: $got"
+	[ "$got" = "pts=900000 pts=1330080 " ] || fail "$f audio pts: $got"
 	got=$(probe a packet=pts,dts,duration "$f" | first_last duration)
 	[ "$got" = "duration=1920 duration=1920 " ] || fail "$f audio duration: $got"
 	# One IDR (key) frame, the first one; the rest P-frames, no B-frames.
 	got=$(probe v frame=key_frame,pict_type "$f" | paste -d' ' - - | sed -n 1p)
 	[ "$got" = "key_frame=1 pict_type=I" ] || fail "$f: first frame: $got"
 	got=$(probe v frame=key_frame,pict_type "$f" | paste -d' ' - - | sort | uniq -c | tr -s ' ' | tr '\n' ';')
-	[ "$got" = " 23 key_frame=0 pict_type=P; 1 key_frame=1 pict_type=I;" ] || fail "$f frame types: $got"
+	[ "$got" = " 119 key_frame=0 pict_type=P; 1 key_frame=1 pict_type=I;" ] || fail "$f frame types: $got"
 	# SPS and PPS (NAL types 7 and 8) of every video frame; the sum must be
 	# the same across the segments.
 	sum=$(ffmpeg -v error -i "$f" -map 0:v -c:v copy -bsf:v filter_units=pass_types=7-8 -f h264 - | sha256sum | cut -d' ' -f1)
@@ -127,19 +125,19 @@ mkdir -p segments
 rm -f segments/*.ts
 
 echo "$CLIPS" | while IFS='|' read -r name text; do
-	# Render: the audio track has a priming frame, so the encoder emits 46
-	# AAC frames for 45 frames of input, and the muxer starts both tracks one
+	# Render: the audio track has a priming frame, so the encoder emits 226
+	# AAC frames for 120 frames of input, and the muxer starts both tracks one
 	# AAC frame in.
 	run -f lavfi -i "color=c=0x101010:size=$SIZE:rate=25:duration=$DURATION,drawtext=fontfile=$font:text='$text':fontcolor=0xE0E0E0:fontsize=64:x=(w-tw)/2:y=(h-th)/2,format=yuv420p" \
 		-f lavfi -i "anullsrc=r=48000:cl=stereo" -t "$DURATION" \
 		$V $A $COMMON -f mpegts "$work/$name.ts"
 	# Cut: drop the priming AAC frame (the first 1024 samples, silence
-	# either way) so that exactly 45 remain, starting at the same time as
-	# the video; timestamps start at 0. -muxdelay lets the muxer pack the
+	# either way) so that exactly 225 remain, starting at the same time as
+	# the video; timestamps start at 10 s. -muxdelay lets the muxer pack the
 	# AAC frames into few PES packets (and offsets all timestamps by twice
-	# that delay, which -output_ts_offset takes out again).
+	# that delay, which -output_ts_offset takes out, and adds the 10 s).
 	run -i "$work/$name.ts" -map 0 -c copy -ss 0.021333 $COMMON \
-		-muxdelay 0.96 -muxpreload 0 -output_ts_offset -1.92 -avoid_negative_ts disabled \
+		-muxdelay 0.96 -muxpreload 0 -output_ts_offset 8.08 -avoid_negative_ts disabled \
 		-f mpegts "segments/$name.ts"
 done
 
