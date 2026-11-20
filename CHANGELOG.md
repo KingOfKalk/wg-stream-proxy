@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.4.1](https://github.com/KingOfKalk/wg-stream-proxy/compare/v0.4.0...v0.4.1) (2026-11-20)
+
+
+### Bug Fixes
+
+* **cli:** healthcheck and debug commands read only the addresses they need ([#142](https://github.com/KingOfKalk/wg-stream-proxy/issues/142)) ([ee63249](https://github.com/KingOfKalk/wg-stream-proxy/commit/ee632499541f86fa660a68fab647465a7b56f5e5))
+* **deploy:** give the Compose container time to drain on stop ([#141](https://github.com/KingOfKalk/wg-stream-proxy/issues/141)) ([692d265](https://github.com/KingOfKalk/wg-stream-proxy/commit/692d265edf01edb55863b92c9f2bcb30c6a50fe4))
+
+
+### Performance Improvements
+
+* **route:** keep upstream connections alive for auto channels ([#144](https://github.com/KingOfKalk/wg-stream-proxy/issues/144)) ([e22691b](https://github.com/KingOfKalk/wg-stream-proxy/commit/e22691b768151012fa1142166adc083d7f850129))
+
 ## [0.4.0](https://github.com/KingOfKalk/wg-stream-proxy/compare/v0.3.0...v0.4.0) (2026-11-19)
 
 
