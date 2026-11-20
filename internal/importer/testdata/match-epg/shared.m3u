@@ -1,5 +1,0 @@
-#EXTM3U
-#EXTINF:-1 tvg-id="ertworld.example",ERT World
-https://epg.example.com/one.m3u8
-#EXTINF:-1 tvg-id="ertworld.example",ERT World Plus
-https://epg.example.com/two.m3u8
