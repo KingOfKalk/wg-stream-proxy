@@ -294,7 +294,7 @@ func TestClipSegments(t *testing.T) {
 	}
 }
 
-// TestClipRequestsRecorded: /clip/ requests show up in /debug/requests and
+// TestClipRequestsRecorded: /clip/ requests show up in
 // the debug line with kind clip; they are not channel requests and count
 // in no request metric (spec 7.3).
 func TestClipRequestsRecorded(t *testing.T) {
@@ -305,7 +305,7 @@ func TestClipRequestsRecorded(t *testing.T) {
 	}
 	logs := &syncBuffer{}
 	m := metrics.New(metrics.Options{})
-	s, err := New(Options{Config: cfg, Routes: routes, Signer: newSigner(t), Logger: newLogger(logs), Metrics: m, RecentRequests: 4})
+	s, err := New(Options{Config: cfg, Routes: routes, Signer: newSigner(t), Logger: newLogger(logs), Metrics: m})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -314,19 +314,15 @@ func TestClipRequestsRecorded(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status %d", rec.Code)
 	}
-	list := s.recent.list()
-	if len(list) != 1 {
-		t.Fatalf("%d recent requests, want 1", len(list))
-	}
-	fr := list[0]
-	if fr.Kind != "clip" || fr.Method != http.MethodGet || fr.Status != http.StatusOK || fr.Bytes != int64(rec.Body.Len()) || fr.Channel != "" {
-		t.Errorf("recent request %+v", fr)
-	}
-	if fr.Phases.URL != "/clip/tunnel-unreachable/2.ts" {
-		t.Errorf("recent request url %q", fr.Phases.URL)
-	}
-	if !strings.Contains(logs.String(), `msg=request id=1 method=GET channel="" route="" kind=clip status=200`) {
-		t.Errorf("no debug line for the clip request:\n%s", logs.String())
+	line := logs.String()
+	for _, want := range []string{
+		`msg=request id=1 method=GET channel="" route="" kind=clip status=200`,
+		"bytes=" + strconv.Itoa(rec.Body.Len()),
+		"url=/clip/tunnel-unreachable/2.ts",
+	} {
+		if !strings.Contains(line, want) {
+			t.Errorf("debug line for the clip request lacks %q:\n%s", want, line)
+		}
 	}
 	mfs, err := m.Gatherer().Gather()
 	if err != nil {

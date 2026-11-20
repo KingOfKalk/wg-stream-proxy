@@ -135,7 +135,7 @@ func TestTunnelListBrokenFiles(t *testing.T) {
 
 // TestProbeBrokenFiles: probe reads only [debug] listen to find the
 // running proxy, so a channel or tunnel file the proxy rejects as a
-// reload does not send it standalone.
+// reload does not stop it.
 func TestProbeBrokenFiles(t *testing.T) {
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "audio/mpeg")
@@ -159,8 +159,8 @@ func TestProbeBrokenFiles(t *testing.T) {
 			if !strings.Contains(out.String(), "route direct (via running proxy)") {
 				t.Errorf("stdout lacks the proxy mode:\n%s", out)
 			}
-			if strings.Contains(errOut.String(), "standalone") {
-				t.Errorf("stderr = %q, falls back to standalone", errOut)
+			if errOut.String() != "" {
+				t.Errorf("stderr = %q, want empty", errOut)
 			}
 		})
 	}

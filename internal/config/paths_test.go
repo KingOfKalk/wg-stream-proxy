@@ -3,14 +3,13 @@
 package config
 
 import (
-	"errors"
 	"reflect"
 	"testing"
 )
 
-// fakeEnv builds an Env from a variable map, a set of existing
-// directories and a home directory ("" means UserHomeDir fails).
-func fakeEnv(vars map[string]string, dirs []string, home string) Env {
+// fakeEnv builds an Env from a variable map and a set of existing
+// directories.
+func fakeEnv(vars map[string]string, dirs []string) Env {
 	return Env{
 		LookupEnv: func(k string) (string, bool) {
 			v, ok := vars[k]
@@ -24,12 +23,6 @@ func fakeEnv(vars map[string]string, dirs []string, home string) Env {
 			}
 			return false
 		},
-		UserHomeDir: func() (string, error) {
-			if home == "" {
-				return "", errors.New("no home")
-			}
-			return home, nil
-		},
 	}
 }
 
@@ -39,7 +32,6 @@ func TestResolvePaths(t *testing.T) {
 		flags   Flags
 		vars    map[string]string
 		dirs    []string
-		home    string
 		want    Paths
 		wantErr bool
 	}{
@@ -58,41 +50,30 @@ func TestResolvePaths(t *testing.T) {
 		},
 		{
 			name: "etc if it exists",
-			vars: map[string]string{"XDG_CONFIG_HOME": "/xdg"},
 			dirs: []string{"/etc/wg-stream-proxy"},
 			want: Paths{ConfigDir: "/etc/wg-stream-proxy", TunnelsDir: "/etc/wg-stream-proxy/tunnels"},
 		},
 		{
-			name: "xdg config home",
-			vars: map[string]string{"XDG_CONFIG_HOME": "/xdg"},
-			home: "/home/u",
-			want: Paths{ConfigDir: "/xdg/wg-stream-proxy", TunnelsDir: "/xdg/wg-stream-proxy/tunnels"},
+			name: "empty env value counts as unset",
+			vars: map[string]string{"WG_STREAM_PROXY_CONFIG_DIR": ""},
+			dirs: []string{"/etc/wg-stream-proxy"},
+			want: Paths{ConfigDir: "/etc/wg-stream-proxy", TunnelsDir: "/etc/wg-stream-proxy/tunnels"},
 		},
 		{
-			name: "home fallback",
-			home: "/home/u",
-			want: Paths{ConfigDir: "/home/u/.config/wg-stream-proxy", TunnelsDir: "/home/u/.config/wg-stream-proxy/tunnels"},
-		},
-		{
-			name: "empty env values count as unset",
-			vars: map[string]string{"WG_STREAM_PROXY_CONFIG_DIR": "", "XDG_CONFIG_HOME": "", "WG_STREAM_PROXY_TUNNELS_DIR": ""},
-			home: "/home/u",
-			want: Paths{ConfigDir: "/home/u/.config/wg-stream-proxy", TunnelsDir: "/home/u/.config/wg-stream-proxy/tunnels"},
-		},
-		{
-			name:    "no home",
+			name:    "no flag, env or etc: no XDG or home fallback",
+			vars:    map[string]string{"XDG_CONFIG_HOME": "/xdg", "HOME": "/home/u"},
 			wantErr: true,
 		},
 		{
-			name:  "tunnels dir from env",
+			name:  "removed tunnels dir variable is ignored",
 			flags: Flags{ConfigDir: "/flag"},
 			vars:  map[string]string{"WG_STREAM_PROXY_TUNNELS_DIR": "/secrets/wg"},
-			want:  Paths{ConfigDir: "/flag", TunnelsDir: "/secrets/wg"},
+			want:  Paths{ConfigDir: "/flag", TunnelsDir: "/flag/tunnels"},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := Resolve(tt.flags, fakeEnv(tt.vars, tt.dirs, tt.home))
+			got, err := Resolve(tt.flags, fakeEnv(tt.vars, tt.dirs))
 			if tt.wantErr {
 				if err == nil {
 					t.Fatalf("Resolve() error = nil, want error")
@@ -121,30 +102,25 @@ func TestResolveOverrides(t *testing.T) {
 			want: Overrides{},
 		},
 		{
-			name: "env only",
+			name: "removed variables are ignored",
 			vars: map[string]string{
 				"WG_STREAM_PROXY_LISTEN":          ":1",
 				"WG_STREAM_PROXY_LOG_LEVEL":       "debug",
 				"WG_STREAM_PROXY_LOG_FORMAT":      "json",
 				"WG_STREAM_PROXY_PUBLIC_BASE_URL": "http://wsp.lan:2349",
 			},
-			want: Overrides{Listen: ":1", LogLevel: "debug", LogFormat: "json", PublicBaseURL: "http://wsp.lan:2349"},
+			want: Overrides{},
 		},
 		{
-			name:  "flag beats env",
+			name:  "flags",
 			flags: Flags{Listen: ":2", LogLevel: "warn", LogFormat: "text"},
-			vars: map[string]string{
-				"WG_STREAM_PROXY_LISTEN":     ":1",
-				"WG_STREAM_PROXY_LOG_LEVEL":  "debug",
-				"WG_STREAM_PROXY_LOG_FORMAT": "json",
-			},
-			want: Overrides{Listen: ":2", LogLevel: "warn", LogFormat: "text"},
+			want:  Overrides{Listen: ":2", LogLevel: "warn", LogFormat: "text"},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			tt.flags.ConfigDir = "/c"
-			got, err := Resolve(tt.flags, fakeEnv(tt.vars, nil, ""))
+			got, err := Resolve(tt.flags, fakeEnv(tt.vars, nil))
 			if err != nil {
 				t.Fatalf("Resolve() error = %v", err)
 			}
@@ -167,8 +143,5 @@ func TestOSEnv(t *testing.T) {
 	}
 	if env.DirExists(dir + "/missing") {
 		t.Errorf("DirExists(missing) = true")
-	}
-	if env.UserHomeDir == nil {
-		t.Errorf("UserHomeDir is nil")
 	}
 }

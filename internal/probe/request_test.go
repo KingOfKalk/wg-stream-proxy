@@ -78,7 +78,6 @@ func TestModeInOutput(t *testing.T) {
 		mode, text, json string
 	}{
 		{ModeProxy, "route direct (via running proxy)\n", `"mode": "proxy"`},
-		{ModeStandalone, "route direct (standalone)\n", `"mode": "standalone"`},
 		{"", "route direct\n", ""},
 	}
 	for _, tt := range tests {

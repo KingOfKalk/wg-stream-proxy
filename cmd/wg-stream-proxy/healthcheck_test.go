@@ -56,8 +56,8 @@ func TestHealthcheck(t *testing.T) {
 
 	t.Run("ok is silent", func(t *testing.T) {
 		status = http.StatusOK
-		c, out, errOut := testCLI(map[string]string{"WG_STREAM_PROXY_LISTEN": srv.Listener.Addr().String()})
-		if code := c.run([]string{"healthcheck", "--config-dir", dir}); code != 0 {
+		c, out, errOut := testCLI(nil)
+		if code := c.run([]string{"healthcheck", "--config-dir", dir, "--listen", srv.Listener.Addr().String()}); code != 0 {
 			t.Fatalf("exit code = %d, want 0; stderr: %s", code, errOut)
 		}
 		if out.String() != "" || errOut.String() != "" {
@@ -65,14 +65,6 @@ func TestHealthcheck(t *testing.T) {
 		}
 		if got := path.Load(); got != "GET /healthz" {
 			t.Errorf("request = %v, want GET /healthz", got)
-		}
-	})
-
-	t.Run("flag beats env", func(t *testing.T) {
-		status = http.StatusOK
-		c, _, errOut := testCLI(map[string]string{"WG_STREAM_PROXY_LISTEN": "127.0.0.1:1"})
-		if code := c.run([]string{"healthcheck", "--config-dir", dir, "--listen", srv.Listener.Addr().String()}); code != 0 {
-			t.Fatalf("exit code = %d, want 0; stderr: %s", code, errOut)
 		}
 	})
 
@@ -88,8 +80,8 @@ func TestHealthcheck(t *testing.T) {
 	for _, st := range []int{http.StatusServiceUnavailable, http.StatusNotFound, http.StatusFound} {
 		t.Run(http.StatusText(st), func(t *testing.T) {
 			status = st
-			c, out, errOut := testCLI(map[string]string{"WG_STREAM_PROXY_LISTEN": srv.Listener.Addr().String()})
-			if code := c.run([]string{"healthcheck", "--config-dir", dir}); code != 1 {
+			c, out, errOut := testCLI(nil)
+			if code := c.run([]string{"healthcheck", "--config-dir", dir, "--listen", srv.Listener.Addr().String()}); code != 1 {
 				t.Fatalf("exit code = %d, want 1", code)
 			}
 			assertOneLine(t, out.String(), errOut.String())
@@ -118,8 +110,8 @@ func TestHealthcheckFailures(t *testing.T) {
 		args []string
 		env  map[string]string
 	}{
-		{"closed port", []string{"--config-dir", dir}, map[string]string{"WG_STREAM_PROXY_LISTEN": closed}},
-		{"timeout", []string{"--config-dir", dir}, map[string]string{"WG_STREAM_PROXY_LISTEN": slow.Listener.Addr().String()}},
+		{"closed port", []string{"--config-dir", dir, "--listen", closed}, nil},
+		{"timeout", []string{"--config-dir", dir, "--listen", slow.Listener.Addr().String()}, nil},
 		{"invalid config", []string{"--config-dir", badConfig}, nil},
 		{"missing config dir", nil, map[string]string{"WG_STREAM_PROXY_CONFIG_DIR": "/nonexistent/wsp"}},
 	}

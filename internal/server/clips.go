@@ -27,9 +27,8 @@ import (
 // 5 × 0.96 s.
 const errorClipSegments = 5
 
-// kindClip is the kind of /clip/ requests in /debug/requests and the debug
-// line. It is never a metric label: /clip/ requests are not channel
-// requests (spec 7.3).
+// kindClip is the kind of /clip/ requests in the debug line.
+// It is never a metric label: /clip/ requests are not channel requests (spec 7.3).
 const kindClip metrics.Kind = "clip"
 
 // clipContentType is the Content-Type of clip segments.

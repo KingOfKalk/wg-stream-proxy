@@ -27,18 +27,11 @@ import (
 // parseFlags parses the flags shared by serve and check (spec 5.1) and
 // resolves the config dir and overrides.
 func (c *cli) parseFlags(cmd string, args []string) (config.Options, int, bool) {
-	_, opts, code, ok := c.parseFlagSet(cmd, args)
+	_, opts, _, code, ok := c.parseFlagArgs(cmd, args, 0)
 	return opts, code, ok
 }
 
-// parseFlagSet is parseFlags that also returns the flags, for resolving
-// again on a reload.
-func (c *cli) parseFlagSet(cmd string, args []string) (config.Flags, config.Options, int, bool) {
-	f, opts, _, code, ok := c.parseFlagArgs(cmd, args, 0)
-	return f, opts, code, ok
-}
-
-// parseFlagArgs is parseFlagSet that also accepts up to maxArgs
+// parseFlagArgs is parseFlags that also accepts up to maxArgs
 // arguments after the flags and returns them.
 func (c *cli) parseFlagArgs(cmd string, args []string, maxArgs int) (config.Flags, config.Options, []string, int, bool) {
 	fs, fp := configFlagSet(cmd)
@@ -82,7 +75,7 @@ func newLogger(w io.Writer, format config.LogFormat, level slog.Leveler) *slog.L
 // SIGHUP reloads the configuration (spec 5.6). Startup errors exit with
 // 1.
 func (c *cli) serve(args []string) int {
-	flags, opts, code, ok := c.parseFlagSet("serve", args)
+	opts, code, ok := c.parseFlags("serve", args)
 	if !ok {
 		return code
 	}
@@ -112,7 +105,7 @@ func (c *cli) serve(args []string) int {
 	}
 	if generated {
 		log.Warn("no signing key set: using a random key, resource URLs do not survive restarts",
-			"set", hls.EnvSigningKey+" or "+hls.EnvSigningKeyFile)
+			"set", hls.EnvSigningKeyFile)
 	}
 	signer, err := hls.NewSigner(key)
 	if err != nil {
@@ -148,7 +141,7 @@ func (c *cli) serve(args []string) int {
 	// After the first signal, a second one terminates at once.
 	context.AfterFunc(ctx, stop)
 
-	reloader := server.NewReloader(c.reloadLoader(flags, opts, log, key, generated))
+	reloader := server.NewReloader(c.reloadLoader(opts, log, key, generated))
 	done := make(chan struct{})
 	var wg sync.WaitGroup
 	wg.Go(func() {
@@ -210,33 +203,24 @@ func (c *cli) serve(args []string) int {
 	return 0
 }
 
-// reloadLoader returns the config loader of a reload (spec 5.6): it
-// resolves the flags and environment again and loads the files. The
-// tunnels dir location and the signing key need a restart: a change is
-// logged and the old value kept (the signer is never replaced).
-func (c *cli) reloadLoader(flags config.Flags, first config.Options, log *slog.Logger, key []byte, generated bool) func() (*config.Config, error) {
+// reloadLoader returns the config loader of a reload (spec 5.6): it loads
+// the files of the directories chosen at startup (first). The signing key
+// needs a restart: a change is logged and the old key kept (the signer is
+// never replaced).
+func (c *cli) reloadLoader(first config.Options, log *slog.Logger, key []byte, generated bool) func() (*config.Config, error) {
 	return func() (*config.Config, error) {
-		opts, err := config.Resolve(flags, c.env)
-		if err != nil {
-			return nil, err
-		}
-		if opts.Paths.TunnelsDir != first.Paths.TunnelsDir {
-			log.Warn("reload: tunnels dir changed, restart required; keeping the old one",
-				"tunnels_dir", first.Paths.TunnelsDir, "configured", opts.Paths.TunnelsDir)
-			opts.Paths.TunnelsDir = first.Paths.TunnelsDir
-		}
 		switch next, nextGenerated, err := hls.LoadSigningKey(c.getenv, c.readFile); {
 		case err != nil:
 			log.Warn("reload: signing key: restart required to change it; keeping the old key", "error", err)
 		case nextGenerated != generated || !generated && !bytes.Equal(next, key):
 			log.Warn("reload: signing key changed, restart required; keeping the old key")
 		}
-		return config.Load(opts)
+		return config.Load(first)
 	}
 }
 
 // check validates the config, the tunnel files and the signing key
-// variables and lists every error (spec 7.2). Nothing is started.
+// variable and lists every error (spec 7.2). Nothing is started.
 func (c *cli) check(args []string) int {
 	opts, code, ok := c.parseFlags("check", args)
 	if !ok {

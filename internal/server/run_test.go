@@ -143,12 +143,11 @@ url = "` + directSrv.URL + `/live/master.m3u8"
 	e := startRun(t, dir, 0)
 
 	// The channel list starts no tunnel and makes no upstream request.
-	resp, body := do(t, e.client, http.MethodGet, e.url+"/playlist.m3u8",
-		http.Header{"X-Forwarded-Proto": {"https"}, "X-Forwarded-Host": {"tv.example.org"}})
+	resp, body := do(t, e.client, http.MethodGet, e.url+"/playlist.m3u8", nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("playlist: status %d", resp.StatusCode)
 	}
-	checkGolden(t, "playlist-run", body)
+	checkGolden(t, "playlist-run", strings.ReplaceAll(body, e.url, "https://tv.example.org"))
 
 	gr := e.tunnel("gr")
 	if gr == nil {

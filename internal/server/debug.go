@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
-	"math"
 	"net"
 	"net/http"
 	"net/http/pprof"
@@ -21,115 +20,6 @@ import (
 // Debug endpoints (spec 7.1): served only on the separate debug listener
 // ([debug] listen), never on the main listener. They have no
 // authentication (spec 8).
-
-// recentRequestsSize is how many finished requests /debug/requests keeps.
-const recentRequestsSize = 256
-
-// recentRequests is a fixed-size ring buffer of the latest finished /c/
-// and /r/ requests. add copies one finishedRequest into a slot under a
-// short lock; it never allocates or grows.
-type recentRequests struct {
-	mu   sync.Mutex
-	buf  []finishedRequest
-	next int
-	full bool
-}
-
-func newRecentRequests(n int) *recentRequests {
-	return &recentRequests{buf: make([]finishedRequest, n)}
-}
-
-// add records fr, replacing the oldest entry when full.
-func (r *recentRequests) add(fr finishedRequest) {
-	r.mu.Lock()
-	r.buf[r.next] = fr
-	r.next++
-	if r.next == len(r.buf) {
-		r.next = 0
-		r.full = true
-	}
-	r.mu.Unlock()
-}
-
-// list returns a copy of the entries, newest first; never nil.
-func (r *recentRequests) list() []finishedRequest {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	n := r.next
-	if r.full {
-		n = len(r.buf)
-	}
-	out := make([]finishedRequest, 0, n)
-	for i := range n {
-		out = append(out, r.buf[(r.next-1-i+len(r.buf))%len(r.buf)])
-	}
-	return out
-}
-
-// recentRequest is the JSON form of a finished request: the fields of the
-// debug line (spec 8), durations in milliseconds. URL is reduced by
-// route.LogURL; nothing else of the upstream URL is kept.
-type recentRequest struct {
-	ID              uint64   `json:"id"`
-	Time            string   `json:"time"`
-	Method          string   `json:"method"`
-	Channel         string   `json:"channel"`
-	Route           string   `json:"route"`
-	Kind            string   `json:"kind"`
-	Status          int      `json:"status"`
-	Bytes           int64    `json:"bytes"`
-	ClientGone      bool     `json:"client_gone"`
-	UpstreamStatus  int      `json:"upstream_status,omitempty"`
-	Reason          string   `json:"reason,omitempty"`
-	TunnelStartMS   *float64 `json:"tunnel_start_ms,omitempty"`
-	DNSMS           float64  `json:"dns_ms"`
-	ConnectMS       float64  `json:"connect_ms"`
-	ConnectAttempts int      `json:"connect_attempts"`
-	TLSMS           float64  `json:"tls_ms"`
-	TTFBMS          float64  `json:"ttfb_ms"`
-	TotalMS         float64  `json:"total_ms"`
-	ConnReused      bool     `json:"conn_reused"`
-	Redirects       int      `json:"redirects"`
-	URL             string   `json:"url"`
-}
-
-// recentRequestJSON converts fr for /debug/requests. time is when the
-// request started.
-func recentRequestJSON(fr finishedRequest) recentRequest {
-	p := fr.Phases
-	r := recentRequest{
-		ID:              fr.ID,
-		Time:            fr.Start.Format(time.RFC3339Nano),
-		Method:          fr.Method,
-		Channel:         fr.Channel,
-		Route:           fr.Route,
-		Kind:            string(fr.Kind),
-		Status:          fr.Status,
-		Bytes:           fr.Bytes,
-		ClientGone:      fr.ClientGone,
-		UpstreamStatus:  fr.UpstreamStatus,
-		Reason:          string(fr.Reason),
-		DNSMS:           millis(p.DNS),
-		ConnectMS:       millis(p.Connect),
-		ConnectAttempts: p.ConnectAttempts,
-		TLSMS:           millis(p.TLS),
-		TTFBMS:          millis(p.FirstByte),
-		TotalMS:         millis(fr.Total),
-		ConnReused:      p.Reused,
-		Redirects:       p.Redirects,
-		URL:             p.URL,
-	}
-	if p.NetworkStarted {
-		ms := millis(p.NetworkStart)
-		r.TunnelStartMS = &ms
-	}
-	return r
-}
-
-// millis returns d in milliseconds, to the microsecond.
-func millis(d time.Duration) float64 {
-	return math.Round(float64(d)/float64(time.Microsecond)) / 1000
-}
 
 // tunnelStatus is the JSON form of a tunnel in /debug/tunnels. The times
 // are omitted while no device runs.
@@ -164,7 +54,6 @@ func newDebugHandler(d *debugHandler) http.Handler {
 	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
 	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
 	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
-	mux.HandleFunc("GET /debug/requests", d.handleRequests)
 	mux.HandleFunc("GET /debug/tunnels", d.handleTunnels)
 	mux.HandleFunc("POST /debug/tunnels/{name}/stop", d.handleStop)
 	mux.HandleFunc("POST /debug/probe", d.handleProbe)
@@ -197,21 +86,6 @@ func debugHostAllowed(hostport string) bool {
 	}
 	_, err := netip.ParseAddr(host)
 	return err == nil
-}
-
-// handleRequests lists the latest finished requests, newest first.
-func (d *debugHandler) handleRequests(w http.ResponseWriter, _ *http.Request) {
-	var list []finishedRequest
-	if d.srv.recent != nil {
-		list = d.srv.recent.list()
-	}
-	out := make([]recentRequest, len(list))
-	for i, fr := range list {
-		out[i] = recentRequestJSON(fr)
-	}
-	writeJSON(w, http.StatusOK, struct {
-		Requests []recentRequest `json:"requests"`
-	}{out})
 }
 
 // handleTunnels lists the configured tunnels with their state.

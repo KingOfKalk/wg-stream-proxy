@@ -56,7 +56,6 @@ func TestRenderGolden(t *testing.T) {
 		name  string // golden file
 		dir   string // config dir under testdata
 		base  string
-		group string
 		noEPG bool
 	}{
 		// The example of spec 6, byte for byte.
@@ -65,14 +64,12 @@ func TestRenderGolden(t *testing.T) {
 		// values, disabled channel, logo kinds, extra ordering, the
 		// .m3u8 suffix rule, a base URL with a path prefix.
 		{name: "channels", dir: "channels", base: "https://tv.example.org/wsp"},
-		{name: "group", dir: "channels", base: "http://192.0.2.10:2349", group: "Ελληνικά"},
-		{name: "group-unknown", dir: "channels", base: "http://192.0.2.10:2349", group: "ελληνικά"},
 		{name: "no-epg", dir: "spec-example", base: "http://[2001:db8::1]:2349", noEPG: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := load(t, tt.dir)
-			opts := Options{BaseURL: tt.base, EPGURL: cfg.EPGURL(), Group: tt.group}
+			opts := Options{BaseURL: tt.base, EPGURL: cfg.EPGURL()}
 			if tt.noEPG {
 				opts.EPGURL = ""
 			}

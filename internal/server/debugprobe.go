@@ -45,9 +45,8 @@ type probeError struct {
 // server: with the current generation's route, so a tunnel that is up is
 // used and no second device starts, and with its guard, [upstream]
 // settings and limits. The answer is the JSON of probe --json. The probe
-// is no channel request: it counts in no metric and is not in
-// /debug/requests; it logs one line with the route and the URL in its
-// logged form.
+// is no channel request: it counts in no metric; it logs one
+// line with the route and the URL in its logged form.
 func (d *debugHandler) handleProbe(w http.ResponseWriter, r *http.Request) {
 	fail := func(code int, msg string) { writeJSON(w, code, probeError{msg}) }
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxProbeBody))

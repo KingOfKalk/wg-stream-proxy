@@ -47,8 +47,7 @@ type RunOptions struct {
 	// Required. Run closes it.
 	Listener net.Listener
 	// DebugListener, if set, serves the debug endpoints (spec 7.1),
-	// normally on Config.DebugListen(), and turns on the buffer of recent
-	// requests. nil: no debug endpoints. Run closes it.
+	// normally on Config.DebugListen(). nil: no debug endpoints. Run closes it.
 	DebugListener net.Listener
 	// ShutdownTimeout bounds the graceful shutdown; 0 means
 	// DefaultShutdownTimeout.
@@ -152,13 +151,9 @@ func Run(ctx context.Context, opts RunOptions) (err error) {
 	if err != nil {
 		return err
 	}
-	recent := 0
-	if opts.DebugListener != nil {
-		recent = recentRequestsSize
-	}
 	srv, err = New(Options{
 		Config: cfg, Routes: routes, Signer: opts.Signer, Logger: log, Version: opts.Version, Metrics: met,
-		RecentRequests: recent, EPGClock: opts.EPGClock,
+		EPGClock: opts.EPGClock,
 	})
 	if err != nil {
 		return err

@@ -43,8 +43,8 @@ var logLevels = map[string]slog.Level{
 	"error": slog.LevelError,
 }
 
-// overrideSource labels values that came from a flag or the environment.
-const overrideSource = "(flag or environment)"
+// overrideSource labels values that came from a flag.
+const overrideSource = "(flag)"
 
 // applySettings validates config.toml values from file src (with
 // overrides applied) and stores them in c. routes holds the valid route
@@ -90,9 +90,12 @@ func (c *Config) applySettings(raw rawConfig, src string, ov Overrides, routes m
 		fail("log_format", origin, "invalid value %q: use text or json", v)
 	}
 
-	v, origin = pick(ov.PublicBaseURL, raw.PublicBaseURL, "")
+	v = ""
+	if raw.PublicBaseURL != nil {
+		v = *raw.PublicBaseURL
+	}
 	if v != "" && !httpURL(v) {
-		fail("public_base_url", origin, "must be an absolute http(s) URL")
+		fail("public_base_url", src, "must be an absolute http(s) URL")
 	}
 	c.publicBaseURL = v
 

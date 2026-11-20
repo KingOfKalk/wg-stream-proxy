@@ -122,31 +122,26 @@ func TestHealthz(t *testing.T) {
 
 func TestPlaylistGolden(t *testing.T) {
 	e := newTVEnv(t)
-	h := http.Header{"X-Forwarded-Proto": {"https"}, "X-Forwarded-Host": {"tv.example.org"}}
-	resp, body := e.get(t, "/playlist.m3u8", h)
+	resp, body := e.get(t, "/playlist.m3u8", nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status %d", resp.StatusCode)
 	}
 	if ct := resp.Header.Get("Content-Type"); ct != "audio/x-mpegurl; charset=utf-8" {
 		t.Errorf("Content-Type = %q", ct)
 	}
-	checkGolden(t, "playlist-direct", body)
+	checkGolden(t, "playlist-direct", strings.ReplaceAll(body, e.proxy.URL, "https://tv.example.org"))
 
-	resp, body = do(t, e.client, http.MethodHead, e.proxy.URL+"/playlist.m3u8", h)
+	// The removed ?group= filter is ignored: the list stays complete.
+	if _, filtered := e.get(t, "/playlist.m3u8?group=tv", nil); filtered != body {
+		t.Errorf("?group=tv changed the list:\n%s", filtered)
+	}
+
+	resp, body = do(t, e.client, http.MethodHead, e.proxy.URL+"/playlist.m3u8", nil)
 	if resp.StatusCode != http.StatusOK || body != "" {
 		t.Errorf("HEAD: status %d, body %q", resp.StatusCode, body)
 	}
 	if resp.ContentLength <= 0 {
 		t.Errorf("HEAD: Content-Length %d, want the list length", resp.ContentLength)
-	}
-
-	_, body = e.get(t, "/playlist.m3u8?group=TV", h)
-	if !strings.Contains(body, "/c/news") {
-		t.Errorf("?group=TV lacks the TV channels:\n%s", body)
-	}
-	_, body = e.get(t, "/playlist.m3u8?group=tv", h)
-	if body != "#EXTM3U\n" {
-		t.Errorf("?group=tv = %q, want only the header (exact match)", body)
 	}
 }
 
@@ -208,12 +203,11 @@ url = "{UP}/radio"
 	e.up.add("/plain/master.m3u8", file{ctype: "application/vnd.apple.mpegurl", body: "#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXTINF:6,\nseg.ts\n"})
 	e.up.add("/radio", file{ctype: "audio/mpeg", body: "mp3"})
 
-	h := http.Header{"X-Forwarded-Proto": {"https"}, "X-Forwarded-Host": {"tv.example.org"}}
-	resp, body := e.get(t, "/playlist.m3u8", h)
+	resp, body := e.get(t, "/playlist.m3u8", nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status %d", resp.StatusCode)
 	}
-	checkGolden(t, "playlist-global-defaults", body)
+	checkGolden(t, "playlist-global-defaults", strings.ReplaceAll(body, e.proxy.URL, "https://tv.example.org"))
 
 	tests := []struct {
 		path, upstream, userAgent, referer string
@@ -285,32 +279,8 @@ func TestBaseURL(t *testing.T) {
 		},
 		{name: "public base with path", public: "https://tv.example.org/wsp/", want: "https://tv.example.org/wsp"},
 		{
-			name: "forwarded proto and host", host: "10.0.0.2:2349",
-			header: http.Header{"X-Forwarded-Proto": {"https"}, "X-Forwarded-Host": {"tv.example.org"}}, want: "https://tv.example.org",
-		},
-		{
-			name: "forwarded lists use the first value", host: "10.0.0.2:2349",
-			header: http.Header{"X-Forwarded-Proto": {"HTTPS, http"}, "X-Forwarded-Host": {" tv.example.org:8443 , other"}}, want: "https://tv.example.org:8443",
-		},
-		{
-			name: "forwarded proto only", host: "wsp.lan:2349",
-			header: http.Header{"X-Forwarded-Proto": {"https"}}, want: "https://wsp.lan:2349",
-		},
-		{
-			name: "forwarded host only", host: "wsp.lan:2349",
-			header: http.Header{"X-Forwarded-Host": {"tv.example.org"}}, want: "http://tv.example.org",
-		},
-		{
-			name: "invalid forwarded proto ignored", host: "wsp.lan:2349",
-			header: http.Header{"X-Forwarded-Proto": {"ftp"}}, want: "http://wsp.lan:2349",
-		},
-		{
-			name: "invalid forwarded host ignored", host: "wsp.lan:2349",
-			header: http.Header{"X-Forwarded-Host": {`evil"host`}}, want: "http://wsp.lan:2349",
-		},
-		{
-			name: "forwarded host with path ignored", host: "wsp.lan:2349",
-			header: http.Header{"X-Forwarded-Host": {"evil.example/x"}}, want: "http://wsp.lan:2349",
+			name: "forwarded headers are ignored", host: "wsp.lan:2349",
+			header: http.Header{"X-Forwarded-Proto": {"https"}, "X-Forwarded-Host": {"tv.example.org"}}, want: "http://wsp.lan:2349",
 		},
 		{name: "no host: local address", host: "", want: "http://192.0.2.7:2349"},
 		{name: "invalid host: local address", host: "a b", want: "http://192.0.2.7:2349"},

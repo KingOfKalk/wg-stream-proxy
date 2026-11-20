@@ -4,7 +4,7 @@
 listen = ":2349"
 log_level = "info"                    # debug | info | warn | error
 log_format = "text"                   # text | json
-public_base_url = ""                  # default: from Host / X-Forwarded-Proto / X-Forwarded-Host
+public_base_url = ""                  # default: from the request (scheme, Host)
 
 [upstream]
 user_agent = "Mozilla/5.0 (X11; Linux x86_64) Firefox/132.0"

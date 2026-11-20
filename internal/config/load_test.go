@@ -376,12 +376,12 @@ func TestLoadOverrides(t *testing.T) {
 	}
 
 	cfg, err = Load(Options{Paths: paths, Overrides: Overrides{
-		Listen: "127.0.0.1:2000", LogLevel: "debug", LogFormat: "text", PublicBaseURL: "https://b.example.com",
+		Listen: "127.0.0.1:2000", LogLevel: "debug", LogFormat: "text",
 	}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Listen() != "127.0.0.1:2000" || cfg.LogLevel().String() != "DEBUG" || cfg.LogFormat() != LogFormatText || cfg.PublicBaseURL() != "https://b.example.com" {
+	if cfg.Listen() != "127.0.0.1:2000" || cfg.LogLevel().String() != "DEBUG" || cfg.LogFormat() != LogFormatText || cfg.PublicBaseURL() != "http://a.example.com" {
 		t.Errorf("overrides not applied: %+v", dumpConfig(cfg))
 	}
 
@@ -398,7 +398,7 @@ func TestLoadOverrides(t *testing.T) {
 	}
 
 	_, err = Load(Options{Paths: paths, Overrides: Overrides{LogLevel: "loud"}})
-	if err == nil || !strings.Contains(err.Error(), "log_level (flag or environment): invalid value \"loud\"") {
+	if err == nil || !strings.Contains(err.Error(), "log_level (flag): invalid value \"loud\"") {
 		t.Errorf("Load() error = %v, want invalid override", err)
 	}
 }
@@ -575,7 +575,7 @@ func TestLoadAddresses(t *testing.T) {
 			name:    "invalid listen override",
 			files:   map[string]string{"config.toml": ""},
 			ov:      Overrides{Listen: "nope"},
-			wantErr: "listen (flag or environment)",
+			wantErr: "listen (flag)",
 		},
 		{
 			name:    "invalid debug listen",

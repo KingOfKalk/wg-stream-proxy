@@ -50,9 +50,6 @@ type Options struct {
 	// Metrics receives the request metrics and is served on /metrics;
 	// nil means a new registry without tunnel metrics.
 	Metrics *metrics.Metrics
-	// RecentRequests is how many finished /c/, /r/ and /p/ requests are kept
-	// for /debug/requests; 0 keeps none (no debug listener).
-	RecentRequests int
 	// EPGClock schedules the EPG refreshes; nil means the system clock.
 	EPGClock epg.Clock
 }
@@ -68,9 +65,6 @@ type Server struct {
 	metrics *metrics.Metrics
 	// requestIDs numbers the /c/, /r/ and /p/ requests.
 	requestIDs atomic.Uint64
-	// recent keeps the latest finished requests for /debug/requests;
-	// nil while the debug listener is off.
-	recent *recentRequests
 	// epg fetches, filters and merges the EPG sources (spec 7.1); Run
 	// runs it.
 	epg *epg.Guide
@@ -103,9 +97,6 @@ func New(opts Options) (*Server, error) {
 		s.metrics = metrics.New(metrics.Options{})
 	}
 	s.metrics.DeclareErrorClips(clips.Errors()...)
-	if opts.RecentRequests > 0 {
-		s.recent = newRecentRequests(opts.RecentRequests)
-	}
 	if s.log == nil {
 		s.log = slog.New(slog.DiscardHandler)
 	}
@@ -181,7 +172,6 @@ func (s *Server) handlePlaylist(w http.ResponseWriter, r *http.Request) {
 	body := playlist.Render(cfg.Channels(), playlist.Options{
 		BaseURL: base,
 		EPGURL:  epgLink(cfg, base),
-		Group:   r.URL.Query().Get("group"),
 	})
 	w.Header().Set("Content-Type", playlist.ContentType)
 	w.Header().Set("Content-Length", strconv.Itoa(len(body)))
@@ -192,11 +182,9 @@ func (s *Server) handlePlaylist(w http.ResponseWriter, r *http.Request) {
 }
 
 // baseURL returns the base of absolute URLs in responses (spec 7.1):
-// public_base_url without trailing slash; else the scheme from
-// X-Forwarded-Proto and the host from X-Forwarded-Host, each falling back
-// to the request (TLS or not, Host header). Of a forwarded header only
-// the first comma-separated value counts; invalid values are ignored. A
-// request without a usable Host gets the local address it came in on.
+// public_base_url without trailing slash; else the scheme (TLS or not)
+// and the Host header of the request. A request without a usable Host
+// gets the local address it came in on.
 func baseURL(public string, r *http.Request) string {
 	if public != "" {
 		return strings.TrimRight(public, "/")
@@ -205,13 +193,7 @@ func baseURL(public string, r *http.Request) string {
 	if r.TLS != nil {
 		scheme = "https"
 	}
-	if p := strings.ToLower(firstValue(r.Header.Get("X-Forwarded-Proto"))); p == "http" || p == "https" {
-		scheme = p
-	}
 	host := r.Host
-	if h := firstValue(r.Header.Get("X-Forwarded-Host")); validHost(h) {
-		host = h
-	}
 	if !validHost(host) {
 		host = "localhost"
 		if a, ok := r.Context().Value(http.LocalAddrContextKey).(net.Addr); ok {
@@ -219,13 +201,6 @@ func baseURL(public string, r *http.Request) string {
 		}
 	}
 	return scheme + "://" + host
-}
-
-// firstValue returns the first element of a comma-separated header value,
-// trimmed.
-func firstValue(v string) string {
-	v, _, _ = strings.Cut(v, ",")
-	return strings.TrimSpace(v)
 }
 
 // validHost reports whether h looks like host[:port] with a DNS name, an

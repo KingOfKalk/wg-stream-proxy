@@ -1,6 +1,6 @@
 # wg-stream-proxy - Deployment
 
-Companion to [spec.md](spec.md). All variants use the same config layout (spec 5.1) and env vars.
+Companion to [spec.md](spec.md). All variants use the same config layout (spec 5.1).
 
 ## Common rules
 
@@ -8,7 +8,7 @@ Companion to [spec.md](spec.md). All variants use the same config layout (spec 5
 - The process runs as a non-root user; tunnel files must be readable by it but not world-readable.
 - Signing key via `WG_STREAM_PROXY_SIGNING_KEY_FILE` pointing to a secret file (spec 4). Generate with `openssl rand -base64 32`.
 - Single instance: tunnel state lives in memory, and VPN providers often limit connections per key.
-- Reload: the proxy checks `config.toml`, the channel files and the tunnel files every 2 s and reloads when they changed (`[reload] watch_interval`, `"0"` turns it off; spec 5.3 and 5.6); `SIGHUP` reloads at any time. `listen`, `debug.listen`, `log_format`, `reload.watch_interval`, the signing key and the tunnels dir location still need a restart. Where files are injected at start (systemd credentials, Kubernetes secrets that are copied), a change in the source needs a restart or a new copy.
+- Reload: the proxy checks `config.toml`, the channel files and the tunnel files every 2 s and reloads when they changed (`[reload] watch_interval`, `"0"` turns it off; spec 5.3 and 5.6); `SIGHUP` reloads at any time. `listen`, `debug.listen`, `log_format`, `reload.watch_interval` and the signing key still need a restart. Where files are injected at start (systemd credentials, Kubernetes secrets that are copied), a change in the source needs a restart or a new copy.
 
 ## Standalone
 
@@ -41,7 +41,7 @@ Retention: after every push to `main`, the `Prune` job keeps all `edge` and `X.Y
 
 - Entry point `/wg-stream-proxy`, default command `serve`; other commands as arguments (`docker run --rm … check`).
 - Config dir `/etc/wg-stream-proxy` (`WG_STREAM_PROXY_CONFIG_DIR`), port 2349.
-- `HEALTHCHECK`: `wg-stream-proxy healthcheck` every 30s (every 1s for the first 30s). It resolves the listen address like `serve` (only `listen` and `[debug] listen` of `config.toml`, not the tunnel and channel files) but does not see `serve` flags: set options in `config.toml` or as env vars (e.g. `WG_STREAM_PROXY_LISTEN`).
+- `HEALTHCHECK`: `wg-stream-proxy healthcheck` every 30s (every 1s for the first 30s). It resolves the listen address like `serve` (only `listen` and `[debug] listen` of `config.toml`, not the tunnel and channel files) but does not see `serve` flags: set `listen` in `config.toml`.
 - Host files must be readable by UID 65532 (e.g. `chown -R 65532 config` and `chmod 640` on tunnel files and `signing.key`).
 
 <!-- x-release-please-start-version -->
@@ -184,7 +184,7 @@ Radio and other channels listed without `.m3u8` still get an HTTP error, as do s
 
 ## Testing a channel URL
 
-`probe` fetches a URL through a route the way the proxy does and says whether it would serve it, before you add a channel ([spec 7.2](spec.md)). It needs no shell: run it in the container like `tunnel list`. With `[debug] listen` set (see Debug endpoints below) the running proxy makes the requests, through its running tunnel: it works while the proxy plays channels and starts no second WireGuard device. The output says `via running proxy`. The proxy uses its loaded config, so after changing a channel, tunnel or `[upstream]` setting wait for the reload (file watching, or `SIGHUP`).
+`probe` fetches a URL through a route the way the proxy does and says whether it would serve it, before you add a channel ([spec 7.2](spec.md)). It needs no shell: run it in the container like `tunnel list`. It needs `[debug] listen` (see Debug endpoints below) and a running proxy: the running proxy makes the requests, through its running tunnel, so it works while the proxy plays channels and starts no second WireGuard device. The output says `via running proxy`. The proxy uses its loaded config, so after changing a channel, tunnel or `[upstream]` setting wait for the reload (file watching, or `SIGHUP`).
 
 ```bash
 docker exec wg-stream-proxy /wg-stream-proxy probe --route gr 'https://cdn.example.com/live/master.m3u8'
@@ -195,7 +195,7 @@ docker exec wg-stream-proxy /wg-stream-proxy probe --route gr --header 'Referer=
 - Exit code `0`: the proxy would serve it; `1`: it would not (the last lines say why: `guard`, `timeout`, `tls`, `status` for a `403` or `404`, `unsupported` for a playlist format the proxy refuses, `drm` for a DASH manifest with DRM); `2`: wrong usage.
 - Per request you see the format (HLS master or media playlist with the number of variants or segments, DASH manifest with the number of periods and adaptation sets, raw or ICY stream, refused playlist) and where the time went: tunnel start, DNS, connect, TLS, first byte. For HLS the first variant and the first segment are fetched too, which finds geo-blocks that only hit the segments.
 - `--header Name=Value` is the same as `upstream.headers` of a channel (`User-Agent`, `Referer`, `Cookie`); once it works, copy the headers into the channel file.
-- Without `[debug] listen`, or if nothing listens there, the probe runs standalone (`standalone` in the output, one line on stderr says so): it starts the route's tunnel itself and stops it at the end. That is a second device with the key of the tunnel, so while a proxy has that tunnel up, the provider's server switches to the new endpoint and a stream on that tunnel can stall until the next handshake. Prefer the debug listener; `--standalone` forces this mode (for a config the running proxy has not loaded yet, with no stream on that tunnel).
+- Without `[debug] listen`, or if nothing listens there, the probe exits with an error: set `[debug] listen` in `config.toml`, restart and start the proxy. There is no standalone mode.
 
 ## Monitoring
 
@@ -203,7 +203,7 @@ docker exec wg-stream-proxy /wg-stream-proxy probe --route gr --header 'Referer=
 
 ## Debug endpoints
 
-Profiles, the last 256 requests with their timings, the tunnels' state and an on-demand cool-down of a tunnel, without restarting the proxy ([spec 7.1](spec.md)). Off by default; enable them in `config.toml` and restart (a reload does not open or move the listener):
+Profiles, the tunnels' state and an on-demand cool-down of a tunnel, without restarting the proxy ([spec 7.1](spec.md)). Off by default; enable them in `config.toml` and restart (a reload does not open or move the listener):
 
 ```toml
 [debug]
@@ -219,7 +219,7 @@ docker exec wg-stream-proxy /wg-stream-proxy tunnel list
 docker exec wg-stream-proxy /wg-stream-proxy tunnel stop gr
 ```
 
-`tunnel stop` drains the tunnel (open streams finish, or are cut after 30 s), stops it and returns; the log shows `tunnel closed reason=cooldown`. The next request starts it cold, so a cold start can be measured without waiting for `idle_timeout`: stop the tunnel, play a channel, then read `tunnel started … duration=…` in the log or `tunnel_start_ms` in `/debug/requests`.
+`tunnel stop` drains the tunnel (open streams finish, or are cut after 30 s), stops it and returns; the log shows `tunnel closed reason=cooldown`. The next request starts it cold, so a cold start can be measured without waiting for `idle_timeout`: stop the tunnel, play a channel, then read `tunnel started … duration=…` in the log, or `tunnel_start` in the `request` line at `log_level = "debug"`.
 
 For `go tool pprof` from another machine, listen on all interfaces inside the container and publish the port on the host's LAN address only (here `192.168.1.10`):
 
@@ -232,7 +232,6 @@ listen = "0.0.0.0:2350"
 docker run … -p 2349:2349 -p 192.168.1.10:2350:2350 …
 go tool pprof http://192.168.1.10:2350/debug/pprof/profile?seconds=30   # CPU, 30 s
 go tool pprof http://192.168.1.10:2350/debug/pprof/heap                 # memory
-curl -s http://192.168.1.10:2350/debug/requests                         # recent requests, JSON
 ```
 
 Use the IP address, not a host name such as `libreelec.local`: the debug listener answers other host names with `403` (protection against DNS rebinding). In Compose, add `"192.168.1.10:2350:2350"` to `ports`. Remove the port again when done.
@@ -243,28 +242,23 @@ Use the IP address, not a host name such as `libreelec.local`: the debug listene
 
 ```ini
 [Service]
-DynamicUser=yes
+User=wg-stream-proxy
 ProtectSystem=strict
 ProtectHome=yes
 NoNewPrivileges=yes
 PrivateTmp=yes
-# one credential per tunnel file, named <tunnel>.conf
-LoadCredential=gr.conf:/etc/wg-stream-proxy/tunnels/gr.conf
-LoadCredential=uk.conf:/etc/wg-stream-proxy/tunnels/uk.conf
-LoadCredential=signing.key:/etc/wg-stream-proxy/signing.key
-Environment=WG_STREAM_PROXY_TUNNELS_DIR=%d
-Environment=WG_STREAM_PROXY_SIGNING_KEY_FILE=%d/signing.key
+Environment=WG_STREAM_PROXY_CONFIG_DIR=/etc/wg-stream-proxy
+Environment=WG_STREAM_PROXY_SIGNING_KEY_FILE=/etc/wg-stream-proxy/signing.key
 ExecStart=/usr/local/bin/wg-stream-proxy serve
 ExecReload=/bin/kill -HUP $MAINPID
 ```
 
-- The tunnels dir (`%d`) also contains `signing.key`; only `*.conf` files are read as tunnels (spec 5.1).
-- Credentials are copied at service start, so changed or added tunnel files need `systemctl restart`. Channel files are re-read on `systemctl reload`.
-- Adding a tunnel needs a new `LoadCredential=` line.
+- The tunnel files are read from `/etc/wg-stream-proxy/tunnels`, `signing.key` from the config dir: both must be readable by the service user but not world-readable (spec 5.1).
+- Changed or added tunnel files and channel files are picked up by file watching (spec 5.6); `systemctl reload` reloads at once.
 
 ## launchd (Later)
 
-`deploy/launchd/` plist running `wg-stream-proxy serve` as the user, config in `~/.config/wg-stream-proxy`.
+`deploy/launchd/` plist running `wg-stream-proxy serve --config-dir ~/.config/wg-stream-proxy` as the user.
 
 ## Kubernetes (Later)
 
@@ -273,6 +267,6 @@ Kustomize base in `deploy/k8s/`:
 - `Deployment`: `replicas: 1`, `strategy: Recreate`, `runAsNonRoot`, `fsGroup: 65532`, `readOnlyRootFilesystem`, `capabilities.drop: [ALL]`, liveness and readiness probe `GET /healthz`.
 - `ConfigMap` with `config.toml`, mounted at `/etc/wg-stream-proxy/config.toml` via `subPath`; second `ConfigMap` with channel files, mounted at `/etc/wg-stream-proxy/channels.d`.
 - `Secret` with one key per tunnel (`gr.conf`, `uk.conf`), mounted at `/etc/wg-stream-proxy/tunnels`, `defaultMode: 0440`.
-- `Secret` with the signing key, injected via `env.valueFrom.secretKeyRef` as `WG_STREAM_PROXY_SIGNING_KEY`.
+- `Secret` with the signing key, mounted as a file; `WG_STREAM_PROXY_SIGNING_KEY_FILE` points to it.
 - `Service` as `LoadBalancer` or `NodePort` for LAN players. Ingress optional, with response buffering disabled and long read timeouts.
 - Config changes: file watching (spec 5.6) picks up a mounted ConfigMap when Kubernetes swaps it; secrets copied at start need `kubectl rollout restart deployment/wg-stream-proxy`.
