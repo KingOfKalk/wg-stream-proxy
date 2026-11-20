@@ -102,7 +102,7 @@ func New(opts Options) (*Server, error) {
 	if s.metrics == nil {
 		s.metrics = metrics.New(metrics.Options{})
 	}
-	s.metrics.DeclareErrorClips(clips.Errors()...)
+	s.metrics.DeclareErrorClips(clips.Names()...)
 	if opts.RecentRequests > 0 {
 		s.recent = newRecentRequests(opts.RecentRequests)
 	}
@@ -121,7 +121,7 @@ func New(opts Options) (*Server, error) {
 	s.mux.HandleFunc("GET "+timePath, s.handleTime)
 	s.mux.HandleFunc("GET /healthz", s.handleHealth)
 	s.mux.HandleFunc("GET /logos/{file}", s.handleLogo)
-	s.mux.HandleFunc("GET /clip/{name}/{file}", s.handleClip)
+	s.mux.HandleFunc("GET /clip/{file}", s.handleClip)
 	// No authentication, like the rest: LAN use (spec 8).
 	s.mux.Handle("GET /metrics", s.metrics.Handler())
 	return s, nil

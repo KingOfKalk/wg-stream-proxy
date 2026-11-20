@@ -49,7 +49,7 @@ type playerCase struct {
 	// once.
 	reloaded string
 	// errorClip: the upstream fails, so the player gets the error clip
-	// (spec 3.4): 5 segments of 0.96 s at 25 fps, then the end.
+	// (spec 3.4): one segment of 4.8 s at 25 fps, then the end.
 	errorClip bool
 }
 
