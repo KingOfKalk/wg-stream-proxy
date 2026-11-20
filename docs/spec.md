@@ -15,7 +15,6 @@
 - One extended M3U channel list (`/playlist.m3u8`) for Kodi (IPTV Simple Client), VLC and other players.
 - HLS and MPEG-DASH (without DRM) passthrough with playlist and manifest rewriting; raw passthrough for radio and MPEG-TS.
 - Fail closed: a channel never silently bypasses its tunnel.
-- To convert an existing M3U file, run the `import` command of the 0.4.x image once (the command is gone since 0.5).
 - Capacity: 3 concurrent viewers (household use).
 
 ### 1.2 Non-goals
@@ -27,23 +26,12 @@
 ### 1.3 Platforms
 
 - Build targets (cross-compiled in CI): `linux/amd64`, `linux/arm64`, `darwin/arm64`; `CGO_ENABLED=0`.
-- Distribution: the container image (`linux/amd64` + `linux/arm64`). Binaries: build from source or `go install`; release binaries are planned (Later, spec 10).
-- LibreELEC 12+ uses an aarch64 userland on Raspberry Pi 4/5 (since 12.0, May 2024), so the `linux/arm64` container (Docker add-on) runs on default installs. Only 32-bit images (Raspberry Pi 2/3, Allwinner H3/R40, Rockchip RK3288) would need `linux/arm`, which is deferred.
+- Distribution: the container image (`linux/amd64` + `linux/arm64`). Binaries: build from source or `go install`; there are no release binaries.
+- LibreELEC 12+ uses an aarch64 userland on Raspberry Pi 4/5 (since 12.0, May 2024), so the `linux/arm64` container (Docker add-on) runs on default installs. Only 32-bit images (Raspberry Pi 2/3, Allwinner H3/R40, Rockchip RK3288) would need `linux/arm`, which is not built.
 
 ## 2. Architecture
 
-```
-Player (Kodi / VLC)
-   | HTTP (LAN)
-wg-stream-proxy
-   |-- /playlist.m3u8   channel list generator
-   |-- /epg.xml.gz      EPG guide: sources fetched through routes, filtered, merged
-   |-- /c/{id}          channel entry: type detection, HLS or DASH rewrite or raw pipe
-   |-- /r/...           signed resources (sub-playlists, segments, keys)
-   |-- /p/...           prefix-signed resources (DASH segments)
-   |-- routes           one per tunnel + "direct", each with http.Transport and private-range guard
-   '-- tunnels          wireguard-go device + gVisor netstack per tunnel file
-```
+One process: the HTTP interface for the players (7.1), one route per tunnel plus `direct`, each with its `http.Transport` and the private-range guard (3.5), and one wireguard-go device with a gVisor netstack per tunnel file. Diagrams and request flows: [architecture.md](architecture.md).
 
 ### 2.1 Tunnels
 
@@ -102,7 +90,6 @@ Resources under `/r/` and `/p/` (4, 4.1) use the same detection (steps 2.2-2.5):
   - fail closed, format `unknown`: text that is no format the proxy handles: the bytes read are text (after any number of UTF-8 BOMs: valid UTF-8, a character cut off at the end allowed, no control characters other than TAB, LF, CR and FF, no DEL) and longer than 16 bytes (an AES-128 key may be printable), and are not HLS or DASH (3.1), a refused format above, WebVTT (`WEBVTT` after BOMs and whitespace) or the TTML case below. JSON is refused too: HLS content steering manifests and interstitial asset lists fetched under `/r/` carry URLs the player would fetch directly, so these HLS features do not work through the proxy. A text body is never a media stream; binary bodies (MPEG-TS, fMP4, ADTS, MP3 also from mid-frame, Ogg, FLAC, images, AES ciphertext) stream.
   - fail closed, format `unknown`: every other text body that starts with `<` (XML or HTML; players such as dash.js and Shaka take a playlist root from any top-level element, also a later one), unless it is one TTML document (root element `tt`): whole within the 64 KiB read (3.1 step 2.4), exactly one top-level element followed only by whitespace and comments, no processing instruction after the declaration, doctype, CDATA section, `<` or `>` inside a tag, or comment starting with `-` or holding `<` or `>`. Also a body whose root element step 2.4 does not find, and UTF-16 or UTF-32 text: a byte order mark, or `<` as a 16-bit (after UTF-16 whitespace) or 32-bit code unit followed by an ASCII character (the proxy reads no playlist in these encodings).
   - Media (MPEG-TS, fMP4, MP3, AAC, Ogg, ICY streams) matches none of these. A `warn` log line names channel, route, URL (8) and format (`pls`, `m3u`, `dash`, `xspf`, `asx`, `unknown`); metrics reason `unsupported` (7.3).
-  - Rewriting PLS and plain M3U (internet radio) is a possible later feature.
 - Shoutcast v1 servers answer `ICY 200 OK`; the raw route's connection wrapper rewrites a leading `ICY ` status line to `HTTP/1.0 ` before Go's HTTP parser sees it.
   - Used for `/c/` requests of `raw` and `auto` channels (the type of `auto` is only known from the response; the wrapper leaves `HTTP/` responses unchanged). These connections have their own keep-alive pool, so repeated polls of an `auto` channel whose URL is a media playlist reuse a connection; `hls` and `dash` channels and `/r/` and `/p/` resources use the normal pool.
   - The first bytes of every response are checked: a server may answer one port with ICY or HTTP per path, also on a kept-alive connection. A connection that carried an ICY response takes no further request (an ICY response has no length and ends with its connection); the next request uses a new connection, even if the server claimed keep-alive. Over `https` the wrapper sees TLS records and changes nothing (Shoutcast v1 has no TLS).
@@ -124,7 +111,7 @@ Resources under `/r/` and `/p/` (4, 4.1) use the same detection (steps 2.2-2.5):
   - `connect_timeout` covers DNS lookup and TCP connect of one connection; running out counts as a connection error (`502`), like a tunnel without handshake (2.1).
   - `header_timeout` runs from the start of the request until the final response headers, across redirects; `504`.
   - `read_timeout` runs only while waiting for upstream data, not while the client is slow to accept it; `504` if it fires before the response starts, else the stream ends.
-- Error clips (`[clips] error`, default on, 5.3; design: [clips.md 6.2](clips.md#62-error-clips)): a `GET` of `/c/` of an HLS channel (listed with `.m3u8`, 6) answers a failure with a short video instead of an HTTP error, so the player shows the error as text and stops instead of a failure dialog.
+- Error clips (`[clips] error`, default on, 5.3): a `GET` of `/c/` of an HLS channel (listed with `.m3u8`, 6) answers a failure with a short video instead of an HTTP error, so the player shows the error as text and stops instead of a failure dialog.
   - Failures: every `502` and `504` of this section, of the tunnel start (2.1), of the playlist checks (3.2, 3.3) and of the guard (3.5), and an upstream `4xx`.
   - Answer: `200`, `Content-Type: application/vnd.apple.mpegurl`, `Cache-Control: no-store`, a VOD media playlist (`#EXT-X-VERSION:3`, `#EXT-X-TARGETDURATION:5`, `#EXT-X-MEDIA-SEQUENCE:0`, `#EXT-X-PLAYLIST-TYPE:VOD`, `#EXT-X-ENDLIST`) that lists the clip's one 4.8 s segment (`#EXTINF:4.800,`) as `/clip/{name}.ts` (7.1), absolute like resource URLs.
   - Clip per failure: `tunnel-unreachable` ("Tunnel not reachable") when the tunnel did not start (start failure, no handshake within `connect_timeout`, a start cancelled by a reload); `channel-blocked` ("Channel blocked by configuration") for a guard refusal (3.5) or an upstream address outside the tunnel's `AllowedIPs` (5.5, also when a name resolves only to such addresses); `channel-not-available` ("Channel not available") for everything else: DNS, connect, TLS, redirects, size, timeouts, upstream statuses, rejected and refused playlists.
@@ -446,6 +433,7 @@ wg-stream-proxy help [command]        # description and command list, or the fla
 `epg ids` downloads one EPG file: the `[[epg.source]]` named by `--source`, by default the first one, else `epg.url`; `--source` with a name that is not an `[[epg.source]]` exits 2. The file is fetched through the source's route (`epg.url`: `direct`): the private-range guard (with the route's `[upstream.allow_private]`) and the `[upstream]` timeouts apply. A source on a tunnel starts that tunnel in the command's process, with a note on stderr: this starts a second WireGuard device with the key of the tunnel, so a running proxy with the same tunnel key may stall until its next handshake. The file is plain XMLTV or gzip (recognised by its magic bytes), read as a stream, at most 200 MiB after decompression (else error); only the `<channel>` elements before the first `<programme>` are read (XMLTV DTD order).
 
 `epg ids`: one line per EPG channel, sorted by id: the id, then its display names, separated by tabs.
+
 ### 7.3 Metrics (prefix `wsp_`)
 
 - `tunnel_up{tunnel}`: 1 while the device runs and the last handshake is younger than 180s.
@@ -485,9 +473,9 @@ Only `/c/`, `/r/` and `/p/` requests of enabled channels count; `channel` is the
 
 ## 9. Engineering rules
 
-- Layout: `cmd/wg-stream-proxy/`, `internal/{config,tunnel,route,hls,dash,playlist,server,epg,metrics,clips}`, `examples/config/`, `testdata/`, `deploy/`, `docs/`.
+- Layout: `cmd/wg-stream-proxy/`, `internal/{config,tunnel,route,hls,dash,playlist,server,epg,probe,metrics,clips}`, `examples/config/`, `testdata/`, `deploy/`, `docs/`.
 - Dependencies: stdlib `net/http`, `log/slog`, `wireguard-go`, gVisor netstack, a TOML parser, Prometheus client. No web framework.
-- `internal/clips` embeds the built-in error clips (design: [clips.md](clips.md)): three 4.8 s MPEG-TS files in `internal/clips/segments/`, rendered by `internal/clips/generate.sh` (pinned image, Inter 4.1 by version and checksum) and committed. Change a text by editing the script, rerunning it and committing the result. Only rendered pixels ship, not the font (SIL OFL 1.1).
+- `internal/clips` embeds the built-in error clips (3.4): three 4.8 s MPEG-TS files in `internal/clips/segments/`, rendered by `internal/clips/generate.sh` (pinned image, Inter 4.1 by version and checksum) and committed. Change a text by editing the script, rerunning it and committing the result. Only rendered pixels ship, not the font (SIL OFL 1.1).
 - gVisor stays at the version in `wireguard-go`'s `go.mod` and is only updated together with it (excluded from automatic bumps).
 - `internal/tunnel/netstack` is a trimmed copy of `wireguard-go`'s `tun/netstack` (MIT, licence kept) with one change: a packet gVisor sends after `Close` is dropped instead of sent on a closed channel, which would crash the process (#47). The copy names the upstream commit it was taken from and is updated together with `wireguard-go`: on every `wireguard-go` update, compare upstream `tun/netstack` with the copy and port relevant changes.
 - Injected for tests: `Dialer` per route, private-range guard allowlist, clock.
@@ -497,11 +485,10 @@ Only `/c/`, `/r/` and `/p/` requests of enabled channels count; `channel` is the
 
 ## 10. Roadmap
 
-- **v0.1 Core** (released as v0.1.0): the core of this spec (config, tunnels, routes and guard, HLS and raw/ICY streams, channel list, `SIGHUP` reload, metrics, `import`, `epg`), plus Dockerfile, Compose file and the v0.1 test layers in [testing.md](testing.md). Publishes the container image `ghcr.io/kingofkalk/wg-stream-proxy` (`linux/amd64` + `linux/arm64`, public package): tag `edge` on every push to `main`, version tags on release.
-- **v0.2 Observability** (released as v0.2.0): timing histograms, debug endpoints with profiles, recent requests and cool-down.
-- **v0.3 Experience:** error clips (design: [clips.md](clips.md)), file-watch reload.
-- **v0.4 Content:** DASH without DRM, EPG proxy mode, logo proxying, ad-hoc proxy endpoint.
-- **Later:** in-flight clips with seamless switchover (parked, [#116](https://github.com/KingOfKalk/wg-stream-proxy/issues/116); design in [clips.md](clips.md)), per-request prefetch (waits for timing data, [#84](https://github.com/KingOfKalk/wg-stream-proxy/issues/84)), distribution (GoReleaser, systemd unit, launchd plist, Kustomize), 32-bit ARM, scaling beyond 3 viewers, per-tunnel overrides.
+- Released ([changelog](../CHANGELOG.md)): **v0.1 Core** (config, tunnels, routes and guard, HLS and raw/ICY streams, channel list, `SIGHUP` reload, metrics, container image), **v0.2 Observability** (timing histograms, debug endpoints), **v0.3 Experience** (error clips, file-watch reload), **v0.4 Content** (DASH without DRM, EPG proxy mode, `probe`).
+- **v0.5 Lean** ([#129](https://github.com/KingOfKalk/wg-stream-proxy/issues/129)): a smaller project that is cheaper to maintain: fixes, removal of unused features, shorter docs, leaner tests and CI, less duplicated code. Breaking changes allowed.
+- **Later**, only if the timing data (7.3) shows segment loading as a bottleneck: per-request segment prefetch ([#84](https://github.com/KingOfKalk/wg-stream-proxy/issues/84)).
+- Decided against: in-flight clips ([#116](https://github.com/KingOfKalk/wg-stream-proxy/issues/116), the design is in the git history), logo proxy ([#88](https://github.com/KingOfKalk/wg-stream-proxy/issues/88)), ad-hoc proxy endpoint ([#89](https://github.com/KingOfKalk/wg-stream-proxy/issues/89)).
 
 ## 11. Risks
 

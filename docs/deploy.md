@@ -8,11 +8,10 @@ Companion to [spec.md](spec.md). All variants use the same config layout (spec 5
 - The process runs as a non-root user; tunnel files must be readable by it but not world-readable.
 - Signing key via `WG_STREAM_PROXY_SIGNING_KEY_FILE` pointing to a secret file (spec 4). Generate with `openssl rand -base64 32`.
 - Single instance: tunnel state lives in memory, and VPN providers often limit connections per key.
-- Reload: the proxy checks `config.toml`, the channel files and the tunnel files every 2 s and reloads when they changed (`[reload] watch_interval`, `"0"` turns it off; spec 5.3 and 5.6); `SIGHUP` reloads at any time. `listen`, `debug.listen`, `log_format`, `reload.watch_interval` and the signing key still need a restart. Where files are injected at start (systemd credentials, Kubernetes secrets that are copied), a change in the source needs a restart or a new copy.
-
+- Reload: the proxy checks `config.toml`, the channel files and the tunnel files every 2 s and reloads when they changed (`[reload] watch_interval`, `"0"` turns it off; spec 5.3 and 5.6); `SIGHUP` reloads at any time. `listen`, `debug.listen`, `log_format`, `reload.watch_interval` and the signing key still need a restart.
 ## Standalone
 
-There are no release binaries yet; release binaries are planned (Later, [spec 10](spec.md)). Build the binary from source (`go build ./cmd/wg-stream-proxy`) or install it with `go install` (Go 1.27.4 or newer, see `go.mod`); the container image below needs no Go toolchain.
+There are no release binaries. Build the binary from source (`go build ./cmd/wg-stream-proxy`) or install it with `go install` (Go 1.27.4 or newer, see `go.mod`); the container image below needs no Go toolchain.
 
 <!-- x-release-please-start-version -->
 ```bash
@@ -235,38 +234,3 @@ go tool pprof http://192.168.1.10:2350/debug/pprof/heap                 # memory
 ```
 
 Use the IP address, not a host name such as `libreelec.local`: the debug listener answers other host names with `403` (protection against DNS rebinding). In Compose, add `"192.168.1.10:2350:2350"` to `ports`. Remove the port again when done.
-
-## systemd (Later)
-
-`deploy/systemd/wg-stream-proxy.service`:
-
-```ini
-[Service]
-User=wg-stream-proxy
-ProtectSystem=strict
-ProtectHome=yes
-NoNewPrivileges=yes
-PrivateTmp=yes
-Environment=WG_STREAM_PROXY_CONFIG_DIR=/etc/wg-stream-proxy
-Environment=WG_STREAM_PROXY_SIGNING_KEY_FILE=/etc/wg-stream-proxy/signing.key
-ExecStart=/usr/local/bin/wg-stream-proxy serve
-ExecReload=/bin/kill -HUP $MAINPID
-```
-
-- The tunnel files are read from `/etc/wg-stream-proxy/tunnels`, `signing.key` from the config dir: both must be readable by the service user but not world-readable (spec 5.1).
-- Changed or added tunnel files and channel files are picked up by file watching (spec 5.6); `systemctl reload` reloads at once.
-
-## launchd (Later)
-
-`deploy/launchd/` plist running `wg-stream-proxy serve --config-dir ~/.config/wg-stream-proxy` as the user.
-
-## Kubernetes (Later)
-
-Kustomize base in `deploy/k8s/`:
-
-- `Deployment`: `replicas: 1`, `strategy: Recreate`, `runAsNonRoot`, `fsGroup: 65532`, `readOnlyRootFilesystem`, `capabilities.drop: [ALL]`, liveness and readiness probe `GET /healthz`.
-- `ConfigMap` with `config.toml`, mounted at `/etc/wg-stream-proxy/config.toml` via `subPath`; second `ConfigMap` with channel files, mounted at `/etc/wg-stream-proxy/channels.d`.
-- `Secret` with one key per tunnel (`gr.conf`, `uk.conf`), mounted at `/etc/wg-stream-proxy/tunnels`, `defaultMode: 0440`.
-- `Secret` with the signing key, mounted as a file; `WG_STREAM_PROXY_SIGNING_KEY_FILE` points to it.
-- `Service` as `LoadBalancer` or `NodePort` for LAN players. Ingress optional, with response buffering disabled and long read timeouts.
-- Config changes: file watching (spec 5.6) picks up a mounted ConfigMap when Kubernetes swaps it; secrets copied at start need `kubectl rollout restart deployment/wg-stream-proxy`.

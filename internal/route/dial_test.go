@@ -422,7 +422,7 @@ var errNetworkDown = errors.New("fake: network not started")
 // TestDialConnectTimeoutKeepsNetworkError: when connect_timeout ends a
 // lookup or dial that waited for the network, the error is still a
 // connect timeout and also carries the network's own error, so the server
-// can tell a tunnel that did not start (docs/clips.md 3.2).
+// can tell a tunnel that did not start (error clips, spec 3.4).
 func TestDialConnectTimeoutKeepsNetworkError(t *testing.T) {
 	down := func(ctx context.Context) (net.Conn, error) {
 		<-ctx.Done()
