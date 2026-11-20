@@ -16,7 +16,7 @@ There are no release binaries yet; release binaries are planned (Later, [spec 10
 
 <!-- x-release-please-start-version -->
 ```bash
-go install github.com/KingOfKalk/wg-stream-proxy/cmd/wg-stream-proxy@v0.4.0
+go install github.com/KingOfKalk/wg-stream-proxy/cmd/wg-stream-proxy@v0.4.1
 ```
 <!-- x-release-please-end -->
 
@@ -50,7 +50,7 @@ docker run -d --name wg-stream-proxy -p 2349:2349 \
   --read-only --cap-drop ALL \
   -v ./config:/etc/wg-stream-proxy:ro \
   -e WG_STREAM_PROXY_SIGNING_KEY_FILE=/etc/wg-stream-proxy/signing.key \
-  ghcr.io/kingofkalk/wg-stream-proxy:0.4.0
+  ghcr.io/kingofkalk/wg-stream-proxy:0.4.1
 ```
 <!-- x-release-please-end -->
 
