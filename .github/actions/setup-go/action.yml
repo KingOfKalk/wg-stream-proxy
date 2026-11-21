@@ -1,0 +1,45 @@
+name: Set up Go
+description: Go from go.mod, with the module and build caches.
+
+inputs:
+  key:
+    description: Cache name of the job (for example "test").
+    required: true
+  workflow:
+    description: Workflow file; a change to it starts a fresh cache.
+    required: true
+  extra-paths:
+    description: More paths to cache, one per line.
+    required: false
+    default: ""
+
+outputs:
+  gocache:
+    description: GOCACHE directory.
+    value: ${{ steps.go.outputs.build }}
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+      with:
+        go-version-file: go.mod
+        cache: false
+    - name: Go cache paths
+      id: go
+      shell: bash
+      run: |
+        {
+          echo "mod=$(go env GOMODCACHE)"
+          echo "build=$(go env GOCACHE)"
+          echo "version=$(go env GOVERSION)"
+        } >> "$GITHUB_OUTPUT"
+    - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          ${{ steps.go.outputs.mod }}
+          ${{ steps.go.outputs.build }}
+          ${{ inputs.extra-paths }}
+        key: go-${{ inputs.key }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.version }}-${{ hashFiles('go.sum', inputs.workflow) }}
+        restore-keys: |
+          go-${{ inputs.key }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.version }}-

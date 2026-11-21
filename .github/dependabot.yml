@@ -2,7 +2,9 @@ version: 2
 updates:
   # CI only: listed under Chores.
   - package-ecosystem: github-actions
-    directory: /
+    directories:
+      - /
+      - /.github/actions/*
     schedule:
       interval: weekly
     commit-message:

@@ -9,10 +9,10 @@ on:
 permissions: {}
 
 # Required checks in the main ruleset (job names): Lint, Test, Security,
-# Player, Fuzz, Capacity, Build.
+# Player, Fuzz, Capacity, Build (and Container, see container.yml).
 # Order: Lint -> Test, Security and Fuzz in parallel -> Player and Capacity
-# (after Test) -> Cross-compile -> Build. Fuzz and Capacity run next to Test
-# and Player, so they should not lengthen the critical path.
+# (after Test) -> Build. Fuzz and Capacity run next to Test and Player, so
+# they should not lengthen the critical path.
 # Every job writes a short summary to the run page ($GITHUB_STEP_SUMMARY).
 jobs:
   lint:
@@ -23,33 +23,16 @@ jobs:
       contents: read
     env:
       GOLANGCI_LINT_VERSION: v2.15.0
+      GOLANGCI_LINT_CACHE: /home/runner/.cache/golangci-lint
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+      - uses: ./.github/actions/setup-go
         with:
-          go-version-file: go.mod
-          cache: false
-      - name: Go cache paths
-        id: go
-        run: |
-          {
-            echo "mod=$(go env GOMODCACHE)"
-            echo "build=$(go env GOCACHE)"
-            echo "version=$(go env GOVERSION)"
-            echo "lint=$HOME/.cache/golangci-lint"
-          } >> "$GITHUB_OUTPUT"
-          echo "GOLANGCI_LINT_CACHE=$HOME/.cache/golangci-lint" >> "$GITHUB_ENV"
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ${{ steps.go.outputs.mod }}
-            ${{ steps.go.outputs.build }}
-            ${{ steps.go.outputs.lint }}
-          key: go-lint-${{ runner.os }}-${{ steps.go.outputs.version }}-${{ hashFiles('go.sum', '.github/workflows/ci.yml') }}
-          restore-keys: |
-            go-lint-${{ runner.os }}-${{ steps.go.outputs.version }}-
+          key: lint
+          workflow: .github/workflows/ci.yml
+          extra-paths: ${{ env.GOLANGCI_LINT_CACHE }}
       # go install instead of golangci-lint-action: only GitHub-owned actions
       # are allowed, and the module checksum database verifies the source.
       - name: Install golangci-lint
@@ -78,7 +61,7 @@ jobs:
 
   # L2 fuzzing on every push (docs/testing.md): every fuzz target of the
   # module for 10 s. The targets are found with go test -list, as in
-  # nightly.yml, so new targets are fuzzed without a change here. One job
+  # weekly.yml, so new targets are fuzzed without a change here. One job
   # runs them one after the other; it runs next to Test and Security, off
   # the critical path.
   fuzz:
@@ -97,26 +80,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+      - uses: ./.github/actions/setup-go
         with:
-          go-version-file: go.mod
-          cache: false
-      - name: Go cache paths
-        id: go
-        run: |
-          {
-            echo "mod=$(go env GOMODCACHE)"
-            echo "build=$(go env GOCACHE)"
-            echo "version=$(go env GOVERSION)"
-          } >> "$GITHUB_OUTPUT"
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ${{ steps.go.outputs.mod }}
-            ${{ steps.go.outputs.build }}
-          key: go-fuzz-${{ runner.os }}-${{ steps.go.outputs.version }}-${{ hashFiles('go.sum', '.github/workflows/ci.yml') }}
-          restore-keys: |
-            go-fuzz-${{ runner.os }}-${{ steps.go.outputs.version }}-
+          key: fuzz
+          workflow: .github/workflows/ci.yml
       - name: Fuzz
         run: |
           mod="$(go list -m)"
@@ -206,26 +173,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+      - uses: ./.github/actions/setup-go
         with:
-          go-version-file: go.mod
-          cache: false
-      - name: Go cache paths
-        id: go
-        run: |
-          {
-            echo "mod=$(go env GOMODCACHE)"
-            echo "build=$(go env GOCACHE)"
-            echo "version=$(go env GOVERSION)"
-          } >> "$GITHUB_OUTPUT"
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ${{ steps.go.outputs.mod }}
-            ${{ steps.go.outputs.build }}
-          key: go-test-${{ runner.os }}-${{ steps.go.outputs.version }}-${{ hashFiles('go.sum', '.github/workflows/ci.yml') }}
-          restore-keys: |
-            go-test-${{ runner.os }}-${{ steps.go.outputs.version }}-
+          key: test
+          workflow: .github/workflows/ci.yml
       - name: go test
         run: |
           set +e
@@ -237,7 +188,7 @@ jobs:
           exit "$rc"
 
   # Capacity test of testing.md (L3): 3 viewers through the proxy and
-  # in-process tunnels for 30 s, with -race (nightly.yml runs 5 minutes).
+  # in-process tunnels for 30 s, with -race (weekly.yml runs 5 minutes).
   # Its own job next to Player: it starts after Test and adds nothing to
   # the critical path.
   capacity:
@@ -253,26 +204,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+      - uses: ./.github/actions/setup-go
         with:
-          go-version-file: go.mod
-          cache: false
-      - name: Go cache paths
-        id: go
-        run: |
-          {
-            echo "mod=$(go env GOMODCACHE)"
-            echo "build=$(go env GOCACHE)"
-            echo "version=$(go env GOVERSION)"
-          } >> "$GITHUB_OUTPUT"
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ${{ steps.go.outputs.mod }}
-            ${{ steps.go.outputs.build }}
-          key: go-capacity-${{ runner.os }}-${{ steps.go.outputs.version }}-${{ hashFiles('go.sum', '.github/workflows/ci.yml') }}
-          restore-keys: |
-            go-capacity-${{ runner.os }}-${{ steps.go.outputs.version }}-
+          key: capacity
+          workflow: .github/workflows/ci.yml
       - name: Capacity test
         run: |
           set +e
@@ -309,26 +244,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+      - uses: ./.github/actions/setup-go
         with:
-          go-version-file: go.mod
-          cache: false
-      - name: Go cache paths
-        id: go
-        run: |
-          {
-            echo "mod=$(go env GOMODCACHE)"
-            echo "build=$(go env GOCACHE)"
-            echo "version=$(go env GOVERSION)"
-          } >> "$GITHUB_OUTPUT"
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ${{ steps.go.outputs.mod }}
-            ${{ steps.go.outputs.build }}
-          key: go-security-${{ runner.os }}-${{ steps.go.outputs.version }}-${{ hashFiles('go.sum', '.github/workflows/ci.yml') }}
-          restore-keys: |
-            go-security-${{ runner.os }}-${{ steps.go.outputs.version }}-
+          key: security
+          workflow: .github/workflows/ci.yml
       - name: Install govulncheck
         run: GOBIN="$RUNNER_TEMP/bin" go install "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}"
       - name: govulncheck
@@ -366,26 +285,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+      - uses: ./.github/actions/setup-go
         with:
-          go-version-file: go.mod
-          cache: false
-      - name: Go cache paths
-        id: go
-        run: |
-          {
-            echo "mod=$(go env GOMODCACHE)"
-            echo "build=$(go env GOCACHE)"
-            echo "version=$(go env GOVERSION)"
-          } >> "$GITHUB_OUTPUT"
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ${{ steps.go.outputs.mod }}
-            ${{ steps.go.outputs.build }}
-          key: go-player-${{ runner.os }}-${{ steps.go.outputs.version }}-${{ hashFiles('go.sum', '.github/workflows/ci.yml') }}
-          restore-keys: |
-            go-player-${{ runner.os }}-${{ steps.go.outputs.version }}-
+          key: player
+          workflow: .github/workflows/ci.yml
       # The runner image does not ship ffmpeg; use the distribution's. The
       # mirror is sometimes very slow (about 50 KB/s for the 66 MB of
       # packages), so the .deb files are cached per runner image and apt
@@ -457,103 +360,43 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           exit "$rc"
 
-  cross-compile:
-    name: Cross-compile (${{ matrix.goos }}/${{ matrix.goarch }})
+  # darwin/arm64 for a desktop setup. linux/amd64 and linux/arm64 are built
+  # by the Container workflow (Dockerfile), which also smoke-tests amd64.
+  build:
+    name: Build
     needs: [test, security, player, fuzz, capacity]
     runs-on: ubuntu-26.04
     timeout-minutes: 15
     permissions:
       contents: read
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - goos: linux
-            goarch: amd64
-          - goos: linux
-            goarch: arm64
-          - goos: darwin
-            goarch: arm64
+    env:
+      CGO_ENABLED: "0"
+      GOOS: darwin
+      GOARCH: arm64
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           # Tags and history for git describe.
           fetch-depth: 0
-      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+      - uses: ./.github/actions/setup-go
         with:
-          go-version-file: go.mod
-          cache: false
-      - name: Go cache paths
-        id: go
-        run: |
-          {
-            echo "mod=$(go env GOMODCACHE)"
-            echo "build=$(go env GOCACHE)"
-            echo "version=$(go env GOVERSION)"
-          } >> "$GITHUB_OUTPUT"
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ${{ steps.go.outputs.mod }}
-            ${{ steps.go.outputs.build }}
-          key: go-cross-compile-${{ matrix.goos }}-${{ matrix.goarch }}-${{ runner.os }}-${{ steps.go.outputs.version }}-${{ hashFiles('go.sum', '.github/workflows/ci.yml') }}
-          restore-keys: |
-            go-cross-compile-${{ matrix.goos }}-${{ matrix.goarch }}-${{ runner.os }}-${{ steps.go.outputs.version }}-
-      - name: Build
-        env:
-          CGO_ENABLED: "0"
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
+          key: build
+          workflow: .github/workflows/ci.yml
+      - name: Build darwin/arm64
         run: |
           version="$(git describe --tags --always)"
           go build -trimpath -ldflags "-s -w -X main.version=${version}" \
-            -o "dist/wg-stream-proxy" ./cmd/wg-stream-proxy
-          echo "VERSION=${version}" >> "$GITHUB_ENV"
-      - name: Smoke test
-        if: matrix.goos == 'linux' && matrix.goarch == 'amd64'
-        run: |
-          out="$(./dist/wg-stream-proxy version)"
-          echo "$out"
-          test "$(head -n 1 <<< "$out")" = "wg-stream-proxy ${VERSION}"
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: wg-stream-proxy-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: dist/wg-stream-proxy
-          if-no-files-found: error
-      - name: Summary
-        env:
-          TARGET: ${{ matrix.goos }}/${{ matrix.goarch }}
-          ARTIFACT: wg-stream-proxy-${{ matrix.goos }}-${{ matrix.goarch }}
-        run: |
+            -o dist/wg-stream-proxy ./cmd/wg-stream-proxy
           {
-            echo "## Cross-compile ${TARGET}"
+            echo "## Build darwin/arm64"
             echo
             echo "| Artifact | Version | Size | SHA-256 |"
             echo "| --- | --- | --- | --- |"
-            echo "| \`${ARTIFACT}\` | \`${VERSION}\` | $(stat -c %s dist/wg-stream-proxy) bytes | \`$(sha256sum dist/wg-stream-proxy | cut -d' ' -f1)\` |"
+            echo "| \`wg-stream-proxy-darwin-arm64\` | \`${version}\` | $(stat -c %s dist/wg-stream-proxy) bytes | \`$(sha256sum dist/wg-stream-proxy | cut -d' ' -f1)\` |"
           } >> "$GITHUB_STEP_SUMMARY"
-
-  # Stable name for the required check, independent of the matrix. Runs
-  # always, so it also fails when an earlier job failed and the rest skipped.
-  build:
-    name: Build
-    if: always()
-    needs: cross-compile
-    runs-on: ubuntu-26.04
-    timeout-minutes: 5
-    permissions: {}
-    steps:
-      - env:
-          RESULT: ${{ needs.cross-compile.result }}
-        run: |
-          {
-            echo "## Build"
-            echo
-            if [ "$RESULT" = success ]; then
-              echo "All targets built; binaries are attached to this run as artifacts."
-            else
-              echo "Cross-compile result: \`${RESULT}\` (an earlier stage failed or was skipped)."
-            fi
-          } >> "$GITHUB_STEP_SUMMARY"
-          test "$RESULT" = success
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: wg-stream-proxy-darwin-arm64
+          path: dist/wg-stream-proxy
+          if-no-files-found: error
