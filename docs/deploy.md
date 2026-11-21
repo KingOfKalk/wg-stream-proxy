@@ -9,6 +9,7 @@ Companion to [spec.md](spec.md). All variants use the same config layout (spec 5
 - Signing key via `WG_STREAM_PROXY_SIGNING_KEY_FILE` pointing to a secret file (spec 4). Generate with `openssl rand -base64 32`.
 - Single instance: tunnel state lives in memory, and VPN providers often limit connections per key.
 - Reload: the proxy checks `config.toml`, the channel files and the tunnel files every 2 s and reloads when they changed (`[reload] watch_interval`, `"0"` turns it off; spec 5.3 and 5.6); `SIGHUP` reloads at any time. `listen`, `debug.listen`, `log_format`, `reload.watch_interval` and the signing key still need a restart.
+
 ## Standalone
 
 There are no release binaries. Build the binary from source (`go build ./cmd/wg-stream-proxy`) or install it with `go install` (Go 1.27.4 or newer, see `go.mod`); the container image below needs no Go toolchain.
@@ -56,7 +57,8 @@ docker run -d --name wg-stream-proxy -p 2349:2349 \
 Compose: [`deploy/compose/compose.yaml`](../deploy/compose/compose.yaml) (`read_only`, `cap_drop: [ALL]`, config mounted read-only, signing key file, healthcheck); put the config dir next to it as `./config`, then `docker compose up -d`.
 
 - Stop: `docker compose down` sends `SIGTERM`, on which the proxy drains in-flight requests for up to 30 s ([spec 2.1](spec.md#21-tunnels)); the service sets `stop_grace_period: 35s` so Docker's default 10 s does not cut the drain short.
-- Reload: `docker kill -s HUP wg-stream-proxy`.
+- Reload: `docker compose kill -s HUP wg-stream-proxy`.
+- Commands in the container (`probe`, `tunnel list`, below): `docker compose exec wg-stream-proxy /wg-stream-proxy …`; the `docker exec wg-stream-proxy …` examples assume `docker run --name wg-stream-proxy`.
 - LibreELEC 12+ on Raspberry Pi 4/5: the Docker add-on runs the `linux/arm64` image.
 
 ## Changes in Kodi

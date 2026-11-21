@@ -210,7 +210,7 @@ providers:
       path: /var/lib/grafana/dashboards
 ```
 
-Variables (all with "All"): `instance` (single select, the instances of job `wg-stream-proxy`), `route` (`direct` and tunnel names), `tunnel`, `channel` (channel ids seen in the requests). Panels that have no data for a selection stay empty: for example, the tunnel panels while tunnels are idle.
+Variables: `instance` (single select, no "All"; the instances of job `wg-stream-proxy`), and with "All" `route` (`direct` and tunnel names), `tunnel`, `channel` (channel ids seen in the requests). Panels that have no data for a selection stay empty: for example, the tunnel panels while tunnels are idle.
 
 | Row | Panels | Answers |
 |---|---|---|
