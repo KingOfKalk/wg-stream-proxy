@@ -192,6 +192,9 @@ func TestLoadErrors(t *testing.T) {
 		{"debug listen on the default port", map[string]string{"config.toml": "[debug]\nlisten = \"127.0.0.1:2349\"\n"}, []string{"config.toml: debug.listen: must not use the port of listen (2349)"}},
 		{"debug listen on the listen port", map[string]string{"config.toml": "listen = \"192.0.2.1:8080\"\n[debug]\nlisten = \"127.0.0.1:8080\"\n"}, []string{"debug.listen: must not use the port of listen (8080)"}},
 		{"debug listen equal to listen", map[string]string{"config.toml": "listen = \"127.0.0.1:8080\"\n[debug]\nlisten = \"127.0.0.1:8080\"\n"}, []string{"debug.listen: must not use the port of listen (8080)"}},
+		{"debug listen host name", map[string]string{"config.toml": "[debug]\nlisten = \"proxy.lan:2350\"\n"}, []string{"config.toml: debug.listen: host \"proxy.lan\" must be an IP address or localhost"}},
+		{"debug listen localhost dot", map[string]string{"config.toml": "[debug]\nlisten = \"localhost.:2350\"\n"}, []string{"debug.listen: host \"localhost.\" must be an IP address or localhost"}},
+		{"debug listen host name with bad port reports the port", map[string]string{"config.toml": "[debug]\nlisten = \"proxy.lan:x\"\n"}, []string{"debug.listen: invalid address", "!must be an IP address"}},
 		{"unknown debug key", map[string]string{"config.toml": "[debug]\npprof = true\n"}, []string{"unknown key \"debug.pprof\""}},
 		{"clips grace removed", map[string]string{"config.toml": "[clips]\ngrace = \"1s\"\n"}, []string{"unknown key \"clips.grace\""}},
 		{"clips inflight removed", map[string]string{"config.toml": "[clips]\ninflight = false\n"}, []string{"unknown key \"clips.inflight\""}},
@@ -234,6 +237,15 @@ func TestLoadErrors(t *testing.T) {
 		{"upstream type", map[string]string{gr: "", "channels.d/gr.toml": ch("[channel.upstream]", "type = \"mpd\"")}, []string{"upstream.type: invalid value \"mpd\": use auto, hls, dash or raw"}},
 		{"defaults upstream type", map[string]string{gr: "", "channels.d/gr.toml": "[defaults.upstream]\ntype = \"mpd\"\n"}, []string{"gr.toml: defaults.upstream.type: invalid value \"mpd\""}},
 		{"header case duplicate", map[string]string{gr: "", "channels.d/gr.toml": ch("[channel.upstream]", "headers = { Referer = \"a\", referer = \"b\" }")}, []string{"upstream.headers: duplicate header \"Referer\" (names are case-insensitive)"}},
+		{"channel Host header", map[string]string{gr: "", "channels.d/gr.toml": ch("[channel.upstream]", "headers = { Host = \"example.org\" }")}, []string{"upstream.headers: \"Host\" is not allowed"}},
+		{"channel Host header lower case", map[string]string{gr: "", "channels.d/gr.toml": ch("[channel.upstream]", "headers = { host = \"example.org\" }")}, []string{"upstream.headers: \"Host\" is not allowed"}},
+		{"channel Host header opt-out", map[string]string{gr: "", "channels.d/gr.toml": ch("[channel.upstream]", "headers = { HOST = \"\" }")}, []string{"upstream.headers: \"Host\" is not allowed"}},
+		{"channel Accept-Encoding header", map[string]string{gr: "", "channels.d/gr.toml": ch("[channel.upstream]", "headers = { Accept-Encoding = \"gzip\" }")}, []string{"upstream.headers: \"Accept-Encoding\" is not allowed"}},
+		{"channel Accept-Encoding header mixed case", map[string]string{gr: "", "channels.d/gr.toml": ch("[channel.upstream]", "headers = { aCCept-encoding = \"identity\" }")}, []string{"upstream.headers: \"Accept-Encoding\" is not allowed"}},
+		{"file defaults Host header", map[string]string{gr: "", "channels.d/gr.toml": "[defaults.upstream]\nheaders = { host = \"example.org\" }\n"}, []string{"gr.toml: defaults.upstream.headers: \"Host\" is not allowed"}},
+		{"file defaults Accept-Encoding header", map[string]string{gr: "", "channels.d/gr.toml": "[defaults.upstream]\nheaders = { ACCEPT-ENCODING = \"gzip\" }\n"}, []string{"gr.toml: defaults.upstream.headers: \"Accept-Encoding\" is not allowed"}},
+		{"global Host header", map[string]string{"channels.d/_defaults.toml": "[defaults.upstream]\nheaders = { Host = \"example.org\" }\n"}, []string{"_defaults.toml: defaults.upstream.headers: \"Host\" is not allowed"}},
+		{"global Accept-Encoding header", map[string]string{"channels.d/_defaults.toml": "[defaults.upstream]\nheaders = { accept-encoding = \"gzip\" }\n"}, []string{"_defaults.toml: defaults.upstream.headers: \"Accept-Encoding\" is not allowed"}},
 		{"header name", map[string]string{gr: "", "channels.d/gr.toml": ch("[channel.upstream]", "headers = { \"Bad Header\" = \"x\" }")}, []string{"upstream.headers: invalid header name \"Bad Header\""}},
 		{"header value", map[string]string{gr: "", "channels.d/gr.toml": "[defaults.upstream]\nheaders = { X-A = \"a\\r\\nX-B: b\" }\n"}, []string{"gr.toml: defaults.upstream.headers: invalid value for header \"X-A\""}},
 		{"reserved attr tvg-id", map[string]string{gr: "", "channels.d/gr.toml": ch("[channel.playlist]", "attrs = { tvg-id = \"x\" }")}, []string{"playlist.attrs: \"tvg-id\" is reserved, use the dedicated field"}},
@@ -546,6 +558,41 @@ func TestLoadAddresses(t *testing.T) {
 			debug:  "127.0.0.1:2350",
 		},
 		{
+			name:   "debug listen on an IPv4 address",
+			files:  map[string]string{"config.toml": "[debug]\nlisten = \"127.0.0.1:2350\"\n"},
+			listen: ":2349",
+			debug:  "127.0.0.1:2350",
+		},
+		{
+			name:   "debug listen on an IPv6 address",
+			files:  map[string]string{"config.toml": "[debug]\nlisten = \"[::1]:2350\"\n"},
+			listen: ":2349",
+			debug:  "[::1]:2350",
+		},
+		{
+			name:   "debug listen on an IPv6 address with zone",
+			files:  map[string]string{"config.toml": "[debug]\nlisten = \"[fe80::1%eth0]:2350\"\n"},
+			listen: ":2349",
+			debug:  "[fe80::1%eth0]:2350",
+		},
+		{
+			name:   "debug listen on localhost",
+			files:  map[string]string{"config.toml": "[debug]\nlisten = \"LocalHost:2350\"\n"},
+			listen: ":2349",
+			debug:  "LocalHost:2350",
+		},
+		{
+			name:   "debug listen without host",
+			files:  map[string]string{"config.toml": "[debug]\nlisten = \":2350\"\n"},
+			listen: ":2349",
+			debug:  ":2350",
+		},
+		{
+			name:    "debug listen host name",
+			files:   map[string]string{"config.toml": "[debug]\nlisten = \"proxy.lan:2350\"\n"},
+			wantErr: `config.toml: debug.listen: host "proxy.lan" must be an IP address or localhost`,
+		},
+		{
 			name:   "defaults",
 			files:  map[string]string{"config.toml": ""},
 			listen: ":2349",
@@ -625,4 +672,29 @@ func TestLoadAddresses(t *testing.T) {
 			t.Fatal("LoadAddresses() error = nil, want the read error")
 		}
 	})
+}
+
+// TestLoadDebugListenHosts: the debug listener hosts the CLI can reach
+// (spec 5.3, 7.1) load; the empty host is the unspecified address.
+func TestLoadDebugListenHosts(t *testing.T) {
+	for _, listen := range []string{"127.0.0.1:2350", "[::1]:2350", "[fe80::1%eth0]:2350", "localhost:2350", "LOCALHOST:2350", ":2350", "192.168.1.20:2350"} {
+		t.Run(listen, func(t *testing.T) {
+			cfg, err := loadDir(writeConfigDir(t, map[string]string{"config.toml": "[debug]\nlisten = \"" + listen + "\"\n"}))
+			if err != nil || cfg.DebugListen() != listen {
+				t.Errorf("Load() error = %v, debug listen %q; want %q", err, cfg.DebugListen(), listen)
+			}
+		})
+	}
+}
+
+// TestLoadOtherHeadersStillLoad: headers other than Host and
+// Accept-Encoding load on every layer.
+func TestLoadOtherHeadersStillLoad(t *testing.T) {
+	files := map[string]string{
+		"channels.d/_defaults.toml": "[defaults.upstream]\nheaders = { Referer = \"a\" }\n",
+		"channels.d/gr.toml":        "tunnel = \"direct\"\n[defaults.upstream]\nheaders = { Origin = \"b\" }\n" + ch("[channel.upstream]", "headers = { Accept = \"*/*\" }"),
+	}
+	if _, err := loadDir(writeConfigDir(t, files)); err != nil {
+		t.Errorf("Load() error = %v", err)
+	}
 }
