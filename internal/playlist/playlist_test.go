@@ -19,10 +19,14 @@ func TestMain(m *testing.M) {
 	goleak.VerifyTestMain(m)
 }
 
-// load reads the config dir testdata/<dir>/config.
+// load reads the config dir testdata/<dir>/config; "example" is the shipped
+// examples/config.
 func load(t *testing.T, dir string) *config.Config {
 	t.Helper()
 	cfgDir := filepath.Join("testdata", dir, "config")
+	if dir == "example" {
+		cfgDir = filepath.Join("..", "..", "examples", "config")
+	}
 	cfg, err := config.Load(config.Options{Paths: config.Paths{
 		ConfigDir:  cfgDir,
 		TunnelsDir: filepath.Join(cfgDir, "tunnels"),
@@ -58,13 +62,13 @@ func TestRenderGolden(t *testing.T) {
 		base  string
 		noEPG bool
 	}{
-		// The example of spec 6, byte for byte.
-		{name: "spec-example", dir: "spec-example", base: "http://wsp.lan:2349"},
+		// The shipped example config.
+		{name: "example", dir: "example", base: "http://wsp.lan:2349"},
 		// Greek names, commas and quotes in names and values, empty
 		// values, disabled channel, logo kinds, extra ordering, the
 		// .m3u8 suffix rule, a base URL with a path prefix.
 		{name: "channels", dir: "channels", base: "https://tv.example.org/wsp"},
-		{name: "no-epg", dir: "spec-example", base: "http://[2001:db8::1]:2349", noEPG: true},
+		{name: "no-epg", dir: "example", base: "http://[2001:db8::1]:2349", noEPG: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

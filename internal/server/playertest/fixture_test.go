@@ -3,346 +3,472 @@
 package playertest
 
 import (
-	"bufio"
 	"bytes"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
-	"net/http/httptest"
+	"path"
 	"strconv"
 	"strings"
 	"sync"
-	"testing"
-	"testing/fstest"
 	"time"
 )
 
-// manualClock is an injected clock that only moves in advance.
-type manualClock struct {
-	mu  sync.Mutex
-	now time.Time
+// Defaults of Options.
+const (
+	DefaultWindow  = 3
+	DefaultMetaInt = 8192
+)
+
+// icyTitle is the metadata of the radio streams.
+const icyTitle = "StreamTitle='Test tone';"
+
+// Options configure Fixtures.
+type Options struct {
+	// Now is the clock of the live windows; nil means time.Now.
+	Now func() time.Time
+	// Window is the number of segments in a live media playlist; 0 means
+	// DefaultWindow.
+	Window int
+	// MetaInt is the icy-metaint of Icecast-like streams; 0 means
+	// DefaultMetaInt.
+	MetaInt int
 }
 
-func (c *manualClock) Now() time.Time {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.now
+// Fixtures is an http.Handler serving the fixtures in its file system,
+// one directory per fixture (testdata/media):
+//
+//   - /vod/{fixture}/{file}: the file as is; media playlists are VOD
+//     playlists with ENDLIST.
+//   - /live/{fixture}/{file}: media playlists (with #EXTINF) become a
+//     live window of Window segments. The first request of any file of the
+//     fixture starts its clock; one more segment is published whenever
+//     the duration of the next segment has passed, and ENDLIST is added
+//     once the last segment is out. Other files are served as is.
+//   - /redirect/{file}: a 302 redirect to /vod/{file}, like a channel
+//     URL that redirects to its CDN.
+//   - /raw/{fixture}: the segments of {fixture}/index.m3u8 in one
+//     response, like a raw MPEG-TS channel.
+//   - /icecast/{file}: the file in an endless loop with icy-* headers,
+//     and with icy-metaint metadata if the request has Icy-MetaData: 1.
+//   - /shoutcast/{file}: the same loop after an "ICY 200 OK" status line,
+//     like a Shoutcast v1 server.
+//
+// Files are served with Range support.
+type Fixtures struct {
+	fsys    fs.FS
+	now     func() time.Time
+	window  int
+	metaInt int
+
+	mu       sync.Mutex
+	origins  map[string]time.Time
+	requests []string
+	conns    map[net.Conn]struct{}
+	closed   bool
+	done     chan struct{}
 }
 
-func (c *manualClock) advance(d time.Duration) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.now = c.now.Add(d)
-}
-
-// vodPlaylist is a media playlist as ffmpeg's hls muxer writes it.
-const vodPlaylist = `#EXTM3U
-#EXT-X-VERSION:3
-#EXT-X-TARGETDURATION:2
-#EXT-X-MEDIA-SEQUENCE:0
-#EXT-X-PLAYLIST-TYPE:VOD
-#EXT-X-KEY:METHOD=AES-128,URI="key.bin",IV=0x00000000000000000000000000000001
-#EXTINF:2.000000,
-seg0.ts
-#EXTINF:2.000000,
-seg1.ts
-#EXTINF:2.000000,
-seg2.ts
-#EXTINF:1.500000,
-seg3.ts
-#EXTINF:2.000000,
-seg4.ts
-#EXT-X-ENDLIST
-`
-
-const masterPlaylist = "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1\nindex.m3u8\n"
-
-func testFS() fstest.MapFS {
-	f := fstest.MapFS{
-		"a/index.m3u8":  {Data: []byte(vodPlaylist)},
-		"a/master.m3u8": {Data: []byte(masterPlaylist)},
-		"a/key.bin":     {Data: []byte("test-only-key-01")},
-		"b/index.m3u8":  {Data: []byte(vodPlaylist)},
-		"r/tone.mp3":    {Data: []byte("0123456789abcdefghijklmnopqrstuvwxyz")},
-		"d/m.mpd":       {Data: []byte("<MPD/>")},
+// New returns Fixtures serving fsys.
+func New(fsys fs.FS, opts Options) *Fixtures {
+	f := &Fixtures{
+		fsys:    fsys,
+		now:     opts.Now,
+		window:  opts.Window,
+		metaInt: opts.MetaInt,
+		origins: map[string]time.Time{},
+		conns:   map[net.Conn]struct{}{},
+		done:    make(chan struct{}),
 	}
-	for i := range 5 {
-		f["a/seg"+strconv.Itoa(i)+".ts"] = &fstest.MapFile{Data: []byte("segment " + strconv.Itoa(i) + ";")}
+	if f.now == nil {
+		f.now = time.Now
+	}
+	if f.window <= 0 {
+		f.window = DefaultWindow
+	}
+	if f.metaInt <= 0 {
+		f.metaInt = DefaultMetaInt
 	}
 	return f
 }
 
-func newTestFixtures(t *testing.T) (*Fixtures, *manualClock, *httptest.Server) {
-	t.Helper()
-	clock := &manualClock{now: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
-	f := New(testFS(), Options{Now: clock.Now, Window: 2, MetaInt: 10})
-	srv := httptest.NewServer(f)
-	t.Cleanup(func() {
-		f.Close()
-		srv.Close()
-	})
-	return f, clock, srv
+// Close ends all endless streams, including hijacked Shoutcast
+// connections, which http.Server.Close does not close. Later stream
+// requests end at once. It is safe to call more than once.
+func (f *Fixtures) Close() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.closed {
+		return
+	}
+	f.closed = true
+	close(f.done)
+	for c := range f.conns {
+		_ = c.Close()
+	}
 }
 
-func get(t *testing.T, srv *httptest.Server, path string, h http.Header) (*http.Response, string) {
-	t.Helper()
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+path, nil)
+// Requests returns the paths of all requests so far, in order.
+func (f *Fixtures) Requests() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.requests...)
+}
+
+// ServeHTTP implements http.Handler.
+func (f *Fixtures) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	f.mu.Lock()
+	f.requests = append(f.requests, r.URL.Path)
+	f.mu.Unlock()
+
+	mode, name, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, "/"), "/")
+	switch mode {
+	case "vod":
+		f.serveFile(w, r, name)
+	case "live":
+		f.serveLive(w, r, name)
+	case "redirect":
+		http.Redirect(w, r, "/vod/"+name, http.StatusFound)
+	case "raw":
+		f.serveRaw(w, r, name)
+	case "icecast":
+		f.serveIcecast(w, r, name)
+	case "shoutcast":
+		f.serveShoutcast(w, r, name)
+	default:
+		http.NotFound(w, r)
+	}
+}
+
+// contentTypes maps file extensions to the Content-Type of the fixture
+// server.
+var contentTypes = map[string]string{
+	".m3u8": "application/vnd.apple.mpegurl",
+	".mpd":  "application/dash+xml",
+	".ts":   "video/mp2t",
+	".m4s":  "video/iso.segment",
+	".mp4":  "video/mp4",
+	".mp3":  "audio/mpeg",
+}
+
+func contentType(name string) string {
+	if ct, ok := contentTypes[path.Ext(name)]; ok {
+		return ct
+	}
+	return "application/octet-stream"
+}
+
+// readFile returns a regular file of the fixtures.
+func (f *Fixtures) readFile(name string) ([]byte, bool) {
+	st, err := fs.Stat(f.fsys, name)
+	if err != nil || !st.Mode().IsRegular() {
+		return nil, false
+	}
+	b, err := fs.ReadFile(f.fsys, name)
+	return b, err == nil
+}
+
+// serveFile serves a file as is, with Range support.
+func (f *Fixtures) serveFile(w http.ResponseWriter, r *http.Request, name string) {
+	b, ok := f.readFile(name)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", contentType(name))
+	http.ServeContent(w, r, "", time.Time{}, bytes.NewReader(b))
+}
+
+// serveLive serves media playlists as a live window, everything else as
+// is.
+func (f *Fixtures) serveLive(w http.ResponseWriter, r *http.Request, name string) {
+	fixture, _, _ := strings.Cut(name, "/")
+	now := f.now()
+	f.mu.Lock()
+	origin, ok := f.origins[fixture]
+	if !ok {
+		origin = now
+		f.origins[fixture] = now
+	}
+	f.mu.Unlock()
+
+	if path.Ext(name) != ".m3u8" {
+		f.serveFile(w, r, name)
+		return
+	}
+	b, ok := f.readFile(name)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	p := parseMedia(b)
+	if len(p.segments) == 0 {
+		// A master playlist.
+		f.serveFile(w, r, name)
+		return
+	}
+	out := p.live(f.window, now.Sub(origin))
+	w.Header().Set("Content-Type", contentType(name))
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Content-Length", strconv.Itoa(len(out)))
+	_, _ = w.Write(out)
+}
+
+// serveRaw serves the segments of a fixture's index.m3u8 as one stream.
+func (f *Fixtures) serveRaw(w http.ResponseWriter, r *http.Request, fixture string) {
+	b, ok := f.readFile(path.Join(fixture, "index.m3u8"))
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	var segs [][]byte
+	for _, s := range parseMedia(b).segments {
+		seg, ok := f.readFile(path.Join(fixture, s.uri))
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		segs = append(segs, seg)
+	}
+	w.Header().Set("Content-Type", "video/mp2t")
+	w.WriteHeader(http.StatusOK)
+	rc := http.NewResponseController(w)
+	for _, seg := range segs {
+		if _, err := w.Write(seg); err != nil {
+			return
+		}
+		if err := rc.Flush(); err != nil {
+			return
+		}
+	}
+}
+
+// serveIcecast serves a file in an endless loop like an Icecast server.
+func (f *Fixtures) serveIcecast(w http.ResponseWriter, r *http.Request, name string) {
+	b, ok := f.readFile(name)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	h := w.Header()
+	h.Set("Content-Type", contentType(name))
+	h.Set("Cache-Control", "no-cache")
+	h.Set("Icy-Name", "Test tone")
+	h.Set("Icy-Genre", "Test")
+	h.Set("Icy-Br", "32")
+	h.Set("Icy-Pub", "0")
+	var out io.Writer = w
+	if r.Header.Get("Icy-MetaData") == "1" {
+		h.Set("Icy-Metaint", strconv.Itoa(f.metaInt))
+		out = &icyWriter{w: w, every: f.metaInt, meta: icyBlock(icyTitle)}
+	}
+	w.WriteHeader(http.StatusOK)
+	rc := http.NewResponseController(w)
+	for f.open(r) {
+		if _, err := out.Write(b); err != nil {
+			return
+		}
+		if err := rc.Flush(); err != nil {
+			return
+		}
+	}
+}
+
+// serveShoutcast serves a file in an endless loop like a Shoutcast v1
+// server: the status line is "ICY 200 OK", not HTTP.
+func (f *Fixtures) serveShoutcast(w http.ResponseWriter, r *http.Request, name string) {
+	b, ok := f.readFile(name)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	hj, ok := w.(http.Hijacker)
+	if !ok {
+		http.Error(w, "no hijacking", http.StatusInternalServerError)
+		return
+	}
+	c, brw, err := hj.Hijack()
 	if err != nil {
-		t.Fatal(err)
-	}
-	for k, v := range h {
-		req.Header[k] = v
-	}
-	resp, err := srv.Client().Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	b, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return resp, string(b)
-}
-
-// liveHeader is the header of the live form of vodPlaylist.
-func liveHeader(seq int) string {
-	return "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:" + strconv.Itoa(seq) + "\n" +
-		"#EXT-X-KEY:METHOD=AES-128,URI=\"key.bin\",IV=0x00000000000000000000000000000001\n"
-}
-
-func TestLiveWindow(t *testing.T) {
-	seg := func(d string, i int) string { return "#EXTINF:" + d + ",\nseg" + strconv.Itoa(i) + ".ts\n" }
-	tests := []struct {
-		after time.Duration // since the first request of the fixture
-		want  string
-	}{
-		{0, liveHeader(0) + seg("2.000000", 0) + seg("2.000000", 1)},
-		{1999 * time.Millisecond, liveHeader(0) + seg("2.000000", 0) + seg("2.000000", 1)},
-		{2 * time.Second, liveHeader(1) + seg("2.000000", 1) + seg("2.000000", 2)},
-		// seg3 is 1.5 s long: published 3.5 s after the start.
-		{3499 * time.Millisecond, liveHeader(1) + seg("2.000000", 1) + seg("2.000000", 2)},
-		{3500 * time.Millisecond, liveHeader(2) + seg("2.000000", 2) + seg("1.500000", 3)},
-		// The last segment is out: the event ended.
-		{5500 * time.Millisecond, liveHeader(3) + seg("1.500000", 3) + seg("2.000000", 4) + "#EXT-X-ENDLIST\n"},
-		{time.Hour, liveHeader(3) + seg("1.500000", 3) + seg("2.000000", 4) + "#EXT-X-ENDLIST\n"},
-	}
-	_, clock, srv := newTestFixtures(t)
-	var elapsed time.Duration
-	for _, tt := range tests {
-		clock.advance(tt.after - elapsed)
-		elapsed = tt.after
-		resp, body := get(t, srv, "/live/a/index.m3u8", nil)
-		if resp.StatusCode != http.StatusOK || body != tt.want {
-			t.Errorf("after %v: status %d, body\n%s\nwant\n%s", tt.after, resp.StatusCode, body, tt.want)
-		}
-		if ct, cc := resp.Header.Get("Content-Type"), resp.Header.Get("Cache-Control"); ct != "application/vnd.apple.mpegurl" || cc != "no-cache" {
-			t.Errorf("after %v: Content-Type %q, Cache-Control %q", tt.after, ct, cc)
-		}
-	}
-}
-
-func TestLiveOriginPerFixture(t *testing.T) {
-	_, clock, srv := newTestFixtures(t)
-	// Any request of a fixture starts its clock, not only playlists.
-	get(t, srv, "/live/a/master.m3u8", nil)
-	clock.advance(4 * time.Second)
-	if _, body := get(t, srv, "/live/a/index.m3u8", nil); !strings.HasPrefix(body, liveHeader(2)) {
-		t.Errorf("fixture a after 4 s:\n%s\nwant media sequence 2", body)
-	}
-	if _, body := get(t, srv, "/live/b/index.m3u8", nil); !strings.HasPrefix(body, liveHeader(0)) {
-		t.Errorf("fixture b on its first request:\n%s\nwant media sequence 0", body)
-	}
-}
-
-func TestStatic(t *testing.T) {
-	tests := []struct {
-		name, path string
-		header     http.Header
-		status     int
-		ctype      string
-		body       string
-	}{
-		{"vod playlist as is", "/vod/a/index.m3u8", nil, http.StatusOK, "application/vnd.apple.mpegurl", vodPlaylist},
-		{"live master as is", "/live/a/master.m3u8", nil, http.StatusOK, "application/vnd.apple.mpegurl", masterPlaylist},
-		{"segment", "/live/a/seg1.ts", nil, http.StatusOK, "video/mp2t", "segment 1;"},
-		{"key", "/vod/a/key.bin", nil, http.StatusOK, "application/octet-stream", "test-only-key-01"},
-		{"range", "/vod/a/seg0.ts", http.Header{"Range": {"bytes=0-6"}}, http.StatusPartialContent, "video/mp2t", "segment"},
-		{"missing file", "/vod/a/seg9.ts", nil, http.StatusNotFound, "", ""},
-		{"unknown mode", "/other/a/seg0.ts", nil, http.StatusNotFound, "", ""},
-		{"directory", "/vod/a", nil, http.StatusNotFound, "", ""},
-		{"raw ts", "/raw/a", nil, http.StatusOK, "video/mp2t", "segment 0;segment 1;segment 2;segment 3;segment 4;"},
-		{"raw without playlist", "/raw/r", nil, http.StatusNotFound, "", ""},
-		{"dash manifest", "/vod/d/m.mpd", nil, http.StatusOK, "application/dash+xml", "<MPD/>"},
-	}
-	f, _, srv := newTestFixtures(t)
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			resp, body := get(t, srv, tt.path, tt.header)
-			if resp.StatusCode != tt.status {
-				t.Fatalf("status %d, want %d", resp.StatusCode, tt.status)
-			}
-			if tt.status == http.StatusNotFound {
-				return
-			}
-			if ct := resp.Header.Get("Content-Type"); ct != tt.ctype {
-				t.Errorf("Content-Type %q, want %q", ct, tt.ctype)
-			}
-			if body != tt.body {
-				t.Errorf("body %q, want %q", body, tt.body)
-			}
-		})
-	}
-	reqs := f.Requests()
-	if len(reqs) != len(tests) || reqs[0] != "/vod/a/index.m3u8" {
-		t.Errorf("Requests() = %v, want the %d test paths in order", reqs, len(tests))
-	}
-}
-
-// readStream reads n bytes of an endless response.
-func readStream(t *testing.T, srv *httptest.Server, path string, h http.Header, n int) (*http.Response, []byte) {
-	t.Helper()
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+path, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	req.Header = h
-	resp, err := srv.Client().Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	b := make([]byte, n)
-	if _, err := io.ReadFull(resp.Body, b); err != nil {
-		t.Fatalf("read stream: %v", err)
-	}
-	return resp, b
-}
-
-func TestIcecast(t *testing.T) {
-	const tone = "0123456789abcdefghijklmnopqrstuvwxyz"
-	loop := strings.Repeat(tone, 4)
-	_, _, srv := newTestFixtures(t)
-
-	t.Run("without metadata", func(t *testing.T) {
-		resp, b := readStream(t, srv, "/icecast/r/tone.mp3", nil, len(loop))
-		if string(b) != loop {
-			t.Errorf("stream %q, want the file in a loop", b)
-		}
-		if ct, name, mi := resp.Header.Get("Content-Type"), resp.Header.Get("Icy-Name"), resp.Header.Get("Icy-Metaint"); ct != "audio/mpeg" || name == "" || mi != "" {
-			t.Errorf("Content-Type %q, icy-name %q, icy-metaint %q", ct, name, mi)
-		}
-		if resp.ContentLength != -1 {
-			t.Errorf("Content-Length %d, want none", resp.ContentLength)
-		}
-	})
-
-	t.Run("with metadata", func(t *testing.T) {
-		resp, b := readStream(t, srv, "/icecast/r/tone.mp3", http.Header{"Icy-Metadata": {"1"}}, 200)
-		if mi := resp.Header.Get("Icy-Metaint"); mi != "10" {
-			t.Fatalf("icy-metaint %q, want 10", mi)
-		}
-		// Every 10 audio bytes a metadata block: length byte (x16), text.
-		var audio bytes.Buffer
-		titles := 0
-		for len(b) > 10 {
-			audio.Write(b[:10])
-			n := int(b[10]) * 16
-			if len(b) < 11+n {
-				break
-			}
-			meta := string(bytes.TrimRight(b[11:11+n], "\x00"))
-			if meta != "StreamTitle='Test tone';" {
-				t.Fatalf("metadata %q", meta)
-			}
-			titles++
-			b = b[11+n:]
-		}
-		if titles == 0 || !strings.HasPrefix(loop, audio.String()) {
-			t.Errorf("%d metadata blocks, audio %q, want the file in a loop", titles, audio.String())
-		}
-	})
-}
-
-func TestShoutcast(t *testing.T) {
-	_, _, srv := newTestFixtures(t)
-	c, err := net.Dial("tcp", srv.Listener.Addr().String())
-	if err != nil {
-		t.Fatal(err)
+		return
 	}
 	defer func() { _ = c.Close() }()
-	if _, err := io.WriteString(c, "GET /shoutcast/r/tone.mp3 HTTP/1.1\r\nHost: x\r\n\r\n"); err != nil {
-		t.Fatal(err)
+	if !f.track(c) {
+		return
 	}
-	r := bufio.NewReader(c)
-	status, err := r.ReadString('\n')
-	if err != nil || status != "ICY 200 OK\r\n" {
-		t.Fatalf("status line %q, %v; want ICY 200 OK", status, err)
+	defer f.untrack(c)
+	_, _ = brw.WriteString("ICY 200 OK\r\nicy-name:Test tone\r\nicy-genre:Test\r\nicy-br:32\r\nicy-pub:0\r\n" +
+		"content-type:" + contentType(name) + "\r\n\r\n")
+	if brw.Flush() != nil {
+		return
 	}
-	var header []string
-	for {
-		line, err := r.ReadString('\n')
-		if err != nil {
-			t.Fatal(err)
+	for f.open(r) {
+		if _, err := c.Write(b); err != nil {
+			return
 		}
-		if line == "\r\n" {
+	}
+}
+
+// open reports whether an endless stream may go on.
+func (f *Fixtures) open(r *http.Request) bool {
+	select {
+	case <-f.done:
+		return false
+	case <-r.Context().Done():
+		return false
+	default:
+		return true
+	}
+}
+
+// track registers a hijacked connection for Close; false if Close
+// already ran.
+func (f *Fixtures) track(c net.Conn) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.closed {
+		return false
+	}
+	f.conns[c] = struct{}{}
+	return true
+}
+
+func (f *Fixtures) untrack(c net.Conn) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.conns, c)
+}
+
+// icyBlock returns an ICY metadata block: a length byte in units of 16
+// bytes, then the text padded with NUL bytes.
+func icyBlock(text string) []byte {
+	n := (len(text) + 15) / 16
+	b := make([]byte, 1+n*16)
+	b[0] = byte(n)
+	copy(b[1:], text)
+	return b
+}
+
+// icyWriter inserts a metadata block after every `every` bytes of audio.
+type icyWriter struct {
+	w     io.Writer
+	every int
+	meta  []byte
+	n     int // audio bytes since the last metadata block
+}
+
+func (iw *icyWriter) Write(p []byte) (int, error) {
+	written := 0
+	for len(p) > 0 {
+		k := min(len(p), iw.every-iw.n)
+		if _, err := iw.w.Write(p[:k]); err != nil {
+			return written, err
+		}
+		written += k
+		iw.n += k
+		p = p[k:]
+		if iw.n == iw.every {
+			if _, err := iw.w.Write(iw.meta); err != nil {
+				return written, err
+			}
+			iw.n = 0
+		}
+	}
+	return written, nil
+}
+
+// mediaPlaylist is a parsed VOD media playlist.
+type mediaPlaylist struct {
+	// header holds the lines before the first segment, without
+	// EXT-X-MEDIA-SEQUENCE, EXT-X-PLAYLIST-TYPE and EXT-X-ENDLIST.
+	header []string
+	// seqAt is the index in header where EXT-X-MEDIA-SEQUENCE goes.
+	seqAt    int
+	segments []segment
+}
+
+// segment is one media segment: its tag lines and the URI line.
+type segment struct {
+	lines []string
+	uri   string
+	dur   time.Duration
+}
+
+// parseMedia parses a media playlist as ffmpeg's hls muxer writes it.
+// Tags before the first #EXTINF belong to the header; tags after a URI
+// belong to the next segment.
+func parseMedia(b []byte) mediaPlaylist {
+	var p mediaPlaylist
+	seqSeen := false
+	inHeader := true
+	var cur segment
+	for _, line := range strings.Split(strings.TrimRight(string(b), "\n"), "\n") {
+		line = strings.TrimRight(line, "\r")
+		switch {
+		case line == "#EXT-X-ENDLIST", strings.HasPrefix(line, "#EXT-X-PLAYLIST-TYPE:"):
+			continue
+		case strings.HasPrefix(line, "#EXT-X-MEDIA-SEQUENCE:"):
+			if !seqSeen {
+				p.seqAt = len(p.header)
+				seqSeen = true
+			}
+			continue
+		case strings.HasPrefix(line, "#EXTINF:"):
+			inHeader = false
+			v, _, _ := strings.Cut(strings.TrimPrefix(line, "#EXTINF:"), ",")
+			sec, _ := strconv.ParseFloat(v, 64)
+			cur.dur = time.Duration(sec * float64(time.Second))
+		case inHeader:
+			p.header = append(p.header, line)
+			continue
+		}
+		cur.lines = append(cur.lines, line)
+		if line != "" && !strings.HasPrefix(line, "#") {
+			cur.uri = line
+			p.segments = append(p.segments, cur)
+			cur = segment{}
+		}
+	}
+	if !seqSeen {
+		p.seqAt = len(p.header)
+	}
+	return p
+}
+
+// live returns the playlist as a live window of up to window segments
+// after elapsed: the first window segments are there from the start, the
+// next one is published when its duration has passed, and so on. Once
+// the last segment is out, ENDLIST ends the playlist.
+func (p mediaPlaylist) live(window int, elapsed time.Duration) []byte {
+	n := len(p.segments)
+	avail := min(window, n)
+	var acc time.Duration
+	for avail < n {
+		acc += p.segments[avail].dur
+		if acc > elapsed {
 			break
 		}
-		header = append(header, strings.TrimSpace(line))
+		avail++
 	}
-	if !strings.Contains(strings.Join(header, "\n"), "content-type:audio/mpeg") {
-		t.Errorf("header %q lacks content-type:audio/mpeg", header)
-	}
-	b := make([]byte, 72)
-	if _, err := io.ReadFull(r, b); err != nil {
-		t.Fatal(err)
-	}
-	if want := strings.Repeat("0123456789abcdefghijklmnopqrstuvwxyz", 2); string(b) != want {
-		t.Errorf("stream %q, want %q", b, want)
-	}
-}
+	start := max(0, avail-window)
 
-// TestCloseEndsShoutcast checks that Close ends hijacked streams, which
-// http.Server.Close does not.
-func TestCloseEndsShoutcast(t *testing.T) {
-	f := New(testFS(), Options{})
-	srv := httptest.NewServer(f)
-	defer srv.Close()
-	c, err := net.Dial("tcp", srv.Listener.Addr().String())
-	if err != nil {
-		t.Fatal(err)
+	var b bytes.Buffer
+	for i, line := range p.header {
+		if i == p.seqAt {
+			b.WriteString("#EXT-X-MEDIA-SEQUENCE:" + strconv.Itoa(start) + "\n")
+		}
+		b.WriteString(line + "\n")
 	}
-	defer func() { _ = c.Close() }()
-	if _, err := io.WriteString(c, "GET /shoutcast/r/tone.mp3 HTTP/1.1\r\nHost: x\r\n\r\n"); err != nil {
-		t.Fatal(err)
+	if p.seqAt == len(p.header) {
+		b.WriteString("#EXT-X-MEDIA-SEQUENCE:" + strconv.Itoa(start) + "\n")
 	}
-	r := bufio.NewReader(c)
-	if _, err := r.ReadString('\n'); err != nil {
-		t.Fatal(err)
+	for _, s := range p.segments[start:avail] {
+		for _, line := range s.lines {
+			b.WriteString(line + "\n")
+		}
 	}
-	f.Close()
-	if _, err := io.Copy(io.Discard, r); err != nil {
-		t.Logf("stream ended with %v", err)
+	if avail == n {
+		b.WriteString("#EXT-X-ENDLIST\n")
 	}
-}
-
-func TestRedirect(t *testing.T) {
-	f, _, srv := newTestFixtures(t)
-	c := *srv.Client()
-	c.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/redirect/d/m.mpd", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp, err := c.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusFound || resp.Header.Get("Location") != "/vod/d/m.mpd" {
-		t.Errorf("status %d, Location %q; want 302 to /vod/d/m.mpd", resp.StatusCode, resp.Header.Get("Location"))
-	}
-	if reqs := f.Requests(); len(reqs) != 1 || reqs[0] != "/redirect/d/m.mpd" {
-		t.Errorf("Requests() = %v", reqs)
-	}
+	return b.Bytes()
 }

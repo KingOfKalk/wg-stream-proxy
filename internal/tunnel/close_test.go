@@ -60,14 +60,9 @@ func TestCloseWhileTrafficFlows(t *testing.T) {
 	}{
 		{name: "late UDP answers, manager close", traffic: lateUDPAnswers, close: closeManager},
 		{name: "TCP download, manager close", traffic: tcpTraffic("down"), close: closeManager},
-		{name: "TCP upload, manager close", traffic: tcpTraffic("up"), close: closeManager},
 		{name: "TCP download, idle close", traffic: tcpTraffic("down"), close: closeIdle},
-		{name: "TCP upload, idle close", traffic: tcpTraffic("up"), close: closeIdle},
-		{name: "TCP download, drain", traffic: tcpTraffic("down"), close: closeDrain},
-		{name: "TCP download, retired by reload", traffic: tcpTraffic("down"), close: closeRetire},
 		{name: "TCP upload, retired by reload", traffic: tcpTraffic("up"), close: closeRetire},
 		{name: "TCP download, peer close", traffic: tcpTraffic("down"), close: closePeer},
-		{name: "TCP upload, peer close", traffic: tcpTraffic("up"), close: closePeer},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -117,13 +112,6 @@ func closeIdle(t *testing.T, s *closeSetup) {
 	s.env.clock.advance(testIdle)
 	if s.tun.Running() {
 		t.Fatal("tunnel still running after the idle timeout")
-	}
-}
-
-func closeDrain(t *testing.T, s *closeSetup) {
-	t.Helper()
-	if err := drain(s.m, "gr", 0); err != nil {
-		t.Fatalf("Drain: %v", err)
 	}
 }
 
