@@ -68,9 +68,11 @@ var xmlRoots = map[string]string{
 // "dash") as DASH, so only raw channels refuse them.
 // A configured Raw type ignores the Content-Type, like Detect, but not the
 // body. prefix is the start of the body as Sniff returns it; a body that
-// starts like XML is FormatUnknown unless it is a playlist (its format)
-// or one complete TTML document within XMLSniffLen bytes; UTF-16 or
-// UTF-32 text is FormatUnknown too (fail closed).
+// starts like XML is FormatUnknown unless it is a playlist (its format,
+// whatever its encoding or control bytes), one complete TTML document
+// within XMLSniffLen bytes, or binary without a root element (media may
+// start with '<'); UTF-16 or UTF-32 text is FormatUnknown too (fail
+// closed).
 func Unsupported(contentType string, prefix []byte, configured Type) string {
 	if configured == HLS || configured == DASH {
 		return ""
@@ -101,10 +103,19 @@ func Unsupported(contentType string, prefix []byte, configured Type) string {
 	case bytes.HasPrefix(body, []byte("#EXTM3U")):
 		// Only on a raw channel; Detect calls it HLS otherwise.
 		return FormatM3U
-	case text && len(body) > 0 && body[0] == '<':
+	case len(body) > 0 && body[0] == '<':
+		// Whatever text says: players read playlists in legacy
+		// encodings and stop at a control byte only after the root.
 		root, ok := xmlRoot(body)
 		if !ok {
-			return FormatUnknown
+			// A printable AES-128 key may start with '<'; it is rarely
+			// valid UTF-8.
+			if text && (len(prefix) > maxBinaryTextLen || utf8.Valid(prefix)) {
+				return FormatUnknown
+			}
+			// Binary without a root element: media such as AES
+			// ciphertext or MP3 from mid-frame may start with '<'.
+			return ""
 		}
 		if f := xmlRoots[strings.ToLower(root)]; f != "" {
 			return f
@@ -114,7 +125,7 @@ func Unsupported(contentType string, prefix []byte, configured Type) string {
 		// if it is provably harmless: whole within the sniff window, one
 		// top-level element of a media format, nothing a lighter parser
 		// could read differently.
-		if mediaXML[strings.ToLower(root)] && len(prefix) < XMLSniffLen && singleElement(body) {
+		if text && mediaXML[strings.ToLower(root)] && len(prefix) < XMLSniffLen && singleElement(body) {
 			return ""
 		}
 		return FormatUnknown
@@ -141,30 +152,21 @@ func stripBOMs(b []byte) []byte {
 }
 
 // textLike reports whether a body prefix is text: after any number of
-// UTF-8 byte order marks, at least one byte, valid UTF-8 (a rune cut off
-// at the end of the prefix is fine) without control characters other
-// than TAB, LF, CR and FF, and without DEL. Media and ciphertext are not:
-// a random byte is a control character or breaks UTF-8 within a few
-// bytes.
+// UTF-8 byte order marks, at least one byte, no control characters other
+// than TAB, LF, CR and FF, and no DEL. Bytes from 0x80 are text in any
+// encoding, so playlists in ISO-8859-1, Windows-1252 and other legacy
+// encodings are text too. Media and ciphertext are not: a random byte is
+// a control character with a probability of 29/256, so 512 random bytes
+// avoid them with a probability of about 10^-27.
 func textLike(prefix []byte) bool {
 	b := stripBOMs(prefix)
 	if len(b) == 0 {
 		return false
 	}
-	for len(b) > 0 {
-		c := b[0]
-		if c < utf8.RuneSelf {
-			if c < 0x20 && c != '\t' && c != '\n' && c != '\r' && c != '\f' || c == 0x7f {
-				return false
-			}
-			b = b[1:]
-			continue
+	for _, c := range b {
+		if c < 0x20 && c != '\t' && c != '\n' && c != '\r' && c != '\f' || c == 0x7f {
+			return false
 		}
-		r, size := utf8.DecodeRune(b)
-		if r == utf8.RuneError && size == 1 {
-			return !utf8.FullRune(b) // cut off at the end of the prefix
-		}
-		b = b[size:]
 	}
 	return true
 }

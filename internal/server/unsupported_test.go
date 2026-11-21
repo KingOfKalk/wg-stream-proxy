@@ -3,6 +3,7 @@
 package server
 
 import (
+	"fmt"
 	"math/rand/v2"
 	"net/http"
 	"strings"
@@ -32,7 +33,7 @@ type = "hls"
 `
 
 // TestUnsupportedPlaylists checks spec 3.3: a playlist the proxy does not
-// rewrite is refused with 502 on auto and raw channels and /r/
+// rewrite is refused with 502 on auto and raw channels and /r/ and /p/
 // resources, so the player never gets its upstream URLs; media streams.
 func TestUnsupportedPlaylists(t *testing.T) {
 	// secret is a path segment of every URL in the playlists; it must
@@ -60,7 +61,27 @@ func TestUnsupportedPlaylists(t *testing.T) {
 			name: "extended m3u on a raw channel", ctype: "audio/x-mpegurl",
 			body: "#EXTM3U\n#EXTINF:-1,Radio\n" + stream + "\n", format: "m3u", channels: []string{"raw"},
 		},
+		// Not UTF-8 text (issue 155), with a Content-Type outside the
+		// refusal table: refused all the same.
+		{
+			name: "asx in latin-1", ctype: "video/x-ms-asf",
+			body: "<asx version=\"3.0\"><title>Radio \xd6sterreich</title><entry><ref href=\"" + stream + "\"/></entry></asx>", format: "asx",
+		},
+		{
+			name: "xspf in latin-1", ctype: "application/xml",
+			body: "<?xml version=\"1.0\" encoding=\"ISO-8859-1\"?>\n<playlist version=\"1\"><title>Caf\xe9</title><trackList><track><location>" +
+				stream + "</location></track></trackList></playlist>", format: "xspf",
+		},
+		{
+			name: "html in latin-1", ctype: "text/html; charset=iso-8859-1",
+			body: "<html><head><title>R\xe4dio</title></head><body><a href=\"" + stream + "\">Stream</a></body></html>", format: "unknown",
+		},
+		{
+			name: "xspf root followed by NUL", ctype: "application/octet-stream",
+			body: "<playlist version=\"1\"><trackList><track><location>" + stream + "</location></track></trackList></playlist>\x00", format: "xspf",
+		},
 		{name: "mp3", ctype: "audio/mpeg", body: "ID3\x04\x00\x00\x00\x00\x00\x00" + strings.Repeat("\xff\xfb\x90\x64", 200)},
+		{name: "mp3 from mid-frame starting with <", ctype: "audio/mpeg", body: "\x3c\x9a\x01" + strings.Repeat("\xff\xfb\x90\x64\x00\x0f\xf0\x00\x00\x69", 300)},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -71,8 +92,13 @@ func TestUnsupportedPlaylists(t *testing.T) {
 				paths = append(paths, "/c/"+ch)
 			}
 			if tt.channels == nil {
-				// Both channels and a resource of a rewritten playlist.
-				paths = []string{"/c/auto", "/c/raw", e.signer.Path("auto", e.upURL+"/list")}
+				// Both channels, a resource of a rewritten playlist and
+				// one below a prefix of a rewritten manifest.
+				prefix, err := e.signer.PrefixPath("auto", e.upURL+"/", false)
+				if err != nil {
+					t.Fatal(err)
+				}
+				paths = []string{"/c/auto", "/c/raw", e.signer.Path("auto", e.upURL+"/list"), prefix + "list"}
 			}
 			for _, p := range paths {
 				resp, body := e.get(t, p, nil)
@@ -98,8 +124,26 @@ func TestUnsupportedPlaylists(t *testing.T) {
 				if n != 0 {
 					t.Errorf("media refused:\n%s", logs)
 				}
+				compareMetrics(t, e.metrics.Gatherer(), "wsp_upstream_errors_total", errorsHead, "")
 				return
 			}
+			// Metrics reason unsupported (spec 7.3), by channel: /c/raw
+			// counts for raw, everything else for auto.
+			perChannel := map[string]int{}
+			for _, p := range paths {
+				ch := "auto"
+				if p == "/c/raw" {
+					ch = "raw"
+				}
+				perChannel[ch]++
+			}
+			var want strings.Builder
+			for _, ch := range []string{"auto", "raw"} {
+				if perChannel[ch] > 0 {
+					fmt.Fprintf(&want, "wsp_upstream_errors_total{channel=%q,reason=\"unsupported\"} %d\n", ch, perChannel[ch])
+				}
+			}
+			compareMetrics(t, e.metrics.Gatherer(), "wsp_upstream_errors_total", errorsHead, want.String())
 			if n != len(paths) {
 				t.Errorf("%d warn lines, want %d:\n%s", n, len(paths), logs)
 			}
