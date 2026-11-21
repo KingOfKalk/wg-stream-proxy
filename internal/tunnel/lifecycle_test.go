@@ -209,7 +209,7 @@ func TestDrain(t *testing.T) {
 			name: "nothing in flight closes at once",
 			run: func(t *testing.T, l *lifecycle) {
 				l.request(t)
-				if err := l.m.Drain("gr", testDrain); err != nil {
+				if err := drain(l.m, "gr", testDrain); err != nil {
 					t.Fatalf("Drain: %v", err)
 				}
 				l.wantRunning(t, false, 1)
@@ -227,7 +227,7 @@ func TestDrain(t *testing.T) {
 				end := l.tun.Begin()
 				c := l.dial(t)
 				done := make(chan error, 1)
-				go func() { done <- l.m.Drain("gr", testDrain) }()
+				go func() { done <- drain(l.m, "gr", testDrain) }()
 				l.env.clock.waitArmed(t, testDrain)
 				l.env.clock.advance(testDrain - time.Nanosecond)
 				select {
@@ -254,7 +254,7 @@ func TestDrain(t *testing.T) {
 				defer end()
 				c := l.dial(t)
 				done := make(chan error, 1)
-				go func() { done <- l.m.Drain("gr", testDrain) }()
+				go func() { done <- drain(l.m, "gr", testDrain) }()
 				l.env.clock.waitArmed(t, testDrain)
 				l.env.clock.advance(testDrain)
 				if err := <-done; err != nil {
@@ -267,7 +267,7 @@ func TestDrain(t *testing.T) {
 		{
 			name: "stopped tunnel",
 			run: func(t *testing.T, l *lifecycle) {
-				if err := l.m.Drain("gr", testDrain); err != nil {
+				if err := drain(l.m, "gr", testDrain); err != nil {
 					t.Fatalf("Drain: %v", err)
 				}
 				l.wantRunning(t, false, 0)
@@ -283,57 +283,8 @@ func TestDrain(t *testing.T) {
 
 func TestDrainUnknownTunnel(t *testing.T) {
 	m, _ := newManager(t)
-	if err := m.Drain("missing", testDrain); err == nil {
+	if err := drain(m, "missing", testDrain); err == nil {
 		t.Error("Drain(missing) succeeded")
-	}
-}
-
-func TestShutdown(t *testing.T) {
-	a := tunneltest.Start(t, tunneltest.Options{})
-	b := tunneltest.Start(t, tunneltest.Options{})
-	m, env := newManagerIdle(t, testIdle, a.ClientTunnel(t, "a"), b.ClientTunnel(t, "b"))
-	ta, tb := mustTunnel(t, m, "a"), mustTunnel(t, m, "b")
-	var stops atomic.Int64
-	ta.OnStop(func() { stops.Add(1) })
-	tb.OnStop(func() { stops.Add(1) })
-
-	endA := ta.Begin()
-	ca, err := ta.DialContext(t.Context(), "tcp4", tunneltest.ServerAddr4.String()+":80")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = ca.Close() }()
-	endB := tb.Begin()
-	cb, err := tb.DialContext(t.Context(), "tcp4", tunneltest.ServerAddr4.String()+":80")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = cb.Close() }()
-
-	done := make(chan error, 1)
-	go func() { done <- m.Shutdown(testDrain) }()
-	env.clock.waitArmed(t, testDrain)
-	endA()
-	select {
-	case err := <-done:
-		t.Fatalf("Shutdown returned with a request in flight on b: %v", err)
-	default:
-	}
-	// b's stream is stuck: the shared deadline cuts it.
-	env.clock.advance(testDrain)
-	if err := <-done; err != nil {
-		t.Fatalf("Shutdown: %v", err)
-	}
-	endB()
-	readFails(t, cb)
-	if ta.Running() || tb.Running() || stops.Load() != 2 {
-		t.Errorf("after Shutdown: a running %v, b running %v, stop hooks %d; want stopped, 2", ta.Running(), tb.Running(), stops.Load())
-	}
-	if _, err := ta.DialContext(t.Context(), "tcp", tunneltest.ServerAddr4.String()+":80"); !errors.Is(err, ErrClosed) {
-		t.Errorf("dial after Shutdown: err = %v, want ErrClosed", err)
-	}
-	if n := env.clock.pending(); n != 0 {
-		t.Errorf("%d timers armed after Shutdown, want 0", n)
 	}
 }
 
@@ -437,4 +388,10 @@ func TestOnStart(t *testing.T) {
 	if took[0] != 0 {
 		t.Errorf("start duration = %s, want 0s on the fake clock", took[0])
 	}
+}
+
+// drain stops a tunnel gracefully: a Cooldown that drops its result.
+func drain(m *Manager, name string, timeout time.Duration) error {
+	_, err := m.Cooldown(name, timeout)
+	return err
 }

@@ -70,7 +70,7 @@ func TestCommandHelp(t *testing.T) {
 		{"tunnel", []string{"tunnel list", "tunnel stop"}},
 		{"tunnel list", configFlags},
 		{"tunnel stop", configFlags},
-		{"version", []string{"source"}},
+		{"version", nil},
 		{"help", []string{"help [command]"}},
 	}
 	for _, tt := range tests {

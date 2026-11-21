@@ -175,7 +175,7 @@ func TestCooldownErrors(t *testing.T) {
 	if _, err := s.m.Cooldown("missing", testDrain); !errors.Is(err, ErrNoSuchTunnel) {
 		t.Errorf("Cooldown(missing) error = %v, want ErrNoSuchTunnel", err)
 	}
-	if err := s.m.Drain("missing", testDrain); !errors.Is(err, ErrNoSuchTunnel) {
+	if err := drain(s.m, "missing", testDrain); !errors.Is(err, ErrNoSuchTunnel) {
 		t.Errorf("Drain(missing) error = %v, want ErrNoSuchTunnel", err)
 	}
 	if err := s.m.Close(); err != nil {

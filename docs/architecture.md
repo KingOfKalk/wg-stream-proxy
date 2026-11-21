@@ -166,7 +166,8 @@ stateDiagram-v2
     Starting --> Running: handshake
     Starting --> Stopped: start failed, or no handshake<br/>within connect_timeout (502)
     Running --> Stopped: idle_timeout without activity
-    Running --> Draining: shutdown, cool-down,<br/>reload changed or removed it
+    Running --> Draining: cool-down,<br/>reload changed or removed it
+    Running --> Stopped: shutdown (after the HTTP<br/>server stopped, max 30s)
     Draining --> Stopped: in-flight done or 30s
 ```
 
@@ -240,8 +241,8 @@ and left out, as are the other direct imports of `cmd/wg-stream-proxy`.
   generation once and keeps it to its end.
 - `SIGHUP` and the changes `server.Watch` sees call `Reloader.Reload`. It
   loads all files (`config.Load`, `tunnel.Parse`); if they are valid,
-  `Manager.Apply` swaps the tunnel set, `route.Set.Next` builds the next
-  routes (unchanged routes keep their pools) and the new generation
+  `Manager.Apply` swaps the tunnel set, `route.NewSet` builds new
+  routes (empty pools; the old routes close their idle connections) and the new generation
   serves new requests. An invalid config changes nothing (spec 5.6).
   `cmd/wg-stream-proxy` wires the signal and the watcher to the reloader.
 

@@ -67,48 +67,29 @@ type runState struct {
 	mgr    *tunnel.Manager
 	srv    *Server
 	direct route.Network
-	// wrapped is the route network of each current tunnel, so an
-	// unchanged tunnel keeps its network and its route.
-	wrapped map[*tunnel.Tunnel]route.Network
-	// dropped are the routes reloads replaced. Requests that started
+	// retired are the route sets reloads replaced. Requests that started
 	// before may still return connections to their pools.
-	dropped []*route.Route
+	retired []*route.Set
 }
 
 // buildRoutes builds the routes of cfg over the manager's current
-// tunnels, reusing the unchanged routes of prev (nil at startup), and
-// returns the routes of prev that are not reused.
-func (st *runState) buildRoutes(prev *route.Set, cfg *config.Config) (*route.Set, []*route.Route, error) {
+// tunnels. Every call builds new routes, so a reload starts with empty
+// connection pools (spec 5.6).
+func (st *runState) buildRoutes(cfg *config.Config) (*route.Set, error) {
 	tunnels := st.mgr.Tunnels()
 	nets := make(map[string]route.Network, len(tunnels))
 	activity := make(map[string]route.Activity, len(tunnels))
-	wrapped := make(map[*tunnel.Tunnel]route.Network, len(tunnels))
 	for _, t := range tunnels {
-		n, ok := st.wrapped[t]
-		if !ok {
-			n = t
-			if st.opts.WrapTunnel != nil {
-				n = st.opts.WrapTunnel(t.Name(), n)
-			}
+		var n route.Network = t
+		if st.opts.WrapTunnel != nil {
+			n = st.opts.WrapTunnel(t.Name(), n)
 		}
-		wrapped[t] = n
 		nets[t.Name()] = n
 		activity[t.Name()] = t
 	}
-	st.wrapped = wrapped
-	opts := route.Options{Upstream: cfg.Upstream(), AllowPrivate: cfg.AllowPrivate(), Activity: activity}
-	var (
-		routes  *route.Set
-		dropped []*route.Route
-		err     error
-	)
-	if prev == nil {
-		routes, err = route.NewSet(st.direct, nets, opts)
-	} else {
-		routes, dropped, err = prev.Next(st.direct, nets, opts)
-	}
+	routes, err := route.NewSet(st.direct, nets, route.Options{Upstream: cfg.Upstream(), AllowPrivate: cfg.AllowPrivate(), Activity: activity})
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	// A stopped tunnel (idle close, drain) takes the route's pooled
 	// connections with it.
@@ -117,7 +98,7 @@ func (st *runState) buildRoutes(prev *route.Set, cfg *config.Config) (*route.Set
 			t.OnStop(rt.CloseIdleConnections)
 		}
 	}
-	return routes, dropped, nil
+	return routes, nil
 }
 
 // reload swaps in the configuration cfg that the Reloader loaded with
@@ -161,12 +142,9 @@ func (st *runState) reload(cfg *config.Config, err error) error {
 	if err == nil {
 		err = st.mgr.SetTimeouts(cfg.Upstream().ConnectTimeout, cfg.IdleTimeout())
 	}
-	var (
-		routes  *route.Set
-		dropped []*route.Route
-	)
+	var routes *route.Set
 	if err == nil {
-		routes, dropped, err = st.buildRoutes(old.routes, cfg)
+		routes, err = st.buildRoutes(cfg)
 	}
 	if err != nil {
 		// Only after a shutdown began, or with a config the loader should
@@ -175,10 +153,8 @@ func (st *runState) reload(cfg *config.Config, err error) error {
 		return fmt.Errorf("reload failed: %w", err)
 	}
 	st.srv.swap(cfg, routes)
-	for _, r := range dropped {
-		r.CloseIdleConnections()
-	}
-	st.dropped = append(st.dropped, dropped...)
+	old.routes.CloseIdleConnections()
+	st.retired = append(st.retired, old.routes)
 	if st.opts.LogLevel != nil {
 		st.opts.LogLevel.Set(cfg.LogLevel())
 	}
@@ -198,8 +174,8 @@ func (st *runState) reload(cfg *config.Config, err error) error {
 // active routes and of all routes reloads replaced.
 func (st *runState) closeIdleConnections() {
 	st.srv.active().routes.CloseIdleConnections()
-	for _, r := range st.dropped {
-		r.CloseIdleConnections()
+	for _, s := range st.retired {
+		s.CloseIdleConnections()
 	}
 }
 

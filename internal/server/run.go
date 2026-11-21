@@ -77,7 +77,7 @@ type RunOptions struct {
 // builds the routes and serves HTTP on the listener until ctx ends. Then
 // it shuts down gracefully: it stops accepting, waits up to the shutdown
 // timeout for in-flight requests, closes the remaining connections, and
-// drains and closes the tunnels within the same timeout. It returns
+// closes the tunnels. It returns
 // startup and serve errors; a shutdown after ctx ended returns nil.
 //
 // While serving, opts.Reloader reloads the configuration (spec 5.6).
@@ -147,7 +147,7 @@ func Run(ctx context.Context, opts RunOptions) (err error) {
 	if st.direct == nil {
 		st.direct = route.Host()
 	}
-	routes, _, err := st.buildRoutes(nil, cfg)
+	routes, err := st.buildRoutes(cfg)
 	if err != nil {
 		return err
 	}
@@ -219,9 +219,9 @@ func Run(ctx context.Context, opts RunOptions) (err error) {
 		log.Warn("serve", "error", err)
 	}
 	srv.drain()
-	// The tunnels drain within the same deadline, then close (spec 2.1).
+	// The requests have ended by now, so the tunnels just close (spec 2.1).
 	stopEPG()
-	_ = mgr.Shutdown(time.Until(deadline))
+	_ = mgr.Close()
 	log.Info("stopped")
 	return nil
 }

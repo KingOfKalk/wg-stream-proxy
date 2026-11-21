@@ -7,8 +7,6 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
-	"reflect"
-	"slices"
 	"time"
 
 	"github.com/KingOfKalk/wg-stream-proxy/internal/config"
@@ -56,15 +54,6 @@ type Route struct {
 
 // newRoute builds the route name over network n.
 func newRoute(name string, n Network, opts Options) *Route {
-	r := routeSettings(name, n, opts)
-	r.transport = newTransport(r.dial)
-	r.icyTransport = newTransport(r.dialICY)
-	return r
-}
-
-// routeSettings returns the route name over network n without its
-// transports.
-func routeSettings(name string, n Network, opts Options) *Route {
 	r := &Route{
 		name:     name,
 		network:  n,
@@ -76,6 +65,8 @@ func routeSettings(name string, n Network, opts Options) *Route {
 	if r.clock == nil {
 		r.clock = SystemClock()
 	}
+	r.transport = newTransport(r.dial)
+	r.icyTransport = newTransport(r.dialICY)
 	return r
 }
 
@@ -101,22 +92,4 @@ func (r *Route) Name() string { return r.name }
 func (r *Route) CloseIdleConnections() {
 	r.transport.CloseIdleConnections()
 	r.icyTransport.CloseIdleConnections()
-}
-
-// same reports whether r and o use the same network, activity, guard
-// exceptions, upstream settings and clock, so pooled connections of one
-// are valid for the other.
-func (r *Route) same(o *Route) bool {
-	return r.name == o.name && identical(r.network, o.network) && identical(r.activity, o.activity) &&
-		slices.Equal(r.guard.allow, o.guard.allow) && r.upstream == o.upstream && identical(r.clock, o.clock)
-}
-
-// identical reports whether a and b are the same comparable value. Values
-// of types that cannot be compared are never identical.
-func identical(a, b any) bool {
-	if a == nil || b == nil {
-		return a == b
-	}
-	ta := reflect.TypeOf(a)
-	return ta == reflect.TypeOf(b) && ta.Comparable() && a == b
 }

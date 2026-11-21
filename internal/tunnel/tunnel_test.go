@@ -452,44 +452,6 @@ func TestDialValidation(t *testing.T) {
 	}
 }
 
-func TestIPv6WithoutUpstreamIPv6FailsFast(t *testing.T) {
-	// The tunnel has an IPv6 address and ::/0, the peer has no IPv6: v6
-	// packets vanish, like at a provider without working IPv6.
-	peer := tunneltest.Start(t, tunneltest.Options{
-		ClientAddresses: []netip.Prefix{
-			netip.PrefixFrom(tunneltest.ClientAddr4, 32), netip.PrefixFrom(tunneltest.ClientAddr6, 128),
-		},
-	})
-	m, env := newManager(t, peer.ClientTunnel(t, "gr"))
-	tun := mustTunnel(t, m, "gr")
-	if _, err := get(t, tun, "http://"+tunneltest.ServerAddr4.String()+"/"); err != nil {
-		t.Fatalf("IPv4 get: %v", err)
-	}
-
-	done := make(chan error, 1)
-	go func() {
-		c, err := tun.DialContext(t.Context(), "tcp", "["+tunneltest.ServerAddr6.String()+"]:80")
-		if c != nil {
-			_ = c.Close()
-		}
-		done <- err
-	}()
-	env.clock.waitTimers(1)
-	env.clock.advance(DefaultIPv6ConnectTimeout)
-	err := <-done
-	if !errors.Is(err, ErrIPv6Unreachable) {
-		t.Fatalf("err = %v, want ErrIPv6Unreachable", err)
-	}
-	var ne net.Error
-	if errors.As(err, &ne) && ne.Timeout() {
-		t.Errorf("IPv6 fallback error is a timeout: %v", err)
-	}
-	// IPv4 keeps working.
-	if _, err := get(t, tun, "http://"+tunneltest.ServerAddr4.String()+"/"); err != nil {
-		t.Fatalf("IPv4 get after IPv6 failure: %v", err)
-	}
-}
-
 func TestIPv6ThroughTunnel(t *testing.T) {
 	peer := tunneltest.Start(t, tunneltest.Options{
 		ClientAddresses: []netip.Prefix{

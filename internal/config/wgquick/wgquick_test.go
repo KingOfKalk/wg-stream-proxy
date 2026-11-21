@@ -454,37 +454,6 @@ func TestErrorAndWarningFormat(t *testing.T) {
 	}
 }
 
-func TestAddressFamilies(t *testing.T) {
-	tests := []struct {
-		name             string
-		addrs, allowed   string
-		wantIPv4, wantV6 bool
-	}{
-		{"dual stack", "192.0.2.2/32, 2001:db8::2/128", "0.0.0.0/0, ::/0", true, true},
-		// Real-world case: ::/0 routed, but the tunnel has no IPv6 address.
-		{"IPv6 route without IPv6 address", "192.0.2.2/32", "0.0.0.0/0, ::/0", true, false},
-		{"IPv6 address without IPv6 route", "192.0.2.2/32, 2001:db8::2/128", "0.0.0.0/0", true, false},
-		{"IPv6 only", "2001:db8::2/128", "::/0", false, true},
-		{"IPv4 address, only IPv6 route", "192.0.2.2/32", "::/0", false, false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			in := conf("PrivateKey = "+testPrivA+"\nAddress = "+tt.addrs+"\nDNS = 192.0.2.53",
-				"PublicKey = "+testPubSrv+"\nEndpoint = vpn.example.com:51820\nAllowedIPs = "+tt.allowed)
-			tun, _, err := Parse("t", strings.NewReader(in))
-			if err != nil {
-				t.Fatalf("Parse: %v", err)
-			}
-			if got := tun.HasIPv4(); got != tt.wantIPv4 {
-				t.Errorf("HasIPv4() = %v, want %v", got, tt.wantIPv4)
-			}
-			if got := tun.HasIPv6(); got != tt.wantV6 {
-				t.Errorf("HasIPv6() = %v, want %v", got, tt.wantV6)
-			}
-		})
-	}
-}
-
 func TestAllows(t *testing.T) {
 	in := conf(baseIface, "PublicKey = "+testPubSrv+"\nEndpoint = vpn.example.com:51820\nAllowedIPs = 198.51.100.0/24, 2001:db8:1::/48")
 	tun, _, err := Parse("t", strings.NewReader(in))

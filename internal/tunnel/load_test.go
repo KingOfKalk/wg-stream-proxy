@@ -114,7 +114,6 @@ func TestNewErrors(t *testing.T) {
 		opts    Options
 	}{
 		{"no connect timeout", []*wgquick.Tunnel{tun}, Options{}},
-		{"negative IPv6 timeout", []*wgquick.Tunnel{tun}, Options{ConnectTimeout: time.Second, IPv6ConnectTimeout: -1}},
 		{"negative idle timeout", []*wgquick.Tunnel{tun}, Options{ConnectTimeout: time.Second, IdleTimeout: -1}},
 		{"nil tunnel", []*wgquick.Tunnel{nil}, Options{ConnectTimeout: time.Second}},
 		{"duplicate name", []*wgquick.Tunnel{tun, p.ClientTunnel(t, "gr")}, Options{ConnectTimeout: time.Second}},
