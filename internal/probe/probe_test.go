@@ -370,6 +370,59 @@ func TestRunHeadersAndRedirects(t *testing.T) {
 	}
 }
 
+// TestRunMalformedRedirectTarget: a redirect to a scheme-relative
+// Location that does not parse as an http URL fails the step without its
+// path or query in the report (spec 7.2, 8, #157); the same for such a
+// variant URI.
+func TestRunMalformedRedirectTarget(t *testing.T) {
+	tests := []struct {
+		name  string
+		files map[string]file
+		start string
+		class string
+	}{
+		{
+			"redirect",
+			map[string]file{"/start": {status: http.StatusFound, header: http.Header{"Location": {"//::/secretdir/file.m3u8?token=secret"}}}},
+			"/start", "other",
+		},
+		{
+			"redirect with a URL in the authority",
+			map[string]file{"/start": {status: http.StatusFound, header: http.Header{"Location": {"//:http://x/secretdir/y?token=secret"}}}},
+			"/start", "other",
+		},
+		{
+			"variant",
+			map[string]file{"/m.m3u8": {ctype: hlsType, body: "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1000\n//::/secretdir/v.m3u8?token=secret\n"}},
+			"/m.m3u8", "other",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newFixture(t, tt.files)
+			rep := run(t, directRoute(t, true, nil), f.url(tt.start))
+			if rep.OK {
+				t.Fatalf("report = %+v, want a failed step", rep)
+			}
+			if s := failedStep(rep); s == nil || s.Class != tt.class || s.Error == "" {
+				t.Errorf("failed step = %+v, want class %s with an error", s, tt.class)
+			}
+			var buf bytes.Buffer
+			if err := rep.WriteJSON(&buf); err != nil {
+				t.Fatal(err)
+			}
+			if err := rep.WriteText(&buf); err != nil {
+				t.Fatal(err)
+			}
+			for _, s := range []string{"secretdir", "secret", "token"} {
+				if strings.Contains(buf.String(), s) {
+					t.Errorf("report contains %q:\n%s", s, buf.String())
+				}
+			}
+		})
+	}
+}
+
 // TestRunPlaylistTooLarge: the size limit of the proxy applies.
 func TestRunPlaylistTooLarge(t *testing.T) {
 	f := newFixture(t, map[string]file{"/i.m3u8": {ctype: hlsType, body: media}})
