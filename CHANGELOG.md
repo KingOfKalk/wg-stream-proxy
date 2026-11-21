@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.3](https://github.com/KingOfKalk/wg-stream-proxy/compare/v0.5.2...v0.5.3) (2026-11-21)
+
+
+### Documentation
+
+* correct the docs after v0.5.2 ([#174](https://github.com/KingOfKalk/wg-stream-proxy/issues/174)) ([3e91d4d](https://github.com/KingOfKalk/wg-stream-proxy/commit/3e91d4df5e3e17779fd9efb89ebfdf09af8fd86d))
+
 ## [0.5.2](https://github.com/KingOfKalk/wg-stream-proxy/compare/v0.5.1...v0.5.2) (2026-11-21)
 
 
