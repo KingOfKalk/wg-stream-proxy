@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.5.1](https://github.com/KingOfKalk/wg-stream-proxy/compare/v0.5.0...v0.5.1) (2026-11-21)
+
+
+### Bug Fixes
+
+* **config:** reject settings that cannot work ([#169](https://github.com/KingOfKalk/wg-stream-proxy/issues/169)) ([0da07c3](https://github.com/KingOfKalk/wg-stream-proxy/commit/0da07c314540563a1133dc594d5452c607e28dbe))
+* **hls:** refuse playlists in legacy encodings ([#162](https://github.com/KingOfKalk/wg-stream-proxy/issues/162)) ([afcdf4a](https://github.com/KingOfKalk/wg-stream-proxy/commit/afcdf4ab79a2d6eb3778232de5461476c5d84c5f))
+* **hls:** stop refusing media that starts like a UTF-16 byte order mark ([#166](https://github.com/KingOfKalk/wg-stream-proxy/issues/166)) ([a2d43d5](https://github.com/KingOfKalk/wg-stream-proxy/commit/a2d43d591a801f30fce3c163ec8f82805bcd2f30))
+* rewrite HLS X-ASSET-LIST and the missed DASH references ([#168](https://github.com/KingOfKalk/wg-stream-proxy/issues/168)) ([66c88a7](https://github.com/KingOfKalk/wg-stream-proxy/commit/66c88a7c7d45d7830bfd9e0dd539eab5f793bd72))
+* **route:** bound TLS handshakes, keep redirect targets out of errors, check HTTP/2 connections ([#167](https://github.com/KingOfKalk/wg-stream-proxy/issues/167)) ([2f0d745](https://github.com/KingOfKalk/wg-stream-proxy/commit/2f0d745d252e58b922aa3b5c25928625f719f63a))
+* **route:** handle compressed responses the proxy did not ask for ([#165](https://github.com/KingOfKalk/wg-stream-proxy/issues/165)) ([c2c853e](https://github.com/KingOfKalk/wg-stream-proxy/commit/c2c853eff3347977af3e0d02d5576a178337edae))
+* **server:** bound retired route sets and correct restart warnings ([#170](https://github.com/KingOfKalk/wg-stream-proxy/issues/170)) ([60061bc](https://github.com/KingOfKalk/wg-stream-proxy/commit/60061bcf2bee1e7b564b3be8170279511782a2e9))
+
 ## [0.5.0](https://github.com/KingOfKalk/wg-stream-proxy/compare/v0.4.1...v0.5.0) (2026-11-21)
 
 
