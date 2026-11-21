@@ -18,8 +18,8 @@ import (
 	"github.com/KingOfKalk/wg-stream-proxy/internal/tunnel/tunneltest"
 )
 
-// clipChannels has one HLS channel per failure class of docs/clips.md
-// 3.2, plus channels that keep their HTTP errors. {REFUSED} is a closed
+// clipChannels has one HLS channel per failure class of spec 3.4,
+// plus channels that keep their HTTP errors. {REFUSED} is a closed
 // port; 127.0.0.2 is outside allow_private.
 const clipChannels = `
 tunnel = "direct"
@@ -130,7 +130,7 @@ func warnLines(logs, id string) []string {
 }
 
 // TestErrorClips: GET /c/ of an HLS channel answers every failure class
-// of docs/clips.md 3.2 with the error playlist of its clip; the failure is
+// of spec 3.4 with the error playlist of its clip; the failure is
 // logged and counted as before, with the clip on the warn line.
 func TestErrorClips(t *testing.T) {
 	e := newClipEnv(t, "")
@@ -328,8 +328,7 @@ func TestClipRequestsRecorded(t *testing.T) {
 
 // TestErrorClipsThroughTunnel: a tunnel that does not start within
 // connect_timeout gives tunnel-unreachable; a name that resolves only
-// outside the tunnel's AllowedIPs gives channel-blocked (docs/clips.md
-// 3.2).
+// outside the tunnel's AllowedIPs gives channel-blocked (spec 3.4).
 func TestErrorClipsThroughTunnel(t *testing.T) {
 	const channels = "tunnel = \"gr\"\n" +
 		"[[channel]]\nname = \"Live\"\nurl = \"http://upstream.test/live.m3u8\"\n" +

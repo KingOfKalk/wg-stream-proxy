@@ -9,11 +9,11 @@ Guidance for AI coding agents working on this repository.
   for Kodi, VLC and other players. Proxies HLS (TS, fMP4, AES-128),
   MPEG-DASH without DRM and raw/ICY audio streams; no root, no TUN device,
   fails closed.
-- Spec (binding): [docs/spec.md](docs/spec.md). Deployment:
+- Spec (binding, the only normative document): [docs/spec.md](docs/spec.md).
+  Architecture: [docs/architecture.md](docs/architecture.md). Deployment:
   [docs/deploy.md](docs/deploy.md). Testing:
   [docs/testing.md](docs/testing.md). Monitoring:
-  [docs/observability.md](docs/observability.md). Clips design (v0.3):
-  [docs/clips.md](docs/clips.md).
+  [docs/observability.md](docs/observability.md).
 - Git workflow, labels, issue lifecycle, releases:
   [CONTRIBUTING.md](CONTRIBUTING.md).
 

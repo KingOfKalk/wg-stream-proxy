@@ -1,7 +1,7 @@
 #!/bin/sh
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
-# Renders the built-in error clips (docs/clips.md, sections 6.4 and 7)
+# Renders the built-in error clips (spec 3.4 and 9)
 # into segments/ in this directory. Run from anywhere on a host with Docker:
 #
 #   internal/clips/generate.sh
@@ -28,7 +28,7 @@ INTER_TTF=extras/ttf/Inter-Regular.ttf
 INTER_TTF_SHA256=40d692fce188e4471e2b3cba937be967878f631ad3ebbbdcd587687c7ebe0c82
 
 # One "name|text" per clip; the names are the file names and the names
-# in clips.go. Texts: docs/clips.md, decision 3.
+# in clips.go. Texts: spec 3.4.
 CLIPS='tunnel-unreachable|Tunnel not reachable
 channel-not-available|Channel not available
 channel-blocked|Channel blocked by configuration'
@@ -52,7 +52,7 @@ unzip -q -o -j -d "$work" "$work/inter.zip" "$INTER_TTF"
 font=$work/Inter-Regular.ttf
 echo "$INTER_TTF_SHA256  $font" | sha256sum -c -
 
-# Format (docs/clips.md, 6.4): 4.8 s = 120 frames at 25 fps = 230400 samples
+# Format: 4.8 s = 120 frames at 25 fps = 230400 samples
 # at 48 kHz = exactly 225 AAC frames of 1024 samples. The video is H.264
 # High level 4.0 with one IDR frame and no B-frames, single-threaded and
 # bitexact for stable output. Timestamps start at 10 s, so that the PCR,
@@ -84,7 +84,7 @@ first_last() {
 	grep "^$1=" | sed -n '1p;$p' | tr '\n' ' '
 }
 
-# check NAME: the format of docs/clips.md 6.4 as ffprobe sees it.
+# check NAME: the format above as ffprobe sees it.
 check() {
 	f=segments/$1.ts
 	got=$(probe v stream=codec_name,profile,level,width,height,pix_fmt,r_frame_rate,has_b_frames "$f" | sort -u | tr '\n' ' ')
