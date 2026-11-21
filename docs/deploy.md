@@ -15,7 +15,7 @@ There are no release binaries. Build the binary from source (`go build ./cmd/wg-
 
 <!-- x-release-please-start-version -->
 ```bash
-go install github.com/KingOfKalk/wg-stream-proxy/cmd/wg-stream-proxy@v0.5.0
+go install github.com/KingOfKalk/wg-stream-proxy/cmd/wg-stream-proxy@v0.5.1
 ```
 <!-- x-release-please-end -->
 
@@ -49,7 +49,7 @@ docker run -d --name wg-stream-proxy -p 2349:2349 \
   --read-only --cap-drop ALL \
   -v ./config:/etc/wg-stream-proxy:ro \
   -e WG_STREAM_PROXY_SIGNING_KEY_FILE=/etc/wg-stream-proxy/signing.key \
-  ghcr.io/kingofkalk/wg-stream-proxy:0.5.0
+  ghcr.io/kingofkalk/wg-stream-proxy:0.5.1
 ```
 <!-- x-release-please-end -->
 

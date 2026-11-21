@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.5.1](https://github.com/KingOfKalk/wg-stream-proxy/compare/v0.5.0...v0.5.1) (2026-11-21)
+
+
+### Bug Fixes
+
+* **hls:** refuse playlists in legacy encodings ([#162](https://github.com/KingOfKalk/wg-stream-proxy/issues/162)) ([afcdf4a](https://github.com/KingOfKalk/wg-stream-proxy/commit/afcdf4ab79a2d6eb3778232de5461476c5d84c5f))
+* **hls:** stop refusing media that starts like a UTF-16 byte order mark ([#166](https://github.com/KingOfKalk/wg-stream-proxy/issues/166)) ([a2d43d5](https://github.com/KingOfKalk/wg-stream-proxy/commit/a2d43d591a801f30fce3c163ec8f82805bcd2f30))
+* **route:** bound TLS handshakes, keep redirect targets out of errors, check HTTP/2 connections ([#167](https://github.com/KingOfKalk/wg-stream-proxy/issues/167)) ([2f0d745](https://github.com/KingOfKalk/wg-stream-proxy/commit/2f0d745d252e58b922aa3b5c25928625f719f63a))
+* **route:** handle compressed responses the proxy did not ask for ([#165](https://github.com/KingOfKalk/wg-stream-proxy/issues/165)) ([c2c853e](https://github.com/KingOfKalk/wg-stream-proxy/commit/c2c853eff3347977af3e0d02d5576a178337edae))
+
 ## [0.5.0](https://github.com/KingOfKalk/wg-stream-proxy/compare/v0.4.1...v0.5.0) (2026-11-21)
 
 
