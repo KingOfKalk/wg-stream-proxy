@@ -3,7 +3,7 @@
 > Route each IPTV and internet radio channel through its own userspace WireGuard tunnel (or direct) and serve them as one M3U playlist for Kodi, VLC and other players. Proxies HLS (TS, fMP4, AES-128), MPEG-DASH without DRM and raw/ICY audio streams; no root, no TUN device, fails closed.
 
 - Repository: `github.com/KingOfKalk/wg-stream-proxy`, Go, AGPL-3.0-or-later
-- Status: binding for the latest [release](https://github.com/KingOfKalk/wg-stream-proxy/releases); the roadmap (section 10) lists what is released and what is planned
+- Status: binding for the latest [release](https://github.com/KingOfKalk/wg-stream-proxy/releases); the roadmap (section 10) lists what is released, what comes next and what is decided against
 - Related: [architecture.md](architecture.md), [deploy.md](deploy.md), [testing.md](testing.md), [observability.md](observability.md)
 
 ## 1. Scope
@@ -31,12 +31,12 @@
 
 ## 2. Architecture
 
-One process: the HTTP interface for the players (7.1), one route per tunnel plus `direct`, each with its `http.Transport` and the private-range guard (3.5), and one wireguard-go device with a gVisor netstack per tunnel file. Diagrams and request flows: [architecture.md](architecture.md).
+One process: the HTTP interface for the players (7.1), one route per tunnel plus `direct`, each with its HTTP transports (a second one, with its own pool, for ICY-capable raw requests, 3.3) and the private-range guard (3.5), and one wireguard-go device with a gVisor netstack per tunnel file. Diagrams and request flows: [architecture.md](architecture.md).
 
 ### 2.1 Tunnels
 
 - One WireGuard device per tunnel file, shared by all channels and viewers using it (one key, one UDP session).
-- Each tunnel has its own `http.Transport` dialing through the netstack: keep-alive, `ForceAttemptHTTP2 = true`, `MaxIdleConnsPerHost = 16`, no environment proxy, TLS handshake timeout `connect_timeout` (3.4). HTTP/2 connections are health-checked: after 15s without a frame from the upstream a ping is sent, and the connection is closed if no answer comes within 10s, so a silently dead connection fails one request instead of taking every request to that host.
+- Each tunnel has its own HTTP transports (a second one, with its own pool, for ICY-capable raw requests, 3.3) dialing through the netstack: keep-alive, `ForceAttemptHTTP2 = true`, `MaxIdleConnsPerHost = 16`, no environment proxy, TLS handshake timeout `connect_timeout` (3.4). HTTP/2 connections are health-checked: after 15s without a frame from the upstream a ping is sent, and the connection is closed if no answer comes within 10s, so a silently dead connection fails one request instead of taking every request to that host.
 - IPv4 and IPv6 addresses of a host are tried Happy-Eyeballs style (RFC 8305, simplified): families interleaved starting with the first DNS answer; the next address starts after 300ms or as soon as the previous attempt fails; the first connection wins. A tunnel with `::/0` but no working IPv6 upstream thus falls back to IPv4 after 300ms.
 - DNS for upstream hosts is resolved inside the tunnel, using the `DNS` servers of the tunnel file. A and AAAA (only for address families the tunnel has) are queried in parallel. The first attempt of a query goes to every `DNS` server at once; the first answer that is not an error wins. An unanswered query is repeated after 0.5s, 1s, 2s, then every 4s, each time to the next `DNS` server, until `connect_timeout`. Until a `DNS` server has answered (any answer, also an error) since the tunnel started, an unanswered query is instead repeated every 0.25s to every `DNS` server, for at most 8s, then every 4s as above: the `DNS` servers of some VPN providers do not answer for several seconds after the handshake of a key that was idle for a while, and the first lookup should get its answer soon after they do. An error answer (e.g. `SERVFAIL`) to a repeat asks the next server at once; a server that answered with an error is not asked again, and the query fails once every server did. A truncated answer is repeated over TCP, NXDOMAIN ends the lookup at once.
 - Tunnel DNS answers are cached per tunnel, host name and record type: for the smallest TTL of the records used (CNAME chain included), at least 10s and at most 5min; an answer without records of the type for the negative TTL of its SOA record (RFC 2308, same bounds, 10s without SOA); NXDOMAIN for 10s. Error answers and unanswered queries are not cached. At most 256 entries per tunnel (when full, expired entries go first, then the one expiring soonest). The cache is emptied whenever the tunnel stops, so a restarted tunnel resolves again. Concurrent lookups of the same host share one query; a caller whose deadline ends stops waiting without cancelling it for the others.
@@ -351,7 +351,7 @@ url = "https://live.example.net/daserste/live/hls/de/master.m3u8"
 - `#KODIPROP` and other `extra` lines appear only here, never in playlists or manifests under `/c/`, `/r/` or `/p/`. Kodi plays DASH only with `inputstream.adaptive` ([deploy.md](deploy.md)).
 
 ```
-#EXTM3U x-tvg-url="https://epg.example.org/epg/epg.xml.gz" url-tvg="https://epg.example.org/epg/epg.xml.gz"
+#EXTM3U x-tvg-url="http://wsp.lan:2349/epg.xml.gz" url-tvg="http://wsp.lan:2349/epg.xml.gz"
 #KODIPROP:inputstream.adaptive.manifest_type=hls
 #EXTINF:-1 tvg-id="ertworld" tvg-name="ERT World" tvg-logo="EPTWORLD" group-title="Greek TV" parent-code="1234" tvg-chno="5",ERT World
 http://wsp.lan:2349/c/ert-world.m3u8
@@ -483,21 +483,20 @@ Only `/c/`, `/r/` and `/p/` requests of enabled channels count; `channel` is the
 ## 9. Engineering rules
 
 - Layout: `cmd/wg-stream-proxy/`, `internal/{config,tunnel,route,hls,dash,xmlw,playlist,server,epg,probe,metrics,clips}`, `examples/config/`, `testdata/`, `deploy/`, `docs/`.
-- Dependencies: stdlib `net/http`, `log/slog`, `wireguard-go`, gVisor netstack, a TOML parser, Prometheus client. No web framework.
+- Dependencies: stdlib `net/http`, `log/slog`, `wireguard-go`, gVisor netstack, a TOML parser, Prometheus client, `golang.org/x/net` (DNS messages, XML charsets), `golang.org/x/text` (NFKD). No web framework.
 - `internal/clips` embeds the built-in error clips (3.4): three 4.8 s MPEG-TS files in `internal/clips/segments/`, rendered by `internal/clips/generate.sh` (pinned image, Inter 4.1 by version and checksum) and committed. Change a text by editing the script, rerunning it and committing the result. Only rendered pixels ship, not the font (SIL OFL 1.1).
 - gVisor stays at the version in `wireguard-go`'s `go.mod` and is only updated together with it (excluded from automatic bumps).
 - `internal/tunnel/netstack` is a trimmed copy of `wireguard-go`'s `tun/netstack` (MIT, licence kept) with one change: a packet gVisor sends after `Close` is dropped instead of sent on a closed channel, which would crash the process (#47). The copy names the upstream commit it was taken from and is updated together with `wireguard-go`: on every `wireguard-go` update, compare upstream `tun/netstack` with the copy and port relevant changes.
-- Injected for tests: `Dialer` per route, private-range guard allowlist, clock.
+- Injected for tests: the `route.Network` per route, the private-range guard allowlist, the clock.
 - Client disconnect cancels the upstream request. HTTP server: `ReadHeaderTimeout` set, no `WriteTimeout`.
 - `atomic.Int64` and similar types only, never `atomic.AddInt64` on plain fields.
 - Code comments in English; file header `// SPDX-License-Identifier: AGPL-3.0-or-later`.
 
 ## 10. Roadmap
 
-- Released ([changelog](../CHANGELOG.md)): **v0.1 Core** (config, tunnels, routes and guard, HLS and raw/ICY streams, channel list, `SIGHUP` reload, metrics, container image), **v0.2 Observability** (timing histograms, debug endpoints), **v0.3 Experience** (error clips, file-watch reload), **v0.4 Content** (DASH without DRM, EPG proxy mode, `probe`).
-- **v0.5 Lean** ([#129](https://github.com/KingOfKalk/wg-stream-proxy/issues/129)): a smaller project that is cheaper to maintain: fixes, removal of unused features, shorter docs, leaner tests and CI, less duplicated code. Breaking changes allowed.
-- **Later**, only if the timing data (7.3) shows segment loading as a bottleneck: per-request segment prefetch ([#84](https://github.com/KingOfKalk/wg-stream-proxy/issues/84)).
-- Decided against: in-flight clips ([#116](https://github.com/KingOfKalk/wg-stream-proxy/issues/116), the design is in the git history), logo proxy ([#88](https://github.com/KingOfKalk/wg-stream-proxy/issues/88)), ad-hoc proxy endpoint ([#89](https://github.com/KingOfKalk/wg-stream-proxy/issues/89)).
+- Released ([changelog](../CHANGELOG.md)): **v0.1 Core** (config, tunnels, routes and guard, HLS and raw/ICY streams, channel list, `SIGHUP` reload, metrics, container image), **v0.2 Observability** (timing histograms, debug endpoints), **v0.3 Experience** (error clips, file-watch reload), **v0.4 Content** (DASH without DRM, EPG proxy mode, `probe`), **v0.5 Lean** (v0.5.0 to v0.5.2: slimming, review fixes, reload race; [#129](https://github.com/KingOfKalk/wg-stream-proxy/issues/129)).
+- Next: nothing planned; decided by usage data from the Raspberry Pi.
+- Decided against: per-request segment prefetch ([#84](https://github.com/KingOfKalk/wg-stream-proxy/issues/84), reopen if Kodi stalls on HLS channels through a tunnel), in-flight clips ([#116](https://github.com/KingOfKalk/wg-stream-proxy/issues/116), the design is in the git history), logo proxy ([#88](https://github.com/KingOfKalk/wg-stream-proxy/issues/88)), ad-hoc proxy endpoint ([#89](https://github.com/KingOfKalk/wg-stream-proxy/issues/89)).
 
 ## 11. Risks
 

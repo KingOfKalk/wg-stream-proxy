@@ -21,5 +21,6 @@ wg-stream-proxy serve --config-dir examples/config
 ```
 
 `/playlist.m3u8` and `/healthz` work with this config. The `gr` channel
-answers `502`, as the example tunnel cannot connect; replace
+plays the "Tunnel not reachable" error clip (`502` for `HEAD` or with
+`[clips] error = false`), as the example tunnel cannot connect; replace
 `tunnels/gr.conf` with your provider's wg-quick file to use it.

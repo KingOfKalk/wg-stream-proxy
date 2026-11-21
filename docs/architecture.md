@@ -89,8 +89,8 @@ sequenceDiagram
 ```
 
 - `/playlist.m3u8` is rendered from the active config (`playlist.Render`)
-  without an upstream request; it links each channel as `/c/{id}`,
-  unsigned and stable.
+  without an upstream request; it links each channel as `/c/{id}`
+  (with `.m3u8` or `.mpd` by type, spec 6), unsigned and stable.
 - Steps 2-7: the first request on a stopped tunnel starts it
   (section 3). The guard runs on every new connection; a pooled connection
   was checked when it was dialed.
