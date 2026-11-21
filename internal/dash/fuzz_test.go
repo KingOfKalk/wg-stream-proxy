@@ -122,6 +122,8 @@ func FuzzRewrite(f *testing.F) {
 		`<MPD><BaseURL byteRange="$base$" serviceLocation="a">a/</BaseURL><Period/></MPD>`,
 		`<MPD><Period><SegmentTemplate media="s-$Number$.m4s" _media="https://e.example/$Number$.m4s"/><Representation id='v' :id="//e.example"/></Period></MPD>`,
 		`<MPD><Period><AdaptationSet><SupplementalProperty schemeIdUri="urn:dvb:dash:fontdownload:2014" dvb:url="f.woff"/><BaseURL>a/</BaseURL></AdaptationSet></Period></MPD>`,
+		`<MPD><SupplementalProperty schemeIdUri="urn:mpeg:dash:mpd-chaining:2016" value="https://n.example/n.mpd"/><InitializationSet id="1" initialization="https://i.example/i/v.mp4"/>` +
+			`<Period><ImportedMPD>https://l.example/l.mpd</ImportedMPD><EventStream schemeIdUri="urn:mpeg:dash:event:2012" value="1"><Event><OverlayEvent uri="https://o.example/o.mp4"/></Event></EventStream></Period></MPD>`,
 	} {
 		f.Add([]byte(s))
 	}

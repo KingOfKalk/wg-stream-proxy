@@ -111,20 +111,29 @@ var directTiming = map[string]bool{
 }
 
 // chainingSchemes are properties whose value is the URL of another
-// manifest the player loads (MPD chaining and fallback).
+// manifest the player loads (MPD chaining and fallback). ISO/IEC
+// 23009-1:2019 spells the chaining scheme both ways (chaining in its
+// scheme table, mpd-chaining in clause 5.11); GPAC reads mpd-chaining,
+// Shaka Player chaining.
 var chainingSchemes = map[string]bool{
-	"urn:mpeg:dash:chaining:2016": true,
-	"urn:mpeg:dash:fallback:2016": true,
+	"urn:mpeg:dash:chaining:2016":     true,
+	"urn:mpeg:dash:mpd-chaining:2016": true,
+	"urn:mpeg:dash:fallback:2016":     true,
 }
 
 // removedElements are removed with their content (lower-case local
 // names): manifest reload and patch URLs (the player reloads the proxy
-// URL it has), content steering servers and metrics reporting URLs.
+// URL it has), content steering servers, metrics reporting URLs, the
+// MPD a Linked Period imports (23009-1 6th edition; without it the Period
+// is a regular one) and the overlay of an event (Shaka Player fetches its
+// uri and background).
 var removedElements = map[string]bool{
 	"location":        true,
 	"patchlocation":   true,
 	"contentsteering": true,
 	"metrics":         true,
+	"importedmpd":     true,
+	"overlayevent":    true,
 }
 
 // refAttrs maps elements (lower-case local names) to their attributes
@@ -135,6 +144,9 @@ var refAttrs = map[string][]string{
 	"initialization":      {"sourceurl"},
 	"representationindex": {"sourceurl"},
 	"bitstreamswitching":  {"sourceurl"},
+	// The initialization segment of an InitializationSet (MPD level,
+	// 23009-1 4th edition and later).
+	"initializationset": {"initialization"},
 }
 
 // Rewrite rewrites a DASH manifest (spec 3.6):
@@ -145,19 +157,20 @@ var refAttrs = map[string][]string{
 //     MPD without its own BaseURL gets one for Final's directory, as the
 //     first child of the MPD element;
 //   - segment references (SegmentTemplate media, initialization, index,
-//     bitstreamSwitching; SegmentURL media, index; sourceURL) stay as
-//     they are if they are plain relative references, which the player
-//     resolves against the rewritten BaseURLs. Absolute, scheme-relative,
-//     rooted and dot-segment references become the prefix URL of their
-//     fixed directory plus the rest, template identifiers kept;
+//     bitstreamSwitching; SegmentURL media, index; sourceURL;
+//     InitializationSet initialization) stay as they are if they are
+//     plain relative references, which the player resolves against the
+//     rewritten BaseURLs. Absolute, scheme-relative, rooted and
+//     dot-segment references become the prefix URL of their fixed
+//     directory plus the rest, template identifiers kept;
 //   - the dvb:url of DVB font download descriptors becomes a prefix URL
 //     like a reference that is not plain;
-//   - Location, PatchLocation, ContentSteering, Metrics,
-//     SupplementalProperty elements of MPD chaining or fallback, and
-//     EventStream and InbandEventStream elements of schemes other than
-//     those in keptEvents are removed; BaseURL attributes other than
-//     baseURLAttrs are dropped; UTCTiming elements other than direct
-//     ones point to TimeURL;
+//   - Location, PatchLocation, ContentSteering, Metrics, ImportedMPD,
+//     OverlayEvent, SupplementalProperty elements of MPD chaining or
+//     fallback, and EventStream and InbandEventStream elements of schemes
+//     other than those in keptEvents are removed; BaseURL attributes
+//     other than baseURLAttrs are dropped; UTCTiming elements other than
+//     direct ones point to TimeURL;
 //   - every tag and text is written again from the tokens encoding/xml
 //     read (names as read, attribute values escaped in double quotes,
 //     text escaped), comments are dropped and the XML declaration is

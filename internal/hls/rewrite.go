@@ -33,9 +33,9 @@ var (
 	ErrURLTooLong = errors.New("hls: upstream URL too long")
 	// ErrInvalidPlaylist: players could read the playlist differently from
 	// the rewriter and fetch an unrewritten URL directly: it contains a NUL
-	// byte (a line end for ffmpeg), or a tag has "URI=" with an http(s) URL
-	// outside a recognised URI attribute (unquoted value, escaped quote,
-	// broken attribute list).
+	// byte (a line end for ffmpeg), or a tag has "URI=" or "X-ASSET-LIST="
+	// with an http(s) URL outside a recognised URI attribute (unquoted
+	// value, escaped quote, broken attribute list).
 	ErrInvalidPlaylist = errors.New("hls: playlist rejected")
 	// ErrInvalidResourceURL: appendURL appended nothing or a quote or line
 	// break, which would corrupt the playlist.
@@ -45,8 +45,8 @@ var (
 const lineSpace = " \t\v\f"
 
 // Rewrite rewrites an HLS playlist (spec 3.2). Every URI line (non-blank,
-// not starting with '#') and every quoted URI attribute (named URI or ending
-// in -URI) of an #EXT tag other than #EXTINF is replaced with the URL
+// not starting with '#') and every quoted URI attribute (see isURIAttr) of
+// an #EXT tag other than #EXTINF is replaced with the URL
 // appendURL(dst, abs) appends to dst, where abs is the URI resolved against
 // final, the playlist's URL after redirects, in the form of
 // url.URL.String. abs is only valid during the call. Only http, https and
@@ -206,8 +206,8 @@ func (rw *rewriter) tag(line, trimmed []byte) error {
 type span struct{ start, end int }
 
 // uriAttrValues returns the positions of the quoted values of all URI
-// attributes (named URI or ending in -URI, such as SERVER-URI or
-// X-ASSET-URI) in a tag line "#EXT...:NAME=VALUE,NAME="VALUE",...".
+// attributes (see isURIAttr) in a tag line
+// "#EXT...:NAME=VALUE,NAME="VALUE",...".
 // Like ffmpeg, it accepts runs of commas and whitespace between attributes
 // and whitespace around '='. Parsing stops at the first element that is not
 // an attribute, so tags whose value is not an attribute list
@@ -246,7 +246,7 @@ func uriAttrValues(line []byte) []span {
 				return spans
 			}
 			valStart, valEnd := i+1, i+1+end
-			if string(name) == "URI" || bytes.HasSuffix(name, []byte("-URI")) {
+			if isURIAttr(name) {
 				spans = append(spans, span{valStart, valEnd})
 			}
 			i = valEnd + 1
@@ -258,19 +258,41 @@ func uriAttrValues(line []byte) []span {
 	}
 }
 
-// strayHTTPURI reports whether a tag line contains "URI=" followed by an
-// http(s) or scheme-relative URL that is not one of the rewritten values in
-// spans. Players parse attribute lists differently (ffmpeg accepts unquoted
-// values and backslash escapes, others match URI="..." anywhere in the
-// line); such a URL would stay unrewritten and the player could fetch it
-// directly.
+// isURIAttr reports whether an attribute holds a URI the player fetches:
+// URI, a name ending in -URI (SERVER-URI, X-ASSET-URI, ...), or
+// X-ASSET-LIST, the JSON asset list of an HLS interstitial
+// (draft-pantos-hls-rfc8216bis, appendix D).
+func isURIAttr(name []byte) bool {
+	return string(name) == "URI" || bytes.HasSuffix(name, []byte("-URI")) || string(name) == "X-ASSET-LIST"
+}
+
+// strayMarkers end the names of URI attributes (see isURIAttr), as
+// strayHTTPURI looks for them.
+var strayMarkers = [][]byte{[]byte("URI="), []byte("X-ASSET-LIST=")}
+
+// strayHTTPURI reports whether a tag line contains "URI=" or
+// "X-ASSET-LIST=" followed by an http(s) or scheme-relative URL that is not
+// one of the rewritten values in spans. Players parse attribute lists
+// differently (ffmpeg accepts unquoted values and backslash escapes, others
+// match URI="..." anywhere in the line); such a URL would stay unrewritten
+// and the player could fetch it directly.
 func strayHTTPURI(line []byte, spans []span) bool {
+	for _, m := range strayMarkers {
+		if strayHTTPAfter(line, spans, m) {
+			return true
+		}
+	}
+	return false
+}
+
+// strayHTTPAfter is strayHTTPURI for one marker.
+func strayHTTPAfter(line []byte, spans []span, marker []byte) bool {
 	for i := 0; ; {
-		j := bytes.Index(line[i:], []byte("URI="))
+		j := bytes.Index(line[i:], marker)
 		if j < 0 {
 			return false
 		}
-		start := i + j + len("URI=")
+		start := i + j + len(marker)
 		i = start
 		var val []byte
 		if start < len(line) && line[start] == '"' {
