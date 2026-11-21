@@ -40,6 +40,14 @@ func TestUnsupportedPlaylists(t *testing.T) {
 	// never reach the player or the log.
 	const secret = "token-a1b2c3"
 	stream := "http://radio.example/" + secret + "/stream.mp3"
+	// Ciphertext that starts with a UTF-16 byte order mark by chance,
+	// followed by a code unit that is not ASCII (issue 164).
+	rnd := rand.New(rand.NewPCG(11, 12))
+	random := make([]byte, 4096)
+	for i := range random {
+		random[i] = byte(rnd.Uint32())
+	}
+	random[2], random[3] = random[2]|0x80, random[3]|0x80
 	tests := []struct {
 		name   string
 		ctype  string
@@ -86,6 +94,16 @@ func TestUnsupportedPlaylists(t *testing.T) {
 			name: "asx with a latin-1 attribute and NUL", ctype: "video/x-ms-asf",
 			body: "<asx version=\"3.0\" x=\"\xd6\"><entry><ref href=\"" + stream + "\"/></entry></asx>\x00", format: "asx",
 		},
+		// UTF-16 with a byte order mark (issue 164), whatever its first
+		// character.
+		{name: "utf-16le pls", ctype: "application/octet-stream", body: "\xff\xfe" + utf16le("[playlist]\nFile1="+stream+"\n"), format: "unknown"},
+		{name: "utf-16be m3u after whitespace", ctype: "application/octet-stream", body: "\xfe\xff" + utf16be(" \r\n"+stream+"\r\n"), format: "unknown"},
+		{
+			name: "utf-16be m3u starting with a non-ascii path", ctype: "application/octet-stream",
+			body: "\xfe\xff\x00\xd6" + utf16be("1.mp3\r\n"+stream+"\r\n"), format: "unknown",
+		},
+		{name: "ciphertext after FE FF", ctype: "application/octet-stream", body: "\xfe\xff" + string(random[2:])},
+		{name: "ciphertext after FF FE", ctype: "application/octet-stream", body: "\xff\xfe" + string(random[2:])},
 		{name: "mp3", ctype: "audio/mpeg", body: "ID3\x04\x00\x00\x00\x00\x00\x00" + strings.Repeat("\xff\xfb\x90\x64", 200)},
 		{name: "mp3 from mid-frame starting with <", ctype: "audio/mpeg", body: "\x3c\x9a\x01" + strings.Repeat("\xff\xfb\x90\x64\x00\x0f\xf0\x00\x00\x69", 300)},
 	}
