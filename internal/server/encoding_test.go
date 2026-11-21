@@ -188,6 +188,26 @@ func TestContentEncodingRefused(t *testing.T) {
 			}
 		}
 	})
+
+	// "none" is no registered coding, but sloppy servers send it on plain
+	// bodies; it counts as identity (spec 3.4).
+	for _, coding := range []string{"none", "None", "NONE"} {
+		t.Run(coding, func(t *testing.T) {
+			e := newDirectEnv(t, allowLoopback, encodingTOML)
+			media := binaryBody('G', 1024)
+			e.up.add("/list", file{ctype: "video/mp2t", status: http.StatusOK, body: media, header: http.Header{"Content-Encoding": {coding}}})
+			for _, p := range encodingPaths(t, e)[:2] {
+				for _, h := range []http.Header{nil, {"Range": {"bytes=0-"}}} {
+					if resp, got := e.get(t, p, identity(h)); resp.StatusCode != http.StatusOK || got != media {
+						t.Errorf("GET %s %v: status %d, %d bytes, want 200 and the body", p, h, resp.StatusCode, len(got))
+					}
+					if resp, got := do(t, e.client, http.MethodHead, e.proxy.URL+p, identity(h)); resp.StatusCode != http.StatusOK || got != "" {
+						t.Errorf("HEAD %s %v: status %d, body %q, want 200 and none", p, h, resp.StatusCode, got)
+					}
+				}
+			}
+		})
+	}
 }
 
 // TestContentEncodingPartial: a 206 with a coding counts encoded bytes in

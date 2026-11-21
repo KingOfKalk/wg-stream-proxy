@@ -34,11 +34,12 @@ const maxCodingText = 64
 // of upstream.headers, and never decodes x-gzip; some servers send
 // pre-compressed objects whatever the request said. It must run before
 // the body is classified or relayed:
-//   - no coding, or only identity: resp is unchanged;
-//   - exactly one gzip or x-gzip: the body is decoded while it is read
-//     and resp looks like a transparently decompressed response
-//     (Uncompressed, no Content-Encoding and Content-Length, so
-//     CopyResponseHeader drops Content-Length and ETag);
+//   - no coding, or only identity or none: resp is unchanged;
+//   - exactly one gzip or x-gzip (identity and none ignored): the body
+//     is decoded while it is read and resp looks like a transparently
+//     decompressed response (Uncompressed, no Content-Encoding and
+//     Content-Length, so CopyResponseHeader drops Content-Length and
+//     ETag);
 //   - a 206 with any coding fails with ErrEncodedPartial: its
 //     Content-Range counts encoded bytes, so the caller fetches the
 //     resource again without Range. The same holds for a 206 the
@@ -52,7 +53,7 @@ func DecodeBody(resp *http.Response) error {
 	var codings []string
 	for _, v := range resp.Header.Values("Content-Encoding") {
 		for c := range strings.SplitSeq(v, ",") {
-			if c = strings.Trim(c, " \t"); c != "" && !strings.EqualFold(c, "identity") {
+			if c = strings.Trim(c, " \t"); c != "" && !isIdentity(c) {
 				codings = append(codings, c)
 			}
 		}
@@ -221,4 +222,11 @@ func logFileName(seg string) string {
 		return logNameFallback
 	}
 	return name
+}
+
+// isIdentity reports whether a content coding leaves the body unchanged:
+// identity, or "none", which is no registered coding but which servers
+// send on plain bodies (spec 3.4). Case-insensitive.
+func isIdentity(c string) bool {
+	return strings.EqualFold(c, "identity") || strings.EqualFold(c, "none")
 }

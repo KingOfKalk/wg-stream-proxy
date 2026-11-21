@@ -78,6 +78,11 @@ func TestDecodeBody(t *testing.T) {
 		{name: "partial gzip", status: http.StatusPartialContent, codings: []string{"gzip"}, body: gz[:10], err: ErrEncodedPartial},
 		{name: "partial br", status: http.StatusPartialContent, codings: []string{"br"}, body: "x", err: ErrEncodedPartial},
 		{name: "partial identity", status: http.StatusPartialContent, codings: []string{"identity"}, body: plain},
+		{name: "none value", codings: []string{"none"}, body: plain},
+		{name: "none any case with identity", codings: []string{"None, identity", "NONE"}, body: plain},
+		{name: "gzip with none", codings: []string{"none, gzip"}, body: gz, decoded: true},
+		{name: "partial none", status: http.StatusPartialContent, codings: []string{"none"}, body: plain},
+		{name: "none with a parameter", codings: []string{"none;x=1"}, body: "x", err: ErrContentEncoding},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -216,7 +221,7 @@ func (c *countingBody) Close() error {
 // or leaves a body that is not encoded: no coding other than identity
 // is left in the header, and a decoded body drops its length.
 func FuzzDecodeBody(f *testing.F) {
-	for _, s := range []string{"", "gzip", "x-gzip", "identity", "br", "gzip, identity", " GZip ", "gzip,,", ",", "identity;q=0", "gzip\x00"} {
+	for _, s := range []string{"", "gzip", "x-gzip", "identity", "br", "gzip, identity", " GZip ", "gzip,,", ",", "identity;q=0", "gzip\x00", "none", "NONE, gzip"} {
 		f.Add(s, 200, gzipped("#EXTM3U\n"))
 	}
 	f.Add("gzip", 206, "x")
@@ -231,7 +236,7 @@ func FuzzDecodeBody(f *testing.F) {
 		}
 		for _, v := range resp.Header.Values("Content-Encoding") {
 			for c := range strings.SplitSeq(v, ",") {
-				if c = strings.TrimSpace(c); c != "" && !strings.EqualFold(c, "identity") {
+				if c = strings.TrimSpace(c); c != "" && !strings.EqualFold(c, "identity") && !strings.EqualFold(c, "none") {
 					t.Fatalf("coding %q left on the response", c)
 				}
 			}
