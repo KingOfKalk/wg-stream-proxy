@@ -1,5 +1,37 @@
 # Changelog
 
+## [0.5.0](https://github.com/KingOfKalk/wg-stream-proxy/compare/v0.4.1...v0.5.0) (2026-11-21)
+
+
+### ⚠ BREAKING CHANGES
+
+* remove unused endpoints, headers, metrics, env vars and probe --standalone ([#147](https://github.com/KingOfKalk/wg-stream-proxy/issues/147))
+* **clips:** remove the in-flight clip plumbing ([#146](https://github.com/KingOfKalk/wg-stream-proxy/issues/146))
+* **cli:** remove the one-off import and epg match commands ([#145](https://github.com/KingOfKalk/wg-stream-proxy/issues/145))
+
+### Code Refactoring
+
+* **clips:** remove the in-flight clip plumbing ([#146](https://github.com/KingOfKalk/wg-stream-proxy/issues/146)) ([2d05a1c](https://github.com/KingOfKalk/wg-stream-proxy/commit/2d05a1c6809b6c585c8cceb504204db1c7370bcf))
+* **cli:** remove the one-off import and epg match commands ([#145](https://github.com/KingOfKalk/wg-stream-proxy/issues/145)) ([b2569d2](https://github.com/KingOfKalk/wg-stream-proxy/commit/b2569d22ff2c99b017b61ba9837928c259a96986))
+* remove unused endpoints, headers, metrics, env vars and probe --standalone ([#147](https://github.com/KingOfKalk/wg-stream-proxy/issues/147)) ([0a6b5a6](https://github.com/KingOfKalk/wg-stream-proxy/commit/0a6b5a65ac4f890d3d130d3954c7cbcebbfbaa04))
+* remove unused tunnel and route machinery and simplify help ([#153](https://github.com/KingOfKalk/wg-stream-proxy/issues/153)) ([06ebee5](https://github.com/KingOfKalk/wg-stream-proxy/commit/06ebee51adb04686bd7ffc4019187771733ee517))
+* share the XML writer and the format classification ([#152](https://github.com/KingOfKalk/wg-stream-proxy/issues/152)) ([f0e7b29](https://github.com/KingOfKalk/wg-stream-proxy/commit/f0e7b29f9d3e1402144b609d4a115c8d07c6d0e8))
+
+
+### Documentation
+
+* cut the docs to what the project needs ([#149](https://github.com/KingOfKalk/wg-stream-proxy/issues/149)) ([4248b11](https://github.com/KingOfKalk/wg-stream-proxy/commit/4248b11f9e956dd23f977c3d41073e06b170a35c))
+
+
+### Tests
+
+* remove duplicated and fixture-only tests and extra fuzz targets ([#150](https://github.com/KingOfKalk/wg-stream-proxy/issues/150)) ([285d1a9](https://github.com/KingOfKalk/wg-stream-proxy/commit/285d1a91f431c09f5bdb4790bf38640f65fddbe4))
+
+
+### Continuous Integration
+
+* one darwin build instead of cross-compile, weekly fuzzing ([#151](https://github.com/KingOfKalk/wg-stream-proxy/issues/151)) ([2e06977](https://github.com/KingOfKalk/wg-stream-proxy/commit/2e06977414f751319099181ab2140591c4bb32cb))
+
 ## [0.4.1](https://github.com/KingOfKalk/wg-stream-proxy/compare/v0.4.0...v0.4.1) (2026-11-20)
 
 
