@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/KingOfKalk/wg-stream-proxy/internal/config"
 	"github.com/KingOfKalk/wg-stream-proxy/internal/config/wgquick"
@@ -67,9 +68,28 @@ type runState struct {
 	mgr    *tunnel.Manager
 	srv    *Server
 	direct route.Network
-	// retired are the route sets reloads replaced. Requests that started
-	// before may still return connections to their pools.
-	retired []*route.Set
+	// fixed are the settings that need a restart, as in effect since the
+	// start (spec 5.6).
+	fixed fixedSettings
+}
+
+// fixedSettings are the settings a reload cannot change (spec 5.6); the
+// Reloader's loader checks the signing key.
+type fixedSettings struct {
+	listen        string
+	logFormat     config.LogFormat
+	debugListen   string
+	watchInterval time.Duration
+}
+
+// fixedOf returns the settings of cfg that need a restart.
+func fixedOf(cfg *config.Config) fixedSettings {
+	return fixedSettings{
+		listen:        cfg.Listen(),
+		logFormat:     cfg.LogFormat(),
+		debugListen:   cfg.DebugListen(),
+		watchInterval: cfg.WatchInterval(),
+	}
 }
 
 // buildRoutes builds the routes of cfg over the manager's current
@@ -119,23 +139,24 @@ func (st *runState) reload(cfg *config.Config, err error) error {
 		return fmt.Errorf("reload rejected: %w", err)
 	}
 
-	old := st.srv.active()
-	if cfg.Listen() != old.cfg.Listen() {
+	// Compared with the values in effect, not with the last loaded config:
+	// a reload back to them needs no restart.
+	fx := st.fixed
+	if cfg.Listen() != fx.listen {
 		st.log.Warn("reload: listen changed, restart required; keeping the old address",
-			"listen", old.cfg.Listen(), "configured", cfg.Listen())
+			"listen", fx.listen, "configured", cfg.Listen())
 	}
-	if cfg.LogFormat() != old.cfg.LogFormat() {
+	if cfg.LogFormat() != fx.logFormat {
 		st.log.Warn("reload: log_format changed, restart required; keeping the old format",
-			"log_format", string(old.cfg.LogFormat()), "configured", string(cfg.LogFormat()))
+			"log_format", string(fx.logFormat), "configured", string(cfg.LogFormat()))
 	}
-	if cfg.DebugListen() != old.cfg.DebugListen() {
+	if cfg.DebugListen() != fx.debugListen {
 		st.log.Warn("reload: debug.listen changed, restart required; keeping the old address",
-			"debug_listen", old.cfg.DebugListen(), "configured", cfg.DebugListen())
+			"debug_listen", fx.debugListen, "configured", cfg.DebugListen())
 	}
-
-	if cfg.WatchInterval() != old.cfg.WatchInterval() {
+	if cfg.WatchInterval() != fx.watchInterval {
 		st.log.Warn("reload: reload.watch_interval changed, restart required; keeping the old interval",
-			"watch_interval", old.cfg.WatchInterval(), "configured", cfg.WatchInterval())
+			"watch_interval", fx.watchInterval, "configured", cfg.WatchInterval())
 	}
 
 	changes, err := st.mgr.Apply(tunnels, tunnelDrainTimeout)
@@ -152,9 +173,10 @@ func (st *runState) reload(cfg *config.Config, err error) error {
 		st.log.Error("reload failed", "error", err)
 		return fmt.Errorf("reload failed: %w", err)
 	}
+	// Reloads are serialized: old is the generation this one replaces.
+	old := st.srv.active()
 	st.srv.swap(cfg, routes)
-	old.routes.CloseIdleConnections()
-	st.retired = append(st.retired, old.routes)
+	old.retire()
 	if st.opts.LogLevel != nil {
 		st.opts.LogLevel.Set(cfg.LogLevel())
 	}
@@ -171,12 +193,11 @@ func (st *runState) reload(cfg *config.Config, err error) error {
 }
 
 // closeIdleConnections closes the idle upstream connections of the
-// active routes and of all routes reloads replaced.
+// active routes. Called after all requests and fetches ended: the routes
+// reloads replaced were closed by their last user (generation.done) or
+// by the reload itself (generation.retire).
 func (st *runState) closeIdleConnections() {
 	st.srv.active().routes.CloseIdleConnections()
-	for _, s := range st.retired {
-		s.CloseIdleConnections()
-	}
 }
 
 // diffChannels compares two generations of channels by id and returns the

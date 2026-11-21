@@ -84,7 +84,8 @@ func (d *debugHandler) handleProbe(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	g := d.srv.active()
+	g := d.srv.use()
+	defer g.done()
 	name := req.Route
 	if name == "" {
 		name = config.RouteDirect

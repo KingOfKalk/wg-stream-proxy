@@ -143,7 +143,7 @@ func Run(ctx context.Context, opts RunOptions) (err error) {
 	}
 	defer func() { _ = mgr.Close() }()
 
-	st := &runState{opts: opts, log: log, mgr: mgr, direct: opts.Direct}
+	st := &runState{opts: opts, log: log, mgr: mgr, direct: opts.Direct, fixed: fixedOf(cfg)}
 	if st.direct == nil {
 		st.direct = route.Host()
 	}
