@@ -293,19 +293,25 @@ func TestFetchRedirectHeaders(t *testing.T) {
 
 func TestFetchRedirectErrors(t *testing.T) {
 	long := "http://cdn.example.com/" + strings.Repeat("a", MaxURLLen)
-	tests := []struct {
+	type test struct {
 		name       string
 		location   string
 		wantErr    error
 		wantReason Reason
-	}{
+	}
+	tests := []test{
 		{"location too long", long, ErrURLTooLong, ReasonSize},
 		{"unsupported scheme", "ftp://cdn.example.com/x", errBadRedirect, ReasonOther},
 		{"unparsable location", "http://[::1/x?token=secret", errBadRedirect, ReasonOther},
 	}
+	for _, loc := range malformedLocations {
+		tests = append(tests, test{"scheme-relative " + loc, loc, errBadRedirect, ReasonOther})
+	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			ch := make(chan string, 2)
 			r, _, _ := newFixture(t, func(w http.ResponseWriter, r *http.Request) {
+				ch <- r.URL.Path
 				w.Header().Set("Location", tt.location)
 				w.WriteHeader(http.StatusFound)
 			})
@@ -316,10 +322,60 @@ func TestFetchRedirectErrors(t *testing.T) {
 			if got := Classify(err); got != tt.wantReason {
 				t.Errorf("Classify = %q, want %q", got, tt.wantReason)
 			}
-			if strings.Contains(err.Error(), "secret") {
-				t.Errorf("error leaks the Location query: %v", err)
+			for _, s := range []string{"secret", "token"} {
+				if strings.Contains(err.Error(), s) {
+					t.Errorf("error leaks the Location path or query (%q): %v", s, err)
+				}
+			}
+			// The error names the redirecting URL, not the target.
+			var e *Error
+			if !errors.As(err, &e) || e.URL != "http://cdn.example.com/start" {
+				t.Errorf("Error.URL = %v, want the redirecting URL", e)
+			}
+			close(ch)
+			var paths []string
+			for p := range ch {
+				paths = append(paths, p)
+			}
+			if !slices.Equal(paths, []string{"/start"}) {
+				t.Errorf("upstream requests %q, want only /start", paths)
 			}
 		})
+	}
+}
+
+// malformedLocations are scheme-relative Location values with a token in
+// the path or the query: url.Parse accepts them without a scheme, but the
+// resolved http URL does not parse again (#157). Some were found by a
+// short random search.
+var malformedLocations = []string{
+	"//::/secretdir/file.m3u8?token=secret",
+	"//:http://x/secretdir?token=secret",
+	"//:,@::",
+	"//x&:~http://x/secretdir?token=secret",
+	"//http::/secretdir/file.m3u8?token=secret",
+	"//x:*:/secretdir/file.m3u8?token=secret",
+	"//1::/secretdir/file.m3u8?token=secret",
+	"//:]$:/secretdir/file.m3u8?token=secret",
+	"//:http:#[/secretdir/file.m3u8?token=secret",
+}
+
+// TestFollowUnparsableURL: a URL whose String form does not parse fails
+// with errInvalidURL, without the parse error that quotes the whole URL.
+func TestFollowUnparsableURL(t *testing.T) {
+	r, n, _ := newFixture(t, func(http.ResponseWriter, *http.Request) {})
+	u := &url.URL{Scheme: "http", Host: "::", Path: "/secretdir/file.m3u8", RawQuery: "token=secret"}
+	_, _, err := r.follow(context.Background(), r.transport, u, Request{})
+	if !errors.Is(err, errInvalidURL) {
+		t.Fatalf("follow error = %v, want errInvalidURL", err)
+	}
+	for _, s := range []string{"secret", "token"} {
+		if strings.Contains(err.Error(), s) {
+			t.Errorf("error leaks the URL path or query (%q): %v", s, err)
+		}
+	}
+	if d := n.Dialed(); len(d) != 0 {
+		t.Errorf("dials = %q, want none", d)
 	}
 }
 

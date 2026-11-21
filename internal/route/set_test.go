@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/KingOfKalk/wg-stream-proxy/internal/config"
 )
@@ -93,6 +94,15 @@ func TestRouteTransportSettings(t *testing.T) {
 			}
 			if tr.DialContext == nil {
 				t.Errorf("%s %s: no DialContext", name, kind)
+			}
+			// The dial outlives a cancelled request: connect_timeout also
+			// bounds the TLS handshake (spec 3.4, #157).
+			if tr.TLSHandshakeTimeout != testUpstream.ConnectTimeout {
+				t.Errorf("%s %s: TLSHandshakeTimeout = %v, want connect_timeout %v", name, kind, tr.TLSHandshakeTimeout, testUpstream.ConnectTimeout)
+			}
+			// HTTP/2 health check (spec 2.1, #157).
+			if h2 := tr.HTTP2; h2 == nil || h2.SendPingTimeout != 15*time.Second || h2.PingTimeout != 10*time.Second {
+				t.Errorf("%s %s: HTTP2 = %+v, want SendPingTimeout 15s and PingTimeout 10s", name, kind, h2)
 			}
 		}
 		if r.transport == r.icyTransport {
