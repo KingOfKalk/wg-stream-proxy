@@ -5,10 +5,12 @@ package hls
 import (
 	"bufio"
 	"bytes"
+	"encoding/binary"
 	"io"
 	"math/rand/v2"
 	"strings"
 	"testing"
+	"unicode/utf16"
 )
 
 func TestUnsupported(t *testing.T) {
@@ -172,6 +174,8 @@ func FuzzUnsupported(f *testing.F) {
 		"\x00\x01\x02\xff<MPD=a=\"b\">", "\x00<MPD!", "WEBVTT\n\n" + strings.Repeat("x", 600) + "<MPD>",
 		"<asx><title>\xd6</title></asx>", "<playlist></playlist>\x00", "<html>\xe4\x00", "; \xe4\n[playlist]\n", "<\x9a\x01\xff",
 		"<asx x=\"\xd6\">\x00", "<?xml \xd6?><!--\x00--><x:playlist\x00", "<!DOCTYPE\x00",
+		"\xfe\xff\x9a\x31\x00\x01", "\xff\xfe\x31\x9a\x00\xd8", "\xfe\xff\xfe\xff\x00#", "\xff\xfe\xff\xfe#\x00", "\xff\xfe\x00\x00",
+		"\xfe\xff\x00\xa0\x00[", "\xfe\xff\xd8\x3d\xdc\xfb\x00 ", "\xfe\xff\x00", "\xff\xfe\xd6\x00\x31\x00",
 	} {
 		f.Add("", []byte(s), uint8(Auto))
 		f.Add("audio/x-scpls", []byte(s), uint8(Raw))
@@ -185,6 +189,21 @@ func FuzzUnsupported(f *testing.F) {
 		}
 		if typ == HLS && got != "" {
 			t.Fatalf("configured hls refused as %q", got)
+		}
+		// ASCII text after a UTF-16 byte order mark is refused, whatever
+		// it says (spec 3.3).
+		if typ == HLS || len(prefix) == 0 || 2+2*len(prefix) > SniffLen {
+			return
+		}
+		for _, c := range prefix {
+			if c < 0x20 && c != '\t' && c != '\n' && c != '\r' || c > 0x7e {
+				return
+			}
+		}
+		for _, be := range []bool{true, false} {
+			if got := Unsupported(contentType, []byte(utf16Body(string(prefix), be)), typ); got == "" {
+				t.Fatalf("UTF-16 (big-endian %v) of %q streamed", be, prefix)
+			}
 		}
 	})
 }
@@ -450,5 +469,122 @@ func TestUnsupportedLegacyEncodings(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// utf16Body encodes s as UTF-16 with a byte order mark, big-endian
+// (FE FF) or little-endian (FF FE).
+func utf16Body(s string, bigEndian bool) string {
+	b := []byte("\xff\xfe")
+	if bigEndian {
+		b = []byte("\xfe\xff")
+	}
+	for _, u := range utf16.Encode([]rune(s)) {
+		if bigEndian {
+			b = binary.BigEndian.AppendUint16(b, u)
+		} else {
+			b = binary.LittleEndian.AppendUint16(b, u)
+		}
+	}
+	return string(b)
+}
+
+// randomAfterBOM returns bom followed by n random bytes whose first
+// UTF-16 code unit is not ASCII: AES-128 ciphertext or MP3 from
+// mid-frame that starts with a UTF-16 byte order mark by chance.
+func randomAfterBOM(rnd *rand.Rand, bom string, n int) string {
+	b := make([]byte, n)
+	for i := range b {
+		b[i] = byte(rnd.Uint32())
+	}
+	b[0] |= 0x80 // big-endian high byte, little-endian low byte
+	b[1] |= 0x80
+	return bom + string(b)
+}
+
+// TestUnsupportedUTF16BOM checks spec 3.3 for bodies that start with a
+// UTF-16 byte order mark (issue 164): UTF-16 playlists are refused on
+// auto and raw channels, whatever follows the mark; media and ciphertext
+// that start with FE FF or FF FE by chance stream.
+func TestUnsupportedUTF16BOM(t *testing.T) {
+	ref := `<entry><ref href="http://direct.example/secret/stream"/></entry>`
+	rnd := rand.New(rand.NewPCG(7, 8))
+	type tc struct{ name, body, want string }
+	var tests []tc
+	for _, enc := range []struct {
+		name string
+		be   bool
+	}{{"utf-16be", true}, {"utf-16le", false}} {
+		text := func(s string) string { return utf16Body(s, enc.be) }
+		tests = append(tests,
+			tc{enc.name + " asx after whitespace", text(" \r\n<asx version=\"3.0\">" + ref + "</asx>"), "unknown"},
+			tc{enc.name + " xml declaration", text(`<?xml version="1.0" encoding="UTF-16"?><playlist version="1"/>`), "unknown"},
+			tc{enc.name + " extended m3u", text("#EXTM3U\n#EXTINF:-1,Radio\nhttp://direct.example/secret/stream\n"), "unknown"},
+			tc{enc.name + " pls", text("[playlist]\nFile1=http://direct.example/secret/stream\n"), "unknown"},
+			tc{enc.name + " url line", text("http://direct.example/secret/stream\n"), "unknown"},
+			tc{enc.name + " short url line", text("//a.b/c"), "unknown"},
+			tc{enc.name + " two byte order marks", text("\ufeff#EXTM3U\nhttp://direct.example/secret/stream\n"), "unknown"},
+			tc{enc.name + " unicode whitespace", text("\u00a0\u3000[playlist]\nFile1=http://direct.example/secret/stream\n"), "unknown"},
+			tc{enc.name + " non-ascii first line", text("\u00d61 Radio.mp3\r\nhttp://direct.example/secret/stream\r\n"), "unknown"},
+			tc{enc.name + " cjk first line", text("\u4e2d\u6587.mp3\nhttp://direct.example/secret/stream\n"), "unknown"},
+			tc{enc.name + " surrogate pair first", text("\U0001f4fb Radio\nhttp://direct.example/secret/stream\n"), "unknown"},
+			tc{enc.name + " playlist followed by NUL", text("#EXTM3U\nhttp://direct.example/secret/stream\n\x00\x00"), "unknown"},
+			tc{enc.name + " only whitespace", text(" \n "), "unknown"},
+			tc{enc.name + " byte order mark only", text(""), "unknown"},
+			tc{enc.name + " ciphertext", randomAfterBOM(rnd, text(""), 4096), ""},
+		)
+	}
+	tests = append(tests,
+		tc{"utf-16be byte order mark and a cut code unit", "\xfe\xff\x00", "unknown"},
+		tc{"utf-32le byte order mark", "\xff\xfe\x00\x00<\x00\x00\x00a\x00\x00\x00", "unknown"},
+		tc{"utf-32be byte order mark", "\x00\x00\xfe\xff\x00\x00\x00<\x00\x00\x00a", "unknown"},
+		// A control code unit or an unpaired surrogate: not UTF-16 text.
+		tc{"ciphertext after FE FF with a control unit", "\xfe\xff\x9a\x31\xc4\x07\x00\x01\x8f\x1a\x3c\xe1\x92\x7b\x05\x6d\xaa\x10\x4e\xc7", ""},
+		tc{"ciphertext after FF FE with an unpaired surrogate", "\xff\xfe\x31\x9a\x07\xc4\x01\xdc\x1a\x8f\xe1\x3c\x7b\x92\x6d\x05\x10\xaa\xc7\x4e", ""},
+		tc{"id3 after FE FF", "\xfe\xffID3\x04\x00\x00\x00\x00\x00\x23TSSE\x00\x00\x00\x0f\x00\x00\x03Lavf", ""},
+		// At most 16 bytes, as an AES-128 key: only the first code unit
+		// counts.
+		tc{"aes key starting with FE FF", "\xfe\xff\x1a\x8f\x3c\xe1\x92\x7b\x05\x6d\xaa\x10\x4e\xc7\x99\x21", ""},
+		tc{"aes key starting with FF FE", "\xff\xfe\x8f\x1a\xe1\x3c\x7b\x92\x6d\x05\x10\xaa\xc7\x4e\x21\x99", ""},
+		tc{"aes key starting with FE FF and an ascii unit", "\xfe\xff\x00\x41\x3c\xe1\x92\x7b\x05\x6d\xaa\x10\x4e\xc7\x99\x21", "unknown"},
+	)
+	for _, tt := range tests {
+		for _, configured := range []Type{Auto, Raw} {
+			t.Run(tt.name+"/"+configured.String(), func(t *testing.T) {
+				body := bufio.NewReaderSize(strings.NewReader(tt.body), SniffLen)
+				typ, refused, rest, err := Classify("application/octet-stream", body, configured, true)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if typ != Raw || refused != tt.want {
+					t.Errorf("Classify = %v, %q; want raw, %q", typ, refused, tt.want)
+				}
+				if b, err := io.ReadAll(rest); err != nil || string(b) != tt.body {
+					t.Errorf("rest of the body changed: %d bytes, %v", len(b), err)
+				}
+			})
+		}
+	}
+}
+
+// TestUnsupportedUTF16BOMRate: of random SniffLen prefixes that start
+// with a UTF-16 byte order mark, only a small share is refused (spec 3.3:
+// about 1 in 560; every one of them before issue 164).
+func TestUnsupportedUTF16BOMRate(t *testing.T) {
+	const n = 20000
+	rnd := rand.New(rand.NewPCG(9, 10))
+	b := make([]byte, SniffLen)
+	refused := 0
+	for i := range n {
+		for j := range b {
+			b[j] = byte(rnd.Uint32())
+		}
+		copy(b, []string{"\xfe\xff", "\xff\xfe"}[i%2])
+		if Unsupported("", b, Raw) != "" {
+			refused++
+		}
+	}
+	if refused > n/100 {
+		t.Errorf("%d of %d random bodies after a UTF-16 byte order mark refused, want at most 1%%", refused, n)
 	}
 }

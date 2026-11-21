@@ -5,10 +5,12 @@ package hls
 import (
 	"bufio"
 	"bytes"
+	"encoding/binary"
 	"encoding/xml"
 	"errors"
 	"io"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -298,12 +300,78 @@ func lexicalXML(b []byte) string {
 	return ""
 }
 
-// wideBOM reports whether b starts with a UTF-16 or UTF-32 byte order
-// mark. The proxy reads no playlist in these encodings, and the checks
-// of Detect and Unsupported would not see a playlist in them.
+// wideBOM reports whether b is UTF-16 or UTF-32 text: a UTF-32 byte
+// order mark, a UTF-16 one followed by text (utf16Text), or XML without
+// a byte order mark (wideXML). The proxy reads no playlist in these
+// encodings, and the checks of Detect and Unsupported would not see a
+// playlist in them.
 func wideBOM(b []byte) bool {
-	return bytes.HasPrefix(b, []byte("\xfe\xff")) || bytes.HasPrefix(b, []byte("\xff\xfe")) ||
-		bytes.HasPrefix(b, []byte("\x00\x00\xfe\xff")) || wideXML(b)
+	return bytes.HasPrefix(b, []byte("\x00\x00\xfe\xff")) || bytes.HasPrefix(b, []byte("\xff\xfe\x00\x00")) ||
+		utf16Text(b) || wideXML(b)
+}
+
+// utf16Text reports whether b starts with a UTF-16 byte order mark (FE FF
+// big-endian, FF FE little-endian) followed by text: after any further
+// byte order marks and whitespace code units, a printable ASCII code unit
+// (every playlist starts with one: '<', '#', '[', a URL) or the end of b;
+// or, if b is longer than maxBinaryTextLen, code units that are all text
+// (utf16Units). Media and ciphertext start with one of the marks by
+// chance (1 in 32,768) and are rarely followed by either: a random
+// SniffLen prefix matches with a probability of about 1 in 560 after the
+// mark (1 in 18 million in all); a shorter one more often, as fewer code
+// units must be text.
+func utf16Text(b []byte) bool {
+	var unit func([]byte) uint16
+	switch {
+	case bytes.HasPrefix(b, []byte("\xfe\xff")):
+		unit = binary.BigEndian.Uint16
+	case bytes.HasPrefix(b, []byte("\xff\xfe")):
+		unit = binary.LittleEndian.Uint16
+	default:
+		return false
+	}
+	rest := b[2:]
+	for ; len(rest) >= 2; rest = rest[2:] {
+		u := unit(rest)
+		if u == 0xfeff || unicode.IsSpace(rune(u)) {
+			continue
+		}
+		if u > 0x20 && u < 0x7f {
+			return true
+		}
+		break
+	}
+	if len(rest) < 2 {
+		return true // nothing but marks and whitespace
+	}
+	return len(b) > maxBinaryTextLen && utf16Units(b[2:], unit)
+}
+
+// utf16Units reports whether b, read as UTF-16 code units with unit, is
+// text like textLike: no control characters other than TAB, LF, CR and
+// FF, no DEL, every surrogate in a pair (a high surrogate or a byte at
+// the end of b may be cut off). A random code unit is a lone surrogate
+// with a probability of about 1/32, so the 255 code units of a random
+// SniffLen prefix pass with a probability of about 1 in 3,000.
+func utf16Units(b []byte, unit func([]byte) uint16) bool {
+	for ; len(b) >= 2; b = b[2:] {
+		u := unit(b)
+		switch {
+		case u < 0x20 && u != '\t' && u != '\n' && u != '\r' && u != '\f' || u == 0x7f:
+			return false
+		case u >= 0xd800 && u < 0xdc00: // high surrogate
+			if len(b) < 4 {
+				return true
+			}
+			if l := unit(b[2:]); l < 0xdc00 || l >= 0xe000 {
+				return false
+			}
+			b = b[2:]
+		case u >= 0xdc00 && u < 0xe000: // low surrogate without a high one
+			return false
+		}
+	}
+	return true
 }
 
 // wideXML reports whether b starts like XML in UTF-16 or UTF-32 without
