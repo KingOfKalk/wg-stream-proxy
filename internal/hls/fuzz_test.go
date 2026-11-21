@@ -93,25 +93,32 @@ func checkRewrite(t *testing.T, in, out []byte) {
 	}
 }
 
-// checkNoHTTPURI fails if "URI=" in a rewritten tag line is followed by an
-// http(s) or scheme-relative URL, the way a lenient or regex-based player
-// parser would read it. fuzzURLFor values are relative, so any such URL was
-// left unrewritten.
+// checkNoHTTPURI fails if "URI=" or "X-ASSET-LIST=" in a rewritten tag line
+// is followed by an http(s) or scheme-relative URL, the way a lenient or
+// regex-based player parser would read it. fuzzURLFor values are relative,
+// so any such URL was left unrewritten.
 func checkNoHTTPURI(t *testing.T, i int, out []byte) {
 	t.Helper()
+	for _, marker := range []string{"URI=", "X-ASSET-LIST="} {
+		checkNoHTTPAfter(t, i, out, marker)
+	}
+}
+
+func checkNoHTTPAfter(t *testing.T, i int, out []byte, marker string) {
+	t.Helper()
 	for rest := out; ; {
-		j := bytes.Index(rest, []byte("URI="))
+		j := bytes.Index(rest, []byte(marker))
 		if j < 0 {
 			return
 		}
-		rest = rest[j+len("URI="):]
+		rest = rest[j+len(marker):]
 		v := rest
 		if q, ok := bytes.CutPrefix(v, []byte(`"`)); ok {
 			v = bytes.TrimLeft(q, " \t")
 		}
 		lower := bytes.ToLower(v)
 		if bytes.HasPrefix(lower, []byte("http:")) || bytes.HasPrefix(lower, []byte("https:")) || bytes.HasPrefix(v, []byte("//")) {
-			t.Fatalf("line %d: unrewritten http URI after URI=: %q", i, out)
+			t.Fatalf("line %d: unrewritten http URI after %s: %q", i, marker, out)
 		}
 	}
 }
@@ -162,6 +169,8 @@ func FuzzRewrite(f *testing.F) {
 		"#EXTINF:6.0,URI=\"https://example.com/x\"\nfoo:%zz\n",
 		"#EXT-X-KEY:METHOD=AES-128 URI=\"k\"\n#EXT-X-FOO:A=\"x\\\"\",URI=\"https://example.com/k\"\n",
 		"#EXT-X-FOO:URI=https://example.com/k,X-ASSET-URI=\"a\"\rseg.ts\r",
+		"#EXT-X-DATERANGE:ID=\"a\",X-ASSET-LIST=\"https://ads.example.com/l.json\",X-ASSET-URI=\"../b.m3u8\"\n",
+		"#EXT-X-DATERANGE:X-ASSET-LIST=//ads.example.com/l.json\n#EXT-X-FOO:A=\"x\" junk X-ASSET-LIST=\"l.json\"\n",
 		"../a/b.ts?x=1\n/abs/./c.ts\n//cdn.example.org/d.ts\nHTTP://h.example/../e.ts?\n%41/x.ts?#f\na b/c.ts\n#EXT-X-MAP:URI=\"../../i.mp4\"\n",
 	} {
 		f.Add([]byte(s))

@@ -202,6 +202,45 @@ func TestRewrite(t *testing.T) {
 			want: mpdOpen + mpdBase + "\n\n" + `<SupplementalProperty schemeIdUri="urn:example:keep" value="1"/><Period/></MPD>`,
 		},
 		{
+			// ISO/IEC 23009-1:2019 lists urn:mpeg:dash:chaining:2016 in its
+			// scheme table but uses urn:mpeg:dash:mpd-chaining:2016 in the
+			// text; GPAC's client reads the second.
+			name: "MPD chaining in the other spelling removed",
+			in: mpdOpen + `<SupplementalProperty schemeIdUri="urn:mpeg:dash:mpd-chaining:2016" value="https://next.example.com/n.mpd"/>` +
+				`<Period><SupplementalProperty schemeIdUri="URN:MPEG:DASH:MPD-CHAINING:2016" value="https://next.example.com/m.mpd"/></Period></MPD>`,
+			want: mpdOpen + mpdBase + `<Period></Period></MPD>`,
+		},
+		{
+			// Linked Periods (23009-1 6th edition): the player fetches the
+			// imported MPD. Without it the Period is a regular one, as after
+			// a failed resolution.
+			name: "imported MPD removed",
+			in: mpdOpen + `<Period id="p1"><ImportedMPD earliestResolutionTimeOffset="10">https://other.example.com/linked.mpd</ImportedMPD>` +
+				`<AdaptationSet><SegmentTemplate media="$Number$.m4s"/></AdaptationSet></Period><Period id="p2"><x:importedmpd xmlns:x="urn:x">l.mpd</x:importedmpd></Period></MPD>`,
+			want: mpdOpen + mpdBase + `<Period id="p1"><AdaptationSet><SegmentTemplate media="$Number$.m4s"/></AdaptationSet></Period><Period id="p2"></Period></MPD>`,
+		},
+		{
+			// Shaka Player shows an OverlayEvent of an MPD event stream as
+			// an overlay interstitial and fetches its uri itself.
+			name: "overlay event removed from a kept event stream",
+			in: mpdOpen + `<Period><EventStream schemeIdUri="urn:mpeg:dash:event:2012" value="1"><Event id="1" duration="10">` +
+				`<OverlayEvent uri="https://ads.example.com/o.mp4" mimeType="video/mp4" z="1"><Background uri="https://ads.example.com/bg.png"/></OverlayEvent>` +
+				`</Event></EventStream></Period></MPD>`,
+			want: mpdOpen + mpdBase + `<Period><EventStream schemeIdUri="urn:mpeg:dash:event:2012" value="1"><Event id="1" duration="10"></Event></EventStream></Period></MPD>`,
+		},
+		{
+			name: "initialization set references",
+			in: mpdOpen + `<InitializationSet id="1" contentType="video" initialization="https://cdn2.example.com/init/v.mp4"/>` +
+				`<InitializationSet id="2" initialization="init/a.mp4"/><InitializationSet id="3" INITIALIZATION="/i/$RepresentationID$.mp4?k=1"/><Period/></MPD>`,
+			want: mpdOpen + mpdBase + `<InitializationSet id="1" contentType="video" initialization="http://wsp.lan/p/n/{https://cdn2.example.com/init/}/v.mp4"/>` +
+				`<InitializationSet id="2" initialization="init/a.mp4"/><InitializationSet id="3" INITIALIZATION="http://wsp.lan/p/q/{https://cdn.example.net/i/}/$RepresentationID$.mp4?k=1"/><Period/></MPD>`,
+		},
+		{
+			name: "initialization set resolves against the MPD base",
+			in:   mpdOpen + `<InitializationSet id="1" initialization="../v/init.mp4"/><BaseURL>https://cdn2.example.com/live/</BaseURL><Period/></MPD>`,
+			want: mpdOpen + `<InitializationSet id="1" initialization="http://wsp.lan/p/n/{https://cdn2.example.com/v/}/init.mp4"/><BaseURL>http://wsp.lan/p/n/{https://cdn2.example.com/live/}/</BaseURL><Period/></MPD>`,
+		},
+		{
 			name: "UTCTiming: direct kept, others served by the proxy",
 			in: mpdOpen + `<Period/><UTCTiming schemeIdUri="urn:mpeg:dash:utc:direct:2014" value="2026-11-19T12:00:00Z"/>` +
 				`<UTCTiming schemeIdUri="urn:mpeg:dash:utc:http-xsdate:2014" value="https://time.example.org/xs"></UTCTiming>` +
@@ -289,6 +328,10 @@ func TestRewriteErrors(t *testing.T) {
 		{"representation id with backslash", mpdOpen + `<Period><Representation id="\evil.example"/></Period></MPD>`, ErrInvalidManifest},
 		{"representation id with space", mpdOpen + `<Period><Representation id="a b"/></Period></MPD>`, ErrInvalidManifest},
 		{"essential chaining", mpdOpen + `<EssentialProperty schemeIdUri="urn:mpeg:dash:chaining:2016" value="https://next.example/"/><Period/></MPD>`, ErrInvalidManifest},
+		{"essential chaining, other spelling", mpdOpen + `<EssentialProperty schemeIdUri="urn:mpeg:dash:mpd-chaining:2016" value="https://next.example/"/><Period/></MPD>`, ErrInvalidManifest},
+		{"initialization set with backslash", mpdOpen + `<InitializationSet id="1" initialization="\\evil.example\i.mp4"/><Period/></MPD>`, ErrInvalidManifest},
+		{"initialization set with other scheme", mpdOpen + `<InitializationSet id="1" initialization="ftp://evil.example/i.mp4"/><Period/></MPD>`, ErrInvalidManifest},
+		{"initialization set duplicate in other case", mpdOpen + `<InitializationSet id="1" initialization="i.mp4" Initialization="https://evil.example/i.mp4"/><Period/></MPD>`, ErrInvalidManifest},
 		{"latin-1", `<?xml version="1.0" encoding="ISO-8859-1"?><MPD><Period/></MPD>`, ErrInvalidManifest},
 		{"xml 1.1", `<?xml version="1.1"?><MPD><Period/></MPD>`, ErrInvalidManifest},
 		{"too deep", mpdOpen + strings.Repeat("<a>", maxDepth) + strings.Repeat("</a>", maxDepth) + `</MPD>`, ErrInvalidManifest},
