@@ -30,10 +30,9 @@ const maxCodingText = 64
 
 // DecodeBody undoes a Content-Encoding of resp that the transport did
 // not undo (spec 3.4). Go's transport decodes gzip only if it asked for
-// it, which it does not for a request with Range or an Accept-Encoding
-// of upstream.headers, and never decodes x-gzip; some servers send
-// pre-compressed objects whatever the request said. It must run before
-// the body is classified or relayed:
+// it, which it does not for a request with Range, and never decodes
+// x-gzip; some servers send pre-compressed objects whatever the request
+// said. It must run before the body is classified or relayed:
 //   - no coding, or only identity or none: resp is unchanged;
 //   - exactly one gzip or x-gzip (identity and none ignored): the body
 //     is decoded while it is read and resp looks like a transparently

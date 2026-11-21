@@ -161,6 +161,14 @@ func TestReloadRejectsInvalidChange(t *testing.T) {
 			want: []string{"bogus", "nowhere"},
 		},
 		{
+			name: "settings that cannot work",
+			files: map[string]string{
+				"config.toml":        "[debug]\nlisten = \"proxy.lan:2350\"\n" + allowLoopback,
+				"channels.d/tv.toml": tv + "[channel.upstream]\nheaders = { host = \"example.org\", Accept-Encoding = \"gzip\" }\n",
+			},
+			want: []string{"debug.listen", "must be an IP address or localhost", `\"Host\" is not allowed`, `\"Accept-Encoding\" is not allowed`},
+		},
+		{
 			name:  "tunnel file errors",
 			files: map[string]string{"tunnels/gr.conf": "[Interface]\nPostUp = true\n", "tunnels/uk.conf": "[Peer]\n"},
 			want:  []string{"PostUp", `tunnel \"uk\"`},

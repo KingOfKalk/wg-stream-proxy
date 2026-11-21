@@ -183,6 +183,8 @@ func (c *Config) applySettings(raw rawConfig, src string, ov Overrides, routes m
 		switch {
 		case !validListen(*v):
 			fail("debug.listen", src, "invalid address %q: use [host]:port", *v)
+		case !debugHostOK(*v):
+			fail("debug.listen", src, debugHostMsg, listenHost(*v))
 		case validListen(c.listen) && samePort(*v, c.listen):
 			// Never on the main port (spec 5.3).
 			_, port, _ := net.SplitHostPort(c.listen)
@@ -288,6 +290,35 @@ func validListen(s string) bool {
 		return false
 	}
 	_, err = strconv.ParseUint(port, 10, 16)
+	return err == nil
+}
+
+// debugHostMsg is the config error for a debug.listen host the debug host
+// guard would refuse (spec 7.1); the argument is the host.
+const debugHostMsg = "host %q must be an IP address or localhost: the debug listener answers other host names with 403, so tunnel and probe could not reach it"
+
+// listenHost returns the host of a valid listen address.
+func listenHost(s string) string {
+	host, _, _ := net.SplitHostPort(s)
+	return host
+}
+
+// debugHostOK reports whether the host of the valid listen address s is
+// empty (unspecified), an IP address or localhost: the hosts the debug
+// listener answers (spec 7.1).
+func debugHostOK(s string) bool {
+	host := listenHost(s)
+	return host == "" || IPOrLocalhost(host)
+}
+
+// IPOrLocalhost reports whether host, without port and brackets, is an IP
+// address (IPv6 zones included) or localhost: the names the debug
+// listener answers, as any other name could have been rebound (spec 7.1).
+func IPOrLocalhost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	_, err := netip.ParseAddr(host)
 	return err == nil
 }
 

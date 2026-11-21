@@ -205,6 +205,8 @@ func LoadAddresses(opts Options) (listen, debugListen string, err error) {
 		debugListen = *v
 		if !validListen(debugListen) {
 			fail("debug.listen", src, "invalid address %q: use [host]:port", debugListen)
+		} else if !debugHostOK(debugListen) {
+			fail("debug.listen", src, debugHostMsg, listenHost(debugListen))
 		}
 	}
 	if len(errs) > 0 {
