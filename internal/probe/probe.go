@@ -217,6 +217,12 @@ func (p *prober) step(ctx context.Context, role, rawURL string, icy bool) *Step 
 		s.fail(ClassStatus, fmt.Sprintf("upstream status %d", resp.StatusCode))
 		return s
 	}
+	// A Content-Encoding is decoded or refused like the proxy does (spec
+	// 3.4), so the step reports the classification of the decoded body.
+	if err := route.DecodeBody(resp); err != nil {
+		s.fail(string(route.Classify(err)), err.Error())
+		return s
+	}
 
 	body := bufio.NewReaderSize(resp.Body, hls.SniffLen)
 	if role == RoleSegment {
