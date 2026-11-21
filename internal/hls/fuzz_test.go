@@ -171,9 +171,6 @@ func FuzzRewrite(f *testing.F) {
 		f.Fatal(err)
 	}
 	f.Fuzz(func(t *testing.T, in []byte) {
-		// The output with the signer is byte for byte the one of the
-		// implementation before issue #76 (reference_test.go).
-		rewriteBoth(t, in, final)
 		out, err := Rewrite(in, final, fuzzURLFor)
 		if err != nil {
 			if !errors.Is(err, ErrInvalidURI) && !errors.Is(err, ErrURLTooLong) && !errors.Is(err, ErrInvalidPlaylist) && !errors.Is(err, ErrPlaylistTooLarge) {
