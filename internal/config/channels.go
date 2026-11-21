@@ -300,6 +300,10 @@ func (l *channelLoader) layer(prefix string, up rawUpstream, pl rawPlaylist) lay
 			fail("upstream.headers", "invalid header name %q", k)
 		case strings.ContainsAny(v, "\r\n\x00"):
 			fail("upstream.headers", "invalid value for header %q", ck)
+		case ck == "Host":
+			fail("upstream.headers", "%q is not allowed: net/http sends the host of the URL, a Host header would have no effect", ck)
+		case ck == "Accept-Encoding":
+			fail("upstream.headers", "%q is not allowed: it turns off the transparent decompression of the transport", ck)
 		default:
 			if _, dup := ly.headers[ck]; dup {
 				fail("upstream.headers", "duplicate header %q (names are case-insensitive)", ck)

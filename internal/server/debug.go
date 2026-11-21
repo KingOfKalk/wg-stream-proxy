@@ -9,11 +9,11 @@ import (
 	"net"
 	"net/http"
 	"net/http/pprof"
-	"net/netip"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/KingOfKalk/wg-stream-proxy/internal/config"
 	"github.com/KingOfKalk/wg-stream-proxy/internal/tunnel"
 )
 
@@ -81,11 +81,7 @@ func debugHostAllowed(hostport string) bool {
 	} else if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
 		host = host[1 : len(host)-1]
 	}
-	if strings.EqualFold(host, "localhost") {
-		return true
-	}
-	_, err := netip.ParseAddr(host)
-	return err == nil
+	return config.IPOrLocalhost(host)
 }
 
 // handleTunnels lists the configured tunnels with their state.
