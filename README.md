@@ -12,7 +12,7 @@ Route each IPTV and internet radio channel through its own userspace WireGuard t
 - One XMLTV guide (`/epg.xml.gz`): EPG sources fetched through their routes, filtered to your channels and merged.
 - Metrics: Prometheus metrics on `/metrics` including timing histograms, and a Grafana dashboard.
 - Error clips: an HLS channel that fails to start shows a short clip with the reason ("Tunnel not reachable", "Channel not available", …) instead of a failure dialog.
-- Debug: profiles, recent requests, tunnel state and cool-down on a separate listener (off by default).
+- Debug: profiles, tunnel state, cool-down and `probe` (test a URL through a route) on a separate listener (off by default).
 
 ## Quick start
 
@@ -37,10 +37,9 @@ Route each IPTV and internet radio channel through its own userspace WireGuard t
 ## Documentation
 
 - [Specification](docs/spec.md) (binding)
-- [Architecture](docs/architecture.md): how it works
+- [Architecture](docs/architecture.md): request flows, tunnel lifecycle, package map
 - [Deployment](docs/deploy.md): standalone, Docker, Compose, Kodi settings
 - [Observability](docs/observability.md): metrics, Prometheus, Grafana dashboard
-- [Clips](docs/clips.md): error clips
 - [Testing](docs/testing.md)
 - [Contributing](CONTRIBUTING.md) and [AGENTS.md](AGENTS.md)
 

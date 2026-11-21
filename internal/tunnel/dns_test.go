@@ -888,8 +888,7 @@ func TestParseResponseTTL(t *testing.T) {
 
 // TestLookupOutsideAllowedIPs: a name whose addresses all lie outside
 // AllowedIPs fails like an unknown name and wraps ErrNotAllowed, so the
-// server can tell the viewer the configuration blocks it (docs/clips.md
-// 3.2).
+// server can tell the viewer the configuration blocks it (spec 3.4).
 func TestLookupOutsideAllowedIPs(t *testing.T) {
 	peer := tunneltest.Start(t, tunneltest.Options{
 		AllowedIPs: []netip.Prefix{netip.PrefixFrom(tunneltest.ServerAddr4, 32)},
