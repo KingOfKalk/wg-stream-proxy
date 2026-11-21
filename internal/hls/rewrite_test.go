@@ -97,6 +97,11 @@ func TestRewrite(t *testing.T) {
 		{"two URI attributes", "#EXT-X-FOO:URI=\"a\",URI=\"b\"\n", "#EXT-X-FOO:URI=\"" + r + "https://origin.example.com/live/a/a\",URI=\"" + r + "https://origin.example.com/live/a/b\"\n"},
 		{"spaces in attribute list", "#EXT-X-KEY:METHOD=AES-128, URI = \"k.key\" ,IV=0x1\n", "#EXT-X-KEY:METHOD=AES-128, URI = \"" + r + "https://origin.example.com/live/a/k.key\" ,IV=0x1\n"},
 		{"-URI attributes rewritten", "#EXT-X-FOO:X-URI=\"https://example.com/a\",SERVER-URI=\"b\"\n", "#EXT-X-FOO:X-URI=\"" + r + "https://example.com/a\",SERVER-URI=\"" + r + "https://origin.example.com/live/a/b\"\n"},
+		// HLS interstitials (draft-pantos-hls-rfc8216bis-22, appendix D): the
+		// asset list is fetched by the player like X-ASSET-URI.
+		{"interstitial asset list rewritten", "#EXT-X-DATERANGE:ID=\"ad\",CLASS=\"com.apple.hls.interstitial\",START-DATE=\"2026-01-01T00:00:00Z\",X-ASSET-LIST=\"https://ads.example.com/list.json?t=1\"\n", "#EXT-X-DATERANGE:ID=\"ad\",CLASS=\"com.apple.hls.interstitial\",START-DATE=\"2026-01-01T00:00:00Z\",X-ASSET-LIST=\"" + r + "https://ads.example.com/list.json?t=1\"\n"},
+		{"relative interstitial asset list rewritten", "#EXT-X-DATERANGE:ID=\"ad\",X-ASSET-LIST=\"ads/list.json\"\n", "#EXT-X-DATERANGE:ID=\"ad\",X-ASSET-LIST=\"" + r + "https://origin.example.com/live/a/ads/list.json\"\n"},
+		{"other names ending in LIST kept", "#EXT-X-FOO:X-LIST=\"b\",ASSET-LIST=\"c\",X-ASSET-LISTS=\"d\"\n", "#EXT-X-FOO:X-LIST=\"b\",ASSET-LIST=\"c\",X-ASSET-LISTS=\"d\"\n"},
 		{"other names ending in URI kept", "#EXT-X-FOO:XURI=\"b\",NOURI=\"data:,x\"\n", "#EXT-X-FOO:XURI=\"b\",NOURI=\"data:,x\"\n"},
 		{"whitespace-separated attributes", "#EXT-X-KEY:METHOD=AES-128 URI=\"k.key\"\n", "#EXT-X-KEY:METHOD=AES-128 URI=\"" + r + "https://origin.example.com/live/a/k.key\"\n"},
 		{"no separator after quoted value", "#EXT-X-FOO:A=\"x\"URI=\"k\"\n", "#EXT-X-FOO:A=\"x\"URI=\"" + r + "https://origin.example.com/live/a/k\"\n"},
@@ -154,6 +159,8 @@ func TestRewriteErrors(t *testing.T) {
 		{"http URI after malformed element", []byte("#EXT-X-FOO:URI=\"a\" junk,URI=\"https://example.com/b\"\n"), mustParse(t, final), proxyURL, ErrInvalidPlaylist},
 		{"http value of name ending in URI", []byte("#EXT-X-FOO:XURI=\"HTTPS://example.com/b\"\n"), mustParse(t, final), proxyURL, ErrInvalidPlaylist},
 		{"quoted URI with leading space", []byte("#EXT-X-FOO:A=\"x\" junk URI=\" http://example.com/b\"\n"), mustParse(t, final), proxyURL, ErrInvalidPlaylist},
+		{"unquoted http asset list", []byte("#EXT-X-DATERANGE:ID=\"ad\",X-ASSET-LIST=https://ads.example.com/list.json\n"), mustParse(t, final), proxyURL, ErrInvalidPlaylist},
+		{"http asset list after malformed element", []byte("#EXT-X-DATERANGE:ID=\"ad\" junk,X-ASSET-LIST=\"//ads.example.com/list.json\"\n"), mustParse(t, final), proxyURL, ErrInvalidPlaylist},
 		{"invalid port", []byte("#EXTM3U\nhttp://example.com:port/a.ts\n"), mustParse(t, final), proxyURL, ErrInvalidURI},
 		{"invalid escape in relative URI", []byte("#EXTM3U\nseg%zz.ts\n"), mustParse(t, final), proxyURL, ErrInvalidURI},
 		{"invalid host in attribute", []byte("#EXT-X-KEY:METHOD=AES-128,URI=\"https://exa mple.com/k\"\n"), mustParse(t, final), proxyURL, ErrInvalidURI},
