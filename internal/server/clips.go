@@ -17,7 +17,7 @@ import (
 	"github.com/KingOfKalk/wg-stream-proxy/internal/tunnel"
 )
 
-// Error clips (spec 3.4, design: docs/clips.md 6.2): a GET of /c/ of an
+// Error clips (spec 3.4): a GET of /c/ of an
 // HLS channel answers a failure with a short VOD playlist of an error
 // clip instead of an HTTP error, so the player shows a text instead of a
 // failure dialog. Its segment is served under /clip/ from the embedded
@@ -38,7 +38,7 @@ func errorClips(r *http.Request, cfg *config.Config, ch config.Channel) bool {
 		strings.HasSuffix(playlist.ChannelPath(ch), ".m3u8")
 }
 
-// errorClip returns the error clip for a failure (docs/clips.md 3.2): the
+// errorClip returns the error clip for a failure (spec 3.4): the
 // tunnel did not start, the configuration blocks the address (guard or
 // AllowedIPs), or else the channel is not available. err is nil for an
 // upstream status or a playlist the proxy refused.

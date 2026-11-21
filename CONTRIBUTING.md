@@ -181,9 +181,9 @@ flowchart LR
 | `Lint` | golangci-lint with [`.golangci.yml`](.golangci.yml): `standard` linters (incl. `errcheck`, `staticcheck`) and `gofumpt` | "No issues" or the findings |
 | `Test` | `go test -race -cover ./...`, with `goleak` in every package's `TestMain` | passed/failed/skipped, coverage and time per package, failed tests ([`test-summary.jq`](.github/scripts/test-summary.jq)) |
 | `Security` | security checks of code and dependencies: govulncheck | "No vulnerabilities found" or the report |
-| `Player` | L4 player tests ([testing.md](docs/testing.md#l4-player)): `WSP_PLAYER_TESTS=1 go test -race -run '^TestPlayer$' ./internal/server/playertest/` with ffmpeg from the distribution's apt (the `.deb` files are cached per runner image, apt retries slow downloads) | passed/failed/skipped and time, failed tests, ffmpeg version |
-| `Fuzz` | L2 fuzzing ([testing.md](docs/testing.md#l2-fuzz)): every fuzz target (found with `go test -list '^Fuzz' ./...`) for 10 s with `-fuzzminimizetime 2s`, one after the other in one job; a failing input is uploaded as workflow artifact `fuzz-failure` | per target: "No failure" and the last `fuzz: elapsed` line, or the failing input and the output |
-| `Capacity` | L3 capacity test ([testing.md](docs/testing.md#l3-integration)): `WSP_CAPACITY=30s go test -race -run '^TestCapacity$' ./internal/server/capacitytest`; its own job after `Test`, next to `Player` (the 5-minute run is in [`weekly.yml`](.github/workflows/weekly.yml)) | passed/failed and the test's measurements |
+| `Player` | L4 player tests ([testing.md](docs/testing.md#layers)): `WSP_PLAYER_TESTS=1 go test -race -run '^TestPlayer$' ./internal/server/playertest/` with ffmpeg from the distribution's apt (the `.deb` files are cached per runner image, apt retries slow downloads) | passed/failed/skipped and time, failed tests, ffmpeg version |
+| `Fuzz` | L2 fuzzing ([testing.md](docs/testing.md#layers)): every fuzz target (found with `go test -list '^Fuzz' ./...`) for 10 s with `-fuzzminimizetime 2s`, one after the other in one job; a failing input is uploaded as workflow artifact `fuzz-failure` | per target: "No failure" and the last `fuzz: elapsed` line, or the failing input and the output |
+| `Capacity` | L3 capacity test ([testing.md](docs/testing.md#layers)): `WSP_CAPACITY=30s go test -race -run '^TestCapacity$' ./internal/server/capacitytest`; its own job after `Test`, next to `Player` (the 5-minute run is in [`weekly.yml`](.github/workflows/weekly.yml)) | passed/failed and the test's measurements |
 | `Build` | `darwin/arm64` (the macOS desktop setup), `CGO_ENABLED=0`, version from `git describe` via `-ldflags "-X main.version=…"`; binary uploaded as workflow artifact `wg-stream-proxy-darwin-arm64`. `linux/amd64` and `linux/arm64` are built by `Container` | artifact, version, size, SHA-256 |
 
 Run them locally in throwaway containers (no Go toolchain needed, see
@@ -239,7 +239,7 @@ docker compose -f deploy/compose/compose.yaml config --quiet
 ### Weekly
 
 [`.github/workflows/weekly.yml`](.github/workflows/weekly.yml) runs the
-slow checks of [testing.md](docs/testing.md#ci-and-coverage) once a week
+slow checks of [testing.md](docs/testing.md#layers) once a week
 (Monday 02:23 UTC) and on demand (`gh workflow run weekly.yml`). A scheduled
 run is skipped when `main` has no new commit since the last successful
 scheduled run (`New commits` job); a manual run always runs. They are **not**
