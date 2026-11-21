@@ -164,14 +164,16 @@ Do not tag, bump versions, or edit `CHANGELOG.md` by hand.
 
 CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs on every
 pull request and push to `main`. `Lint`, `Test`, `Security`, `Player`,
-`Fuzz`, `Capacity` and `Build` are the required checks of the `main`
-ruleset. Each stage starts only when the previous one passed:
+`Fuzz`, `Capacity` and `Build` (plus `Container`, see below) are the
+required checks of the `main` ruleset. All Go jobs set up Go and its caches
+with the local action [`setup-go`](.github/actions/setup-go/action.yml).
+Each stage starts only when the previous one passed:
 
 ```mermaid
 flowchart LR
     Lint --> Test & Security & Fuzz
     Test --> Player & Capacity
-    Player & Capacity & Security & Fuzz --> cc["Cross-compile ×3"] --> Build
+    Player & Capacity & Security & Fuzz --> Build
 ```
 
 | Check | What | Summary on the run page |
@@ -180,10 +182,9 @@ flowchart LR
 | `Test` | `go test -race -cover ./...`, with `goleak` in every package's `TestMain` | passed/failed/skipped, coverage and time per package, failed tests ([`test-summary.jq`](.github/scripts/test-summary.jq)) |
 | `Security` | security checks of code and dependencies: govulncheck | "No vulnerabilities found" or the report |
 | `Player` | L4 player tests ([testing.md](docs/testing.md#layers)): `WSP_PLAYER_TESTS=1 go test -race -run '^TestPlayer$' ./internal/server/playertest/` with ffmpeg from the distribution's apt (the `.deb` files are cached per runner image, apt retries slow downloads) | passed/failed/skipped and time, failed tests, ffmpeg version |
-| `Fuzz` | L2 fuzzing ([testing.md](docs/testing.md#layers)): every fuzz target (found with `go test -list '^Fuzz' ./...`) for 10 s with `-fuzzminimizetime 2s` (the default 60 s stalls `FuzzRewrite`), one after the other in one job; a failing input is uploaded as workflow artifact `fuzz-failure` | per target: "No failure" and the last `fuzz: elapsed` line, or the failing input and the output |
-| `Capacity` | L3 capacity test ([testing.md](docs/testing.md#layers)): `WSP_CAPACITY=30s go test -race -run '^TestCapacity$' ./internal/server/capacitytest`; its own job after `Test`, next to `Player` (the 5-minute run is in [`nightly.yml`](.github/workflows/nightly.yml)) | passed/failed and the test's measurements |
-| `Cross-compile (<os>/<arch>)` | `linux/amd64`, `linux/arm64`, `darwin/arm64`, `CGO_ENABLED=0`, version from `git describe` via `-ldflags "-X main.version=…"`; binary uploaded as workflow artifact `wg-stream-proxy-<os>-<arch>` | artifact, version, size, SHA-256 |
-| `Build` | passes when all `Cross-compile` jobs pass; fails if an earlier stage failed | overall result |
+| `Fuzz` | L2 fuzzing ([testing.md](docs/testing.md#layers)): every fuzz target (found with `go test -list '^Fuzz' ./...`) for 10 s with `-fuzzminimizetime 2s`, one after the other in one job; a failing input is uploaded as workflow artifact `fuzz-failure` | per target: "No failure" and the last `fuzz: elapsed` line, or the failing input and the output |
+| `Capacity` | L3 capacity test ([testing.md](docs/testing.md#layers)): `WSP_CAPACITY=30s go test -race -run '^TestCapacity$' ./internal/server/capacitytest`; its own job after `Test`, next to `Player` (the 5-minute run is in [`weekly.yml`](.github/workflows/weekly.yml)) | passed/failed and the test's measurements |
+| `Build` | `darwin/arm64` (the macOS desktop setup), `CGO_ENABLED=0`, version from `git describe` via `-ldflags "-X main.version=…"`; binary uploaded as workflow artifact `wg-stream-proxy-darwin-arm64`. `linux/amd64` and `linux/arm64` are built by `Container` | artifact, version, size, SHA-256 |
 
 Run them locally in throwaway containers (no Go toolchain needed, see
 [AGENTS.md](AGENTS.md) rule 12), with the versions from `go.mod` and
@@ -235,15 +236,18 @@ docker buildx build --platform linux/amd64,linux/arm64 \
 docker compose -f deploy/compose/compose.yaml config --quiet
 ```
 
-### Nightly
+### Weekly
 
-[`.github/workflows/nightly.yml`](.github/workflows/nightly.yml) runs the
-slow checks of the [test layers](docs/testing.md#layers) once a night
-(02:23 UTC) and on demand (`gh workflow run nightly.yml`). They are **not**
+[`.github/workflows/weekly.yml`](.github/workflows/weekly.yml) runs the
+slow checks of [testing.md](docs/testing.md#layers) once a week
+(Monday 02:23 UTC) and on demand (`gh workflow run weekly.yml`). A scheduled
+run is skipped when `main` has no new commit since the last successful
+scheduled run (`New commits` job); a manual run always runs. They are **not**
 required checks; a failure does not block merging.
 
 | Job | What | Summary on the run page |
 | --- | --- | --- |
+| `New commits` | compares the head of `main` with the head of the last successful scheduled run (`actions: read`); the other jobs run only if it differs or the run is manual | the decision |
 | `Fuzz targets` | lists every fuzz target (`go test -list '^Fuzz' ./...`) | the targets |
 | `Fuzz (long) (<pkg>.<target>)` | one job per target: 10 minutes, `-fuzzminimizetime 2s`; a failing input is uploaded as artifact `fuzz-failure-<id>` | last progress line, or the failing input and the output |
 | `Capacity` | `TestCapacity` with `-race` and `WSP_CAPACITY=5m`: 3 viewers through the proxy and in-process tunnels | latency, goroutines and heap over time |

@@ -18,10 +18,10 @@ to run them locally, are in [CONTRIBUTING.md](../CONTRIBUTING.md#checks).
 | Layer | Scope | When |
 |---|---|---|
 | L1 Unit | The rules of spec 3-7 per package | every push |
-| L2 Fuzz | Parsers and rewriters: no panic, output parses and rewrites again, no URL the player could fetch past the proxy | every push (10 s per target), nightly (10 min per target) |
-| L3 Integration | Proxy in-process with fixture upstreams and in-process tunnels; capacity test `internal/server/capacitytest` (3 viewers, runs only with `WSP_CAPACITY` set) | every push (capacity 30 s), nightly (capacity 5 min) |
+| L2 Fuzz | Parsers and rewriters: no panic, output parses and rewrites again, no URL the player could fetch past the proxy | every push (10 s per target), weekly (10 min per target) |
+| L3 Integration | Proxy in-process with fixture upstreams and in-process tunnels; capacity test `internal/server/capacitytest` (3 viewers, runs only with `WSP_CAPACITY` set) | every push (capacity 30 s), weekly (capacity 5 min) |
 | L4 Player | ffmpeg stands in for Kodi and plays every fixture (HLS, DASH, raw, ICY, error clip) through a tunnel: `internal/server/playertest`, fixtures from `testdata/media/generate.sh`; runs only with `WSP_PLAYER_TESTS=1` and ffmpeg in `PATH` | every push |
-| L5 Platform | Cross-compile, container smoke test, `docker compose config`; native arm64 test run | every push; arm64 nightly |
+| L5 Platform | `darwin/arm64` build, `linux/amd64` and `linux/arm64` image build, container smoke test, `docker compose config`; native arm64 test run | every push; arm64 weekly (skipped without new commits) |
 | L6 Manual | Real players, streams and hardware | before each release |
 
 ## L6 Manual release checklist

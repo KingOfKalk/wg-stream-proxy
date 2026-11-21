@@ -473,7 +473,7 @@ Only `/c/`, `/r/` and `/p/` requests of enabled channels count; `channel` is the
 
 ## 9. Engineering rules
 
-- Layout: `cmd/wg-stream-proxy/`, `internal/{config,tunnel,route,hls,dash,playlist,server,epg,probe,metrics,clips}`, `examples/config/`, `testdata/`, `deploy/`, `docs/`.
+- Layout: `cmd/wg-stream-proxy/`, `internal/{config,tunnel,route,hls,dash,xmlw,playlist,server,epg,probe,metrics,clips}`, `examples/config/`, `testdata/`, `deploy/`, `docs/`.
 - Dependencies: stdlib `net/http`, `log/slog`, `wireguard-go`, gVisor netstack, a TOML parser, Prometheus client. No web framework.
 - `internal/clips` embeds the built-in error clips (3.4): three 4.8 s MPEG-TS files in `internal/clips/segments/`, rendered by `internal/clips/generate.sh` (pinned image, Inter 4.1 by version and checksum) and committed. Change a text by editing the script, rerunning it and committing the result. Only rendered pixels ship, not the font (SIL OFL 1.1).
 - gVisor stays at the version in `wireguard-go`'s `go.mod` and is only updated together with it (excluded from automatic bumps).

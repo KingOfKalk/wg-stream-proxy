@@ -205,12 +205,7 @@ func (c *cli) debugCall(method, target string, timeout time.Duration, body, v an
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	client := &http.Client{
-		Transport: &http.Transport{DisableKeepAlives: true},
-		CheckRedirect: func(*http.Request, []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}
+	client := localClient()
 	defer client.CloseIdleConnections()
 	resp, err := client.Do(req)
 	if err != nil {

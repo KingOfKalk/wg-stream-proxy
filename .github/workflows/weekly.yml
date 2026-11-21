@@ -1,9 +1,9 @@
-name: Nightly
+name: Weekly
 
 on:
   schedule:
-    # Once a night (UTC), off the full hour.
-    - cron: "23 2 * * *"
+    # Once a week, Monday (UTC), off the full hour.
+    - cron: "23 2 * * 1"
   workflow_dispatch:
 
 permissions: {}
@@ -11,12 +11,51 @@ permissions: {}
 # Long-running checks of docs/testing.md that are too slow for every push:
 # L2 fuzzing for 10 minutes per target, the 5-minute capacity test (L3)
 # and the tests on a native arm64 runner (L5). Not required checks.
+# A scheduled run does nothing when main has no new commit since the last
+# successful scheduled run; a manual run always runs everything.
 # Every job writes a short summary to the run page ($GITHUB_STEP_SUMMARY).
 jobs:
+  # Compares main's head with the head of the last successful scheduled run.
+  # A failed run does not count, so it is retried the next week.
+  changes:
+    name: New commits
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    permissions:
+      actions: read
+    outputs:
+      run: ${{ steps.check.outputs.run }}
+    steps:
+      - name: Compare with the last run
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          run=true
+          reason="manual run"
+          if [ "$GITHUB_EVENT_NAME" = schedule ]; then
+            last="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/weekly.yml/runs?event=schedule&status=success&branch=${GITHUB_REF_NAME}&per_page=1" \
+              --jq '.workflow_runs[0].head_sha // ""')"
+            if [ "$last" = "$GITHUB_SHA" ]; then
+              run=false
+              reason="no new commit since the last successful run (${GITHUB_SHA:0:7})"
+            else
+              reason="new commit ${GITHUB_SHA:0:7} (last successful run: ${last:0:7})"
+            fi
+          fi
+          echo "run=${run}" >> "$GITHUB_OUTPUT"
+          {
+            echo "## New commits"
+            echo
+            echo "run=${run}: ${reason}."
+          } >> "$GITHUB_STEP_SUMMARY"
+
   # Lists every fuzz target of the module, so new targets are fuzzed
   # without a change here.
   fuzz-targets:
     name: Fuzz targets
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
     runs-on: ubuntu-26.04
     timeout-minutes: 15
     permissions:
@@ -27,26 +66,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+      - uses: ./.github/actions/setup-go
         with:
-          go-version-file: go.mod
-          cache: false
-      - name: Go cache paths
-        id: go
-        run: |
-          {
-            echo "mod=$(go env GOMODCACHE)"
-            echo "build=$(go env GOCACHE)"
-            echo "version=$(go env GOVERSION)"
-          } >> "$GITHUB_OUTPUT"
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ${{ steps.go.outputs.mod }}
-            ${{ steps.go.outputs.build }}
-          key: go-fuzz-targets-${{ runner.os }}-${{ steps.go.outputs.version }}-${{ hashFiles('go.sum', '.github/workflows/nightly.yml') }}
-          restore-keys: |
-            go-fuzz-targets-${{ runner.os }}-${{ steps.go.outputs.version }}-
+          key: fuzz-targets
+          workflow: .github/workflows/weekly.yml
       - name: List fuzz targets
         id: list
         run: |
@@ -87,31 +110,16 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+      - id: setup
+        uses: ./.github/actions/setup-go
         with:
-          go-version-file: go.mod
-          cache: false
-      - name: Go cache paths
-        id: go
-        run: |
-          {
-            echo "mod=$(go env GOMODCACHE)"
-            echo "build=$(go env GOCACHE)"
-            echo "version=$(go env GOVERSION)"
-          } >> "$GITHUB_OUTPUT"
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ${{ steps.go.outputs.mod }}
-            ${{ steps.go.outputs.build }}
-          key: go-fuzz-${{ matrix.id }}-${{ runner.os }}-${{ steps.go.outputs.version }}-${{ hashFiles('go.sum', '.github/workflows/nightly.yml') }}
-          restore-keys: |
-            go-fuzz-${{ matrix.id }}-${{ runner.os }}-${{ steps.go.outputs.version }}-
+          key: fuzz-${{ matrix.id }}
+          workflow: .github/workflows/weekly.yml
       # The generated corpus ($GOCACHE/fuzz) is saved after every run, so
-      # each night continues where the last one stopped.
+      # each week continues where the last one stopped.
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: ${{ steps.go.outputs.build }}/fuzz
+          path: ${{ steps.setup.outputs.gocache }}/fuzz
           key: fuzz-corpus-${{ matrix.id }}-${{ github.run_id }}
           restore-keys: |
             fuzz-corpus-${{ matrix.id }}-
@@ -173,6 +181,8 @@ jobs:
   # in-process tunnels for 5 minutes.
   capacity:
     name: Capacity
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
     runs-on: ubuntu-26.04
     timeout-minutes: 25
     permissions:
@@ -183,26 +193,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+      - uses: ./.github/actions/setup-go
         with:
-          go-version-file: go.mod
-          cache: false
-      - name: Go cache paths
-        id: go
-        run: |
-          {
-            echo "mod=$(go env GOMODCACHE)"
-            echo "build=$(go env GOCACHE)"
-            echo "version=$(go env GOVERSION)"
-          } >> "$GITHUB_OUTPUT"
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ${{ steps.go.outputs.mod }}
-            ${{ steps.go.outputs.build }}
-          key: go-capacity-${{ runner.os }}-${{ steps.go.outputs.version }}-${{ hashFiles('go.sum', '.github/workflows/nightly.yml') }}
-          restore-keys: |
-            go-capacity-${{ runner.os }}-${{ steps.go.outputs.version }}-
+          key: capacity
+          workflow: .github/workflows/weekly.yml
       - name: Capacity test
         run: |
           set +e
@@ -229,6 +223,8 @@ jobs:
   # No QEMU fallback: if the runner is not arm64, the job fails.
   arm64:
     name: arm64
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
     runs-on: ubuntu-26.04-arm
     timeout-minutes: 20
     permissions:
@@ -245,26 +241,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+      - uses: ./.github/actions/setup-go
         with:
-          go-version-file: go.mod
-          cache: false
-      - name: Go cache paths
-        id: go
-        run: |
-          {
-            echo "mod=$(go env GOMODCACHE)"
-            echo "build=$(go env GOCACHE)"
-            echo "version=$(go env GOVERSION)"
-          } >> "$GITHUB_OUTPUT"
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ${{ steps.go.outputs.mod }}
-            ${{ steps.go.outputs.build }}
-          key: go-arm64-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.version }}-${{ hashFiles('go.sum', '.github/workflows/nightly.yml') }}
-          restore-keys: |
-            go-arm64-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.version }}-
+          key: arm64
+          workflow: .github/workflows/weekly.yml
       - name: go test
         run: |
           set +e

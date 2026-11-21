@@ -76,7 +76,7 @@ sequenceDiagram
     R->>T: dial IP:port
     T->>U: GET master playlist
     U-->>S: 200 master playlist
-    S->>S: hls.Detect, hls.Rewrite:<br/>every URI to a signed /r/ URL
+    S->>S: hls.Classify, hls.Rewrite:<br/>every URI to a signed /r/ URL
     S-->>P: 200 rewritten master playlist
     loop media playlist reloads and segments
         P->>S: GET /r/ert-world/{sig}/{b64url}/{name}
@@ -94,7 +94,7 @@ sequenceDiagram
 - Steps 2-7: the first request on a stopped tunnel starts it
   (section 3). The guard runs on every new connection; a pooled connection
   was checked when it was dialed.
-- Step 9: `hls.Detect` picks HLS, DASH or raw (spec 3.1). For HLS,
+- Step 9: `hls.Classify` picks HLS, DASH, raw or refused (spec 3.1, shared with `probe`). For HLS,
   `hls.Rewrite` with a `Signer.PathBuilder` replaces every `http(s)` and
   relative URI with `/r/{channel}/{sig}/{b64url}/{name}`. A playlist it
   cannot rewrite safely fails with `502` (spec 3.2). The rewrite is
@@ -102,7 +102,7 @@ sequenceDiagram
 - `/r/`: the signature binds the upstream URL to the channel; route and
   headers always come from the channel config, never from the URL.
   Sub-playlists are rewritten again, playlist formats the proxy does not
-  rewrite (`hls.Unsupported`) are refused with `502` (spec 3.3), and
+  rewrite (`hls.Classify`) are refused with `502` (spec 3.3), and
   everything else (segments, keys) is streamed with `io.Copy` and flush.
 - Activity: a request counts for its tunnel (`route.Activity`) from before
   its first lookup until its body is closed, so an open stream keeps the
@@ -207,7 +207,8 @@ flowchart TD
     server --> probe["internal/probe"] & epg["internal/epg"]
     server --> route["internal/route"] & tunnel["internal/tunnel"]
     probe --> hls & dash & route & tunnel
-    epg --> route
+    epg --> route & xmlw["internal/xmlw"]
+    dash --> xmlw
     tunnel -. "implements route.Network" .-> route
     tunnel --> wgquick["internal/config/wgquick"] & netstack["internal/tunnel/netstack"]
 ```
@@ -222,8 +223,9 @@ and left out, as are the other direct imports of `cmd/wg-stream-proxy`.
 | `internal/config/wgquick` | Tunnel file parser, UAPI conversion, `AllowedIPs` check |
 | `internal/server` | HTTP handlers, the generation and its reload (`Reloader`, `Watch`), `Server.proxy` (fetch, detect, rewrite or stream, status mapping, error clips), `/logos/`, `/time`, EPG guide serving, debug listener, graceful shutdown (`Run`) |
 | `internal/playlist` | Channel list (`Render`, spec 6) |
-| `internal/hls` | Detection (`Detect`, `Unsupported`), HLS rewrite, `/r/` and `/p/` signing (`Signer`), signing key; pure functions |
+| `internal/hls` | Detection (`Classify`, shared by serving and `probe`), HLS rewrite, `/r/` and `/p/` signing (`Signer`), signing key; pure functions |
 | `internal/dash` | DASH manifest rewrite (spec 3.6); pure function |
+| `internal/xmlw` | Writes XML again from `encoding/xml` tokens for `dash` and `epg`: tags, escaping, the plain-name check; the caller decides what is kept; pure functions |
 | `internal/route` | One `Route` per tunnel plus `direct`: transports, guard, header rules, redirects, timeouts, `Trace` of the phases; defines `Network` and `Activity` |
 | `internal/tunnel` | `Manager` and `Tunnel`: lazy start, idle close, drain, reload (`Apply`), cool-down, tunnel DNS |
 | `internal/tunnel/netstack` | Patched copy of wireguard-go's `tun/netstack` (spec 9) |

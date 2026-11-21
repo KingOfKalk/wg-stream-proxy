@@ -60,12 +60,7 @@ func (c *cli) probe(target string) error {
 	if err != nil {
 		return err
 	}
-	client := &http.Client{
-		Transport: &http.Transport{DisableKeepAlives: true},
-		CheckRedirect: func(*http.Request, []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}
+	client := localClient()
 	defer client.CloseIdleConnections()
 	resp, err := client.Do(req)
 	if err != nil {
@@ -77,6 +72,18 @@ func (c *cli) probe(target string) error {
 		return fmt.Errorf("GET %s: status %d", target, resp.StatusCode)
 	}
 	return nil
+}
+
+// localClient returns the client of the commands that call the running
+// proxy (healthcheck, tunnel, probe): one connection per request, and
+// redirects are not followed.
+func localClient() *http.Client {
+	return &http.Client{
+		Transport: &http.Transport{DisableKeepAlives: true},
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
 }
 
 // healthcheckURL returns the /healthz URL for a listen address.

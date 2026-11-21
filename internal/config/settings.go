@@ -294,7 +294,13 @@ func validListen(s string) bool {
 // httpURL reports whether s is an absolute http or https URL with a host.
 func httpURL(s string) bool {
 	u, err := url.Parse(s)
-	return err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != ""
+	return err == nil && IsHTTPURL(u)
+}
+
+// IsHTTPURL reports whether u is an absolute http or https URL with a
+// host: what upstream URLs, redirect targets and probed URLs must be.
+func IsHTTPURL(u *url.URL) bool {
+	return (u.Scheme == "http" || u.Scheme == "https") && u.Host != ""
 }
 
 // hasLineBreak reports whether s contains CR or LF.

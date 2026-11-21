@@ -16,6 +16,8 @@ import (
 	"io"
 	"net/url"
 	"strings"
+
+	"github.com/KingOfKalk/wg-stream-proxy/internal/xmlw"
 )
 
 const (
@@ -319,7 +321,7 @@ func checkManifest(in []byte) (scan, error) {
 				return sc, invalid("empty MPD element")
 			case ln == "contentprotection":
 				return sc, ErrDRM
-			case !validName(t.Name):
+			case !xmlw.ValidName(t.Name):
 				return sc, invalid("element name that is not a plain XML name")
 			}
 			if err := checkAttrs(ln, t.Attr, &sc); err != nil {
@@ -402,7 +404,7 @@ func checkAttrs(ln string, attrs []xml.Attr, sc *scan) error {
 	interp := interpreted(ln)
 	var seen []string // interpreted attributes so far, lower-case
 	for _, a := range attrs {
-		if !validName(a.Name) {
+		if !xmlw.ValidName(a.Name) {
 			return invalid("attribute name that is not a plain XML name")
 		}
 		an := strings.ToLower(a.Name.Local)
@@ -443,28 +445,6 @@ func containsString(list []string, s string) bool {
 	}
 	return false
 }
-
-// validName reports whether a raw name has a prefix (if any) and a local
-// part of the form [A-Za-z][A-Za-z0-9._-]*. XML allows more, but parsers
-// that skip leading non-letters in names would read "_media" or ":media"
-// as media.
-func validName(n xml.Name) bool {
-	return (n.Space == "" || validNCName(n.Space)) && validNCName(n.Local)
-}
-
-func validNCName(s string) bool {
-	if s == "" || !isLetter(s[0]) {
-		return false
-	}
-	for i := 1; i < len(s); i++ {
-		if c := s[i]; !isLetter(c) && (c < '0' || c > '9') && c != '.' && c != '_' && c != '-' {
-			return false
-		}
-	}
-	return true
-}
-
-func isLetter(c byte) bool { return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' }
 
 // lowerTrim returns a scheme URI for comparison: trimmed and lower-case.
 func lowerTrim(v string) string { return strings.ToLower(strings.TrimSpace(v)) }
@@ -636,13 +616,13 @@ func (rw *rewriter) run(in []byte) error {
 			}
 			rw.stack = rw.stack[:len(rw.stack)-1]
 			if len(raw) > 0 { // else written as part of "<x/>"
-				rw.out = append(appendName(append(rw.out, "</"...), t.Name), '>')
+				rw.out = xmlw.AppendEndTag(rw.out, t.Name)
 			}
 		case xml.CharData:
 			if rw.base != nil {
 				continue // the BaseURL is written from checkManifest's text
 			}
-			rw.out = appendText(rw.out, t)
+			rw.out = xmlw.AppendText(rw.out, t)
 		case xml.ProcInst:
 			// The declaration (checkManifest allows no other processing
 			// instruction), written again: its original bytes could
@@ -695,7 +675,12 @@ func (rw *rewriter) start(t xml.StartElement, raw []byte, start int) error {
 	if err != nil {
 		return err
 	}
-	rw.out = appendStartTag(rw.out, t.Name, attrs, selfClosing(raw))
+	rw.out = xmlw.AppendStartTag(rw.out, t.Name, attrs)
+	if selfClosing(raw) {
+		rw.out = append(rw.out, "/>"...)
+	} else {
+		rw.out = append(rw.out, '>')
+	}
 	rw.stack = append(rw.stack, f)
 	if root && len(f.own) == 0 {
 		// Without a BaseURL, players resolve against the proxy URL of
@@ -714,7 +699,7 @@ func (rw *rewriter) start(t xml.StartElement, raw []byte, start int) error {
 			return invalid("manifest URL")
 		}
 		f.own = []*url.URL{dir}
-		rw.out = appendElement(rw.out, xml.Name{Space: t.Name.Space, Local: "BaseURL"}, nil, p)
+		rw.out = xmlw.AppendElement(rw.out, xml.Name{Space: t.Name.Space, Local: "BaseURL"}, nil, p)
 	}
 	return nil
 }
@@ -863,7 +848,7 @@ func (rw *rewriter) endBase() {
 	parent := rw.stack[len(rw.stack)-1]
 	p := parent.ownURLs[parent.next]
 	parent.next++
-	rw.out = appendElement(rw.out, b.name, keptBaseURLAttrs(b.attrs), p)
+	rw.out = xmlw.AppendElement(rw.out, b.name, keptBaseURLAttrs(b.attrs), p)
 }
 
 // baseURL resolves the text of a BaseURL against base and returns the
@@ -976,61 +961,6 @@ func selfClosing(raw []byte) bool {
 	return bytes.HasSuffix(raw, []byte("/>"))
 }
 
-// appendStartTag appends a start tag; attribute values are escaped.
-func appendStartTag(dst []byte, name xml.Name, attrs []xml.Attr, selfClose bool) []byte {
-	dst = appendName(append(dst, '<'), name)
-	for _, a := range attrs {
-		dst = appendName(append(dst, ' '), a.Name)
-		dst = append(appendEscaped(append(dst, `="`...), a.Value), '"')
-	}
-	if selfClose {
-		return append(dst, "/>"...)
-	}
-	return append(dst, '>')
-}
-
-// appendElement appends an element with text content.
-func appendElement(dst []byte, name xml.Name, attrs []xml.Attr, text string) []byte {
-	dst = appendEscaped(appendStartTag(dst, name, attrs, false), text)
-	return append(appendName(append(dst, "</"...), name), '>')
-}
-
-// appendName appends a raw (prefix:local) name.
-func appendName(dst []byte, n xml.Name) []byte {
-	if n.Space != "" {
-		dst = append(append(dst, n.Space...), ':')
-	}
-	return append(dst, n.Local...)
-}
-
-// appendEscaped appends s escaped for XML text and attribute values,
-// like xml.EscapeText.
-func appendEscaped(dst []byte, s string) []byte {
-	for i := 0; i < len(s); i++ {
-		switch c := s[i]; c {
-		case '&':
-			dst = append(dst, "&amp;"...)
-		case '<':
-			dst = append(dst, "&lt;"...)
-		case '>':
-			dst = append(dst, "&gt;"...)
-		case '"':
-			dst = append(dst, "&#34;"...)
-		case '\'':
-			dst = append(dst, "&#39;"...)
-		case '\t':
-			dst = append(dst, "&#x9;"...)
-		case '\n':
-			dst = append(dst, "&#xA;"...)
-		case '\r':
-			dst = append(dst, "&#xD;"...)
-		default:
-			dst = append(dst, c)
-		}
-	}
-	return dst
-}
-
 // hasDuplicate reports whether two attributes have the same name (prefix
 // and local name), in linear time.
 func hasDuplicate(attrs []xml.Attr) bool {
@@ -1073,24 +1003,4 @@ func Count(mpd []byte) (periods, adaptationSets int) {
 			}
 		}
 	}
-}
-
-// appendText appends s escaped as XML text: '&', '<', '>' and CR (which
-// encoding/xml does not return, it normalizes line ends to LF).
-func appendText(dst []byte, s []byte) []byte {
-	for _, c := range s {
-		switch c {
-		case '&':
-			dst = append(dst, "&amp;"...)
-		case '<':
-			dst = append(dst, "&lt;"...)
-		case '>':
-			dst = append(dst, "&gt;"...)
-		case '\r':
-			dst = append(dst, "&#xD;"...)
-		default:
-			dst = append(dst, c)
-		}
-	}
-	return dst
 }

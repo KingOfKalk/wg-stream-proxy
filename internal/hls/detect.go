@@ -3,6 +3,7 @@
 package hls
 
 import (
+	"bufio"
 	"bytes"
 	"fmt"
 	"strings"
@@ -93,4 +94,31 @@ func Detect(contentType string, prefix []byte, configured Type) Type {
 func isDASHRoot(body []byte) bool {
 	root, ok := xmlRoot(body)
 	return ok && xmlRoots[strings.ToLower(root)] == FormatDASH
+}
+
+// Classify decides what the proxy does with a 2xx response (spec 3.1
+// step 2, 3.3); serving and the probe command both use it, so they cannot
+// differ. typ is Detect's answer by the configured type and the
+// Content-Type; if that is Raw and sniff is set, the start of the body
+// decides (Sniff, Detect), and a body that is still Raw but a playlist the
+// proxy does not rewrite gives its format in refused (Unsupported). Without
+// sniff (a HEAD request, whose body is never read) the body is left
+// unread.
+//
+// rest is the body to read from now on: it reads the whole body, the
+// sniffed bytes included. err is a read error of Sniff; typ is then Raw.
+func Classify(contentType string, body *bufio.Reader, configured Type, sniff bool) (typ Type, refused string, rest *bufio.Reader, err error) {
+	typ = Detect(contentType, nil, configured)
+	if typ != Raw || !sniff {
+		return typ, "", body, nil
+	}
+	prefix, rest, err := Sniff(body)
+	if err != nil {
+		return typ, "", rest, err
+	}
+	typ = Detect(contentType, prefix, configured)
+	if typ == Raw {
+		refused = Unsupported(contentType, prefix, configured)
+	}
+	return typ, refused, rest, nil
 }

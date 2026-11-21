@@ -3,6 +3,7 @@
 package config
 
 import (
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -79,5 +80,35 @@ func TestWatchInterval(t *testing.T) {
 				t.Errorf("WatchInterval() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestIsHTTPURL(t *testing.T) {
+	tests := []struct {
+		raw  string
+		want bool
+	}{
+		{"http://a.example/x", true},
+		{"https://a.example:8443", true},
+		{"HTTPS://a.example/", true}, // url.Parse lower-cases the scheme
+		{"http://user@a.example/", true},
+		{"ftp://a.example/", false},
+		{"http:///x", false},
+		{"http:a.example", false},
+		{"//a.example/x", false},
+		{"/x", false},
+		{"", false},
+	}
+	for _, tt := range tests {
+		u, err := url.Parse(tt.raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := IsHTTPURL(u); got != tt.want {
+			t.Errorf("IsHTTPURL(%q) = %v, want %v", tt.raw, got, tt.want)
+		}
+		if got := httpURL(tt.raw); got != tt.want {
+			t.Errorf("httpURL(%q) = %v, want %v", tt.raw, got, tt.want)
+		}
 	}
 }
