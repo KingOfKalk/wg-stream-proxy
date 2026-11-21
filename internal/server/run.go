@@ -70,6 +70,9 @@ type RunOptions struct {
 	TunnelClock tunnel.Clock
 	// EPGClock schedules the EPG refreshes; nil means the system clock.
 	EPGClock epg.Clock
+
+	// beforeFetch is Options.beforeFetch; tests set it.
+	beforeFetch func(r *http.Request, refetch bool)
 }
 
 // Run loads the tunnels of the configuration (none is started before
@@ -153,7 +156,7 @@ func Run(ctx context.Context, opts RunOptions) (err error) {
 	}
 	srv, err = New(Options{
 		Config: cfg, Routes: routes, Signer: opts.Signer, Logger: log, Version: opts.Version, Metrics: met,
-		EPGClock: opts.EPGClock,
+		EPGClock: opts.EPGClock, beforeFetch: opts.beforeFetch,
 	})
 	if err != nil {
 		return err

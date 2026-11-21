@@ -58,34 +58,33 @@ func (s *Server) handleEPG(w http.ResponseWriter, r *http.Request) {
 // generation (spec 3.4 rules: guard, [upstream] timeouts, redirects);
 // a running tunnel is used, a stopped one starts.
 func (s *Server) fetchEPG(ctx context.Context, src config.EPGSource) (*http.Response, error) {
-	g := s.use()
+	g, ctx, done := s.use(ctx, func(*generation) string { return src.Route })
 	rt, ok := g.routes.Route(src.Route)
 	if !ok {
-		g.done()
+		done()
 		return nil, fmt.Errorf("epg: unknown route %q", src.Route)
 	}
 	resp, err := rt.Fetch(ctx, route.Request{URL: src.URL})
 	if err != nil {
-		g.done()
+		done()
 		return nil, err
 	}
 	// The guide reads the body later: the use ends when it closes it.
-	resp.Body = &genBody{ReadCloser: resp.Body, g: g}
+	resp.Body = &genBody{ReadCloser: resp.Body, done: done}
 	return resp, nil
 }
 
-// genBody is a response body that ends its use of the generation g when
-// it is closed (the first time).
+// genBody is a response body that ends its use of a generation (done)
+// when it is closed; done runs once.
 type genBody struct {
 	io.ReadCloser
-	g    *generation
-	once sync.Once
+	done func()
 }
 
 // Close implements io.Closer.
 func (b *genBody) Close() error {
 	err := b.ReadCloser.Close()
-	b.once.Do(b.g.done)
+	b.done()
 	return err
 }
 

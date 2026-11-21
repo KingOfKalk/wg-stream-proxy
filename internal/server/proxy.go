@@ -34,13 +34,12 @@ const copyBufferSize = 32 << 10
 // handleChannel serves /c/{id}, /c/{id}.m3u8 and /c/{id}.mpd (spec 3.1,
 // 6): the channel URL with the configured upstream type.
 func (s *Server) handleChannel(w http.ResponseWriter, r *http.Request) {
-	g := s.use()
-	defer g.done()
 	id, ok := strings.CutSuffix(r.PathValue("id"), ".m3u8")
 	if !ok {
 		id = strings.TrimSuffix(id, ".mpd")
 	}
-	ch, ok := g.channel(id)
+	g, ch, ok, r, done := s.useChannel(r, id)
+	defer done()
 	if !ok {
 		http.NotFound(w, r)
 		return
@@ -71,9 +70,8 @@ func (s *Server) handleResource(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	g := s.use()
-	defer g.done()
-	ch, ok := g.channel(id)
+	g, ch, ok, r, done := s.useChannel(r, id)
+	defer done()
 	if !ok {
 		http.NotFound(w, r)
 		return
@@ -92,9 +90,8 @@ func (s *Server) handlePrefix(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	g := s.use()
-	defer g.done()
-	ch, ok := g.channel(pr.Channel)
+	g, ch, ok, r, done := s.useChannel(r, pr.Channel)
+	defer done()
 	if !ok {
 		http.NotFound(w, r)
 		return
@@ -112,6 +109,20 @@ func (g *generation) channel(id string) (config.Channel, bool) {
 		return config.Channel{}, false
 	}
 	return ch, true
+}
+
+// useChannel is Server.use for a request on the channel id: it returns
+// the generation, its enabled channel id (ok false: none), r with the
+// context to fetch with, and done. The request counts on the channel's
+// route.
+func (s *Server) useChannel(r *http.Request, id string) (g *generation, ch config.Channel, ok bool, _ *http.Request, done func()) {
+	g, ctx, done := s.use(r.Context(), func(gen *generation) string {
+		if ch, ok = gen.channel(id); !ok {
+			return ""
+		}
+		return ch.Route()
+	})
+	return g, ch, ok, r.WithContext(ctx), done
 }
 
 // fetch describes the upstream side of a /c/ or /r/ request.
@@ -173,6 +184,9 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request, g *generation, ch
 	defer func() { s.requestFinished(rec.finish(r, ch, rq)) }()
 	client := r.Header
 	for refetch := false; ; refetch = true {
+		if s.beforeFetch != nil {
+			s.beforeFetch(r, refetch)
+		}
 		resp, err := rt.Fetch(ctx, route.Request{URL: f.upstream, Header: ch.Header(), Client: client, ICY: f.icy, Trace: &rec.trace, Redirect: f.redirect})
 		if err != nil {
 			s.fail(w, r, g, ch, f, err, rq.FetchError)

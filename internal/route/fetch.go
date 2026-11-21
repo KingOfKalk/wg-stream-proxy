@@ -99,14 +99,15 @@ func (e *Error) Unwrap() error { return e.Err }
 //
 // The request counts as activity of the route (Options.Activity) from the
 // start until the body is closed or the error is returned, so an open
-// stream keeps a tunnel up and a pooled idle connection does not.
+// stream keeps a tunnel up and a pooled idle connection does not. With a
+// context from Begin on this route, Begin counts it instead.
 func (r *Route) Fetch(ctx context.Context, req Request) (*http.Response, error) {
 	u, err := parseUpstreamURL(req.URL)
 	if err != nil {
 		return nil, &Error{URL: LogURL(req.URL), Err: err}
 	}
 
-	end := r.begin()
+	end := r.beginFetch(ctx)
 	if req.Trace != nil {
 		ctx = req.Trace.begin(ctx)
 	}

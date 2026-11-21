@@ -11,6 +11,7 @@
 package server
 
 import (
+	"context"
 	"errors"
 	"io"
 	"log/slog"
@@ -52,6 +53,11 @@ type Options struct {
 	Metrics *metrics.Metrics
 	// EPGClock schedules the EPG refreshes; nil means the system clock.
 	EPGClock epg.Clock
+
+	// beforeFetch, if set, is called before each upstream fetch of a /c/,
+	// /r/ or /p/ request; refetch tells the second fetch of a 206 (spec
+	// 3.4). Tests hold a request there.
+	beforeFetch func(r *http.Request, refetch bool)
 }
 
 // Server serves the player-facing HTTP interface. It is an http.Handler.
@@ -68,6 +74,8 @@ type Server struct {
 	// epg fetches, filters and merges the EPG sources (spec 7.1); Run
 	// runs it.
 	epg *epg.Guide
+	// beforeFetch is Options.beforeFetch.
+	beforeFetch func(r *http.Request, refetch bool)
 
 	// mu guards closed and the Add calls of handlers, so drain does not
 	// race with a request that is just starting.
@@ -92,6 +100,8 @@ func New(opts Options) (*Server, error) {
 		version: opts.Version,
 		mux:     http.NewServeMux(),
 		metrics: opts.Metrics,
+
+		beforeFetch: opts.beforeFetch,
 	}
 	if s.metrics == nil {
 		s.metrics = metrics.New(metrics.Options{})
@@ -136,12 +146,37 @@ type generation struct {
 }
 
 // use returns the active generation for a request or fetch that uses its
-// routes. The caller calls done when it is finished with them: every
-// upstream response closed.
-func (s *Server) use() *generation {
-	g := s.gen.Load()
-	g.users.Add(1)
-	return g
+// routes, the context to fetch with, and done, which the caller calls
+// when it is finished with them: every upstream response closed. pick
+// returns the name of the route the request uses in the generation; ""
+// or a name without route: none.
+//
+// The request counts on that route's tunnel from here until done
+// (route.Route.Begin), not only while each Fetch runs. A reload retires
+// the tunnels it replaces only after the next generation is active, and
+// a retired tunnel drains for the requests counted on it (spec 2.1, 5.6).
+// So a request that took the old generation gets the old tunnel even if
+// its first fetch, or its refetch after a 206 (spec 3.4), comes after the
+// reload. For that, use returns a generation only if it was still active
+// after the count; else it takes the next one.
+func (s *Server) use(ctx context.Context, pick func(*generation) string) (*generation, context.Context, func()) {
+	for {
+		g := s.gen.Load()
+		g.users.Add(1)
+		fctx, end := ctx, func() {}
+		if rt, ok := g.routes.Route(pick(g)); ok {
+			fctx, end = rt.Begin(ctx)
+		}
+		if s.gen.Load() == g {
+			return g, fctx, sync.OnceFunc(func() {
+				end()
+				g.done()
+			})
+		}
+		// A reload swapped the generation in between.
+		end()
+		g.done()
+	}
 }
 
 // done ends a use of g. The last user of a retired generation closes the

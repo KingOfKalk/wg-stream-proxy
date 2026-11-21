@@ -187,10 +187,10 @@ stateDiagram-v2
   retries and the per-tunnel cache of spec 2.1.
 - Device and netstack (`running`) exist only while the tunnel runs. Every
   stop ends in `running.close`: the idle timer, a reload that retires the
-  tunnel (`Manager.Apply` cancels a start in progress and drains running
-  requests), a cool-down (`Manager.Cooldown`) and shutdown. The `OnStop`
-  hook makes the route close its idle pooled connections; the DNS cache
-  is dropped.
+  tunnel (`Update.Commit` after `Manager.Apply` cancels a start in
+  progress and drains running requests), a cool-down (`Manager.Cooldown`)
+  and shutdown. The `OnStop` hook makes the route close its idle pooled
+  connections; the DNS cache is dropped.
 - `internal/tunnel/netstack` is a trimmed copy of wireguard-go's
   `tun/netstack` that drops packets sent after `Close` (spec 9).
 - Keys stay inside: the UAPI text is never logged, wireguard-go's own log
@@ -242,11 +242,17 @@ and left out, as are the other direct imports of `cmd/wg-stream-proxy`.
   (`/c/`, `/r/`, `/p/` requests, EPG fetches, the debug probe) are
   counted; the last user of a replaced generation closes the idle
   connections it left in the old pools, and nothing else keeps it.
+  `Server.use` also counts each user on its route's tunnel
+  (`route.Route.Begin`) until it ends, and returns a generation only if
+  it is still active after that count.
 - `SIGHUP` and the changes `server.Watch` sees call `Reloader.Reload`. It
   loads all files (`config.Load`, `tunnel.Parse`); if they are valid,
-  `Manager.Apply` swaps the tunnel set, `route.NewSet` builds new
-  routes (empty pools; the old routes close their idle connections) and the new generation
-  serves new requests. An invalid config changes nothing (spec 5.6).
+  `Manager.Apply` adds the new tunnel set, `route.NewSet` builds new
+  routes (empty pools; the old routes close their idle connections), the
+  new generation serves new requests, and only then `Update.Commit`
+  retires the replaced tunnels: their drain sees every request of the old
+  generation. An error in between rolls the tunnel set back
+  (`Update.Rollback`). An invalid config changes nothing (spec 5.6).
   `cmd/wg-stream-proxy` wires the signal and the watcher to the reloader.
 
 ### 4.2 Observability

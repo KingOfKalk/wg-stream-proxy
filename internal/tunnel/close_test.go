@@ -121,7 +121,7 @@ func closeIdle(t *testing.T, s *closeSetup) {
 func closeRetire(t *testing.T, s *closeSetup) {
 	t.Helper()
 	stops := stopped(s.tun)
-	if _, err := s.m.Apply(nil, testDrain); err != nil {
+	if _, err := apply(s.m, nil); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	waitClosed(t, stops, "retired tunnel stop")
