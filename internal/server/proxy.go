@@ -180,7 +180,8 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request, g *generation, ch
 		if !retry {
 			return
 		}
-		// A playlist answered with 206: fetch it whole (spec 3.4).
+		// A playlist, or a body with a content coding, answered with 206:
+		// fetch it whole (spec 3.4).
 		client = client.Clone()
 		client.Del("Range")
 		client.Del("If-Range")
@@ -188,8 +189,9 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request, g *generation, ch
 }
 
 // respond answers the client from an upstream response. It returns true
-// if the response is a partial playlist that must be fetched again
-// without Range; refetch tells that this already happened.
+// if the response is a partial playlist, or a partial response with a
+// content coding, that must be fetched again without Range; refetch
+// tells that this already happened.
 func (s *Server) respond(w http.ResponseWriter, r *http.Request, g *generation, ch config.Channel, rq *metrics.Request, resp *http.Response, f fetch, refetch bool) bool {
 	final := resp.Request.URL
 	recordOf(w).upstream(resp.StatusCode)
@@ -205,8 +207,27 @@ func (s *Server) respond(w http.ResponseWriter, r *http.Request, g *generation, 
 			s.answerFailure(w, r, g, code, clip)
 			return false
 		}
-		// 4xx: relayed like any other non-playlist response.
+		// 4xx: relayed like any other non-playlist response, decoded
+		// like one (spec 3.4).
+		if err := route.DecodeBody(resp); err != nil {
+			s.fail(w, r, g, ch, f, err, rq.Error)
+			return false
+		}
 		s.stream(w, r, ch, rq, resp, resp.Body)
+		return false
+	}
+
+	// A Content-Encoding the transport did not undo is decoded or refused
+	// before the body is classified (spec 3.4): a compressed playlist is
+	// rewritten or refused like the plain one, and no body reaches the
+	// client encoded without its Content-Encoding. A 206 with a coding is
+	// fetched again whole, like a partial playlist.
+	if err := route.DecodeBody(resp); err != nil {
+		rq.Response(resp.StatusCode)
+		if errors.Is(err, route.ErrEncodedPartial) && !refetch {
+			return true
+		}
+		s.fail(w, r, g, ch, f, err, rq.Error)
 		return false
 	}
 
