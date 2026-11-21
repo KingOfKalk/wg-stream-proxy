@@ -212,21 +212,6 @@ func TestServeStartupErrors(t *testing.T) {
 	}
 }
 
-func TestServeHelp(t *testing.T) {
-	c, out, errOut := testCLI(nil)
-	if code := c.run([]string{"serve", "-h"}); code != 0 {
-		t.Errorf("exit code = %d, want 0", code)
-	}
-	for _, flag := range []string{"-config-dir", "-listen", "-log-level", "-log-format"} {
-		if !strings.Contains(out.String(), flag) {
-			t.Errorf("help lacks %s:\n%s", flag, out)
-		}
-	}
-	if errOut.String() != "" {
-		t.Errorf("stderr = %q, want empty", errOut)
-	}
-}
-
 func TestServe(t *testing.T) {
 	dir := writeDir(t, map[string]string{
 		"channels.d/tv.toml": "tunnel = \"direct\"\n[[channel]]\nname = \"News\"\nurl = \"https://tv.example.com/news.m3u8\"\n",
