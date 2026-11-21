@@ -114,8 +114,9 @@ func Unsupported(contentType string, prefix []byte, configured Type) string {
 				return FormatUnknown
 			}
 			// Binary without a root element: media such as AES
-			// ciphertext or MP3 from mid-frame may start with '<'.
-			return ""
+			// ciphertext or MP3 from mid-frame may start with '<',
+			// but not like an XML prolog or a playlist root.
+			return lexicalXML(body)
 		}
 		if f := xmlRoots[strings.ToLower(root)]; f != "" {
 			return f
@@ -248,6 +249,53 @@ func xmlRoot(b []byte) (name string, ok bool) {
 			return "", false
 		}
 	}
+}
+
+// lexicalXML classifies the start of b, a body starting with '<' that
+// xmlRoot cannot read (a legacy byte in an attribute or the declaration),
+// without an XML parser: the format of a playlist root (xmlRoots) named
+// first after an optional XML declaration, comments and whitespace
+// (namespace prefix ignored, the name ends at any byte that cannot
+// continue it or at the end of b); otherwise FormatUnknown if b starts
+// with "<?xml", "<!--" or "<!DOCTYPE" (any case), else "". Random bytes
+// match with a probability of about 10^-9 ("<asx" in any case).
+func lexicalXML(b []byte) string {
+	rest := b
+	for {
+		rest = bytes.TrimLeft(rest, " \t\r\n")
+		end := -1
+		switch {
+		case hasPrefixFold(rest, "<?xml"):
+			if i := bytes.Index(rest, []byte("?>")); i >= 0 {
+				end = i + len("?>")
+			}
+		case bytes.HasPrefix(rest, []byte("<!--")):
+			if i := bytes.Index(rest[len("<!--"):], []byte("-->")); i >= 0 {
+				end = len("<!--") + i + len("-->")
+			}
+		}
+		if end < 0 {
+			break
+		}
+		rest = rest[end:]
+	}
+	if len(rest) > 1 && rest[0] == '<' {
+		n := 1
+		for n < len(rest) && (isLetter(rest[n]) || rest[n] >= '0' && rest[n] <= '9' || strings.IndexByte("._:-", rest[n]) >= 0) {
+			n++
+		}
+		name := string(rest[1:n])
+		if i := strings.LastIndexByte(name, ':'); i >= 0 {
+			name = name[i+1:]
+		}
+		if f := xmlRoots[strings.ToLower(name)]; f != "" {
+			return f
+		}
+	}
+	if hasPrefixFold(b, "<?xml") || bytes.HasPrefix(b, []byte("<!--")) || hasPrefixFold(b, "<!doctype") {
+		return FormatUnknown
+	}
+	return ""
 }
 
 // wideBOM reports whether b starts with a UTF-16 or UTF-32 byte order

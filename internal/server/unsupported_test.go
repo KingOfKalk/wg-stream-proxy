@@ -80,6 +80,12 @@ func TestUnsupportedPlaylists(t *testing.T) {
 			name: "xspf root followed by NUL", ctype: "application/octet-stream",
 			body: "<playlist version=\"1\"><trackList><track><location>" + stream + "</location></track></trackList></playlist>\x00", format: "xspf",
 		},
+		{
+			// encoding/xml fails at the attribute, the NUL makes it
+			// binary.
+			name: "asx with a latin-1 attribute and NUL", ctype: "video/x-ms-asf",
+			body: "<asx version=\"3.0\" x=\"\xd6\"><entry><ref href=\"" + stream + "\"/></entry></asx>\x00", format: "asx",
+		},
 		{name: "mp3", ctype: "audio/mpeg", body: "ID3\x04\x00\x00\x00\x00\x00\x00" + strings.Repeat("\xff\xfb\x90\x64", 200)},
 		{name: "mp3 from mid-frame starting with <", ctype: "audio/mpeg", body: "\x3c\x9a\x01" + strings.Repeat("\xff\xfb\x90\x64\x00\x0f\xf0\x00\x00\x69", 300)},
 	}

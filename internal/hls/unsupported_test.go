@@ -171,6 +171,7 @@ func FuzzUnsupported(f *testing.F) {
 		"x<MPD>", "\ufeff\ufeff<MPD>", "#c\n<MPD/>", "\u00a0<MPD>", "\x00<mpd:MPD/>", "WEBVTT\n\n", "plain text, no playlist",
 		"\x00\x01\x02\xff<MPD=a=\"b\">", "\x00<MPD!", "WEBVTT\n\n" + strings.Repeat("x", 600) + "<MPD>",
 		"<asx><title>\xd6</title></asx>", "<playlist></playlist>\x00", "<html>\xe4\x00", "; \xe4\n[playlist]\n", "<\x9a\x01\xff",
+		"<asx x=\"\xd6\">\x00", "<?xml \xd6?><!--\x00--><x:playlist\x00", "<!DOCTYPE\x00",
 	} {
 		f.Add("", []byte(s), uint8(Auto))
 		f.Add("audio/x-scpls", []byte(s), uint8(Raw))
@@ -401,6 +402,23 @@ func TestUnsupportedLegacyEncodings(t *testing.T) {
 		{"latin-1 xml without a root in the window", "<!--" + strings.Repeat("\xd6", 1000), "unknown"},
 		{"pls after a latin-1 comment", "; R\xe4dio\n[playlist]\nFile1=http://direct.example/s\n", "unknown"},
 		{"latin-1 plain text", "Sender nicht verf\xfcgbar, bitte sp\xe4ter erneut versuchen\n", "unknown"},
+
+		// encoding/xml fails before the root and a control byte makes
+		// the body binary: the start is read lexically.
+		{"latin-1 attribute in the root tag and NUL", "<asx version=\"3.0\" x=\"\xd6\">" + ref + "</asx>\x00", "asx"},
+		{
+			"latin-1 declaration and root attribute, NUL",
+			"<?xml version=\"1.0\" encoding=\"ISO-8859-1\" x=\"\xd6\"?>\n<!-- c -->\n<asx version=\"3.0\" x=\"\xd6\">" + ref + "</asx>\x00",
+			"asx",
+		},
+		{"prefixed root with a latin-1 attribute and NUL", "<a:ASX x=\"\xd6\">" + ref + "</a:ASX>\x00", "asx"},
+		{"root name at the end of the prefix", "<?xml \x00?> <asx", "asx"},
+		{"xspf with a latin-1 attribute and NUL", "<playlist version=\"1\" title=\"Caf\xe9\"><trackList><track><location>http://direct.example/s</location></track></trackList></playlist>\x00", "xspf"},
+		{"short asx tag with a latin-1 attribute", "<asx x=\"\xd6\">", "asx"},
+		{"declaration and NUL", "<?xml version=\"1.0\"\x00", "unknown"},
+		{"declaration in upper case and NUL", "<?XML version=\"1.0\"?>\x00<x>", "unknown"},
+		{"comment and NUL", "<!--\x00 -->", "unknown"},
+		{"doctype and NUL", "<!doctype asx\x00>", "unknown"},
 
 		// Media streams, also when it starts with '<'.
 		{"mpeg-ts", strings.Repeat("\x47\x40\x00\x10"+strings.Repeat("\xff", 184), 4), ""},
