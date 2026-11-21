@@ -12,7 +12,7 @@ import (
 )
 
 // The tests parse the embedded segments without ffmpeg and check the format
-// of docs/clips.md 6.4: MPEG-TS, 4.8 s = 120 frames of 25 fps video = 225
+// of the package documentation: MPEG-TS, 4.8 s = 120 frames of 25 fps video = 225
 // AAC frames, one IDR first, timestamps from 10 s.
 
 const (
@@ -257,7 +257,7 @@ func TestNames(t *testing.T) {
 		t.Fatalf("Names() = %v, want %v", got, want)
 	}
 	if len(want) != 3 {
-		t.Fatalf("%d clips, want the three of docs/clips.md decision 3", len(want))
+		t.Fatalf("%d clips, want the three of spec 3.4", len(want))
 	}
 	// No stray or missing file in segments/.
 	entries, err := fs.ReadDir(files, "segments")
@@ -301,7 +301,7 @@ func TestSegments(t *testing.T) {
 				t.Fatal("Segment not found")
 			}
 			if len(data) < 30000 || len(data) > 70000 {
-				t.Errorf("%d bytes, docs/clips.md 6.4 says about 48-51 KB per text", len(data))
+				t.Errorf("%d bytes, want about 48-51 KB per text", len(data))
 			}
 			p := parseTS(t, data)
 

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-// Package clips holds the built-in error clips (docs/clips.md): one 4.8 s
+// Package clips holds the built-in error clips (spec 3.4): one 4.8 s
 // MPEG-TS segment per error text, rendered by generate.sh and embedded in
 // the binary.
 //
@@ -16,7 +16,7 @@ import (
 )
 
 // The names of the built-in clips, the file names in segments/ without
-// ".ts". Texts: docs/clips.md, decision 3.
+// ".ts". Texts: spec 3.4.
 const (
 	// TunnelUnreachable is the error for a tunnel that cannot be reached.
 	TunnelUnreachable = "tunnel-unreachable"
@@ -28,7 +28,7 @@ const (
 )
 
 // SegmentDuration is the duration of every segment in seconds, as written
-// in an #EXTINF tag (docs/clips.md, 6.4).
+// in an #EXTINF tag (spec 3.4).
 const SegmentDuration = "4.800"
 
 //go:embed segments/*.ts
