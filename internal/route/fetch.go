@@ -141,7 +141,9 @@ func (r *Route) follow(ctx context.Context, t http.RoundTripper, u *url.URL, req
 	for hop := 0; ; hop++ {
 		hreq, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 		if err != nil {
-			return nil, u, fmt.Errorf("%w: %w", errInvalidURL, err)
+			// The parse error quotes the whole URL; it is not passed on
+			// (spec 8).
+			return nil, u, errInvalidURL
 		}
 		hreq.Header = requestHeader(u, req.Header, req.Client, r.upstream.UserAgent)
 		resp, err := t.RoundTrip(hreq)
@@ -164,8 +166,18 @@ func (r *Route) follow(ctx context.Context, t http.RoundTripper, u *url.URL, req
 			return nil, u, errBadRedirect
 		case !config.IsHTTPURL(next):
 			return nil, u, fmt.Errorf("%w: scheme %q", errBadRedirect, next.Scheme)
-		case len(next.String()) > MaxURLLen:
+		}
+		// A scheme-relative target is parsed without a scheme, where the
+		// authority is checked less strictly, and may print as an http URL
+		// that does not parse again ("//::/x"). The target is checked like
+		// a configured upstream URL, so the next hop requests what was
+		// checked and no parse error quotes it.
+		next, err = parseUpstreamURL(next.String())
+		switch {
+		case errors.Is(err, ErrURLTooLong):
 			return nil, u, ErrURLTooLong
+		case err != nil:
+			return nil, u, errBadRedirect
 		case req.Redirect != nil && !req.Redirect(next):
 			// The target is not logged: it may carry tokens.
 			return nil, u, ErrRedirectRefused

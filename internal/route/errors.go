@@ -78,9 +78,15 @@ func ErrorStatus(err error) int {
 	return http.StatusBadGateway
 }
 
+// tlsHandshakeTimeout is the text of net/http's TLS handshake timeout
+// error (Transport.TLSHandshakeTimeout).
+const tlsHandshakeTimeout = "net/http: TLS handshake timeout"
+
 // isTLSError reports whether err comes from certificate verification or
 // the TLS handshake. Many handshake errors are untyped; they are
-// recognised by their "tls: " prefix anywhere in the chain.
+// recognised by their "tls: " prefix anywhere in the chain. The
+// transport's handshake timeout (connect_timeout, spec 3.4) is unexported
+// and recognised by its text.
 func isTLSError(err error) bool {
 	var (
 		cve *tls.CertificateVerificationError
@@ -95,7 +101,7 @@ func isTLSError(err error) bool {
 		return true
 	}
 	for e := err; e != nil; e = errors.Unwrap(e) {
-		if strings.HasPrefix(e.Error(), "tls: ") {
+		if msg := e.Error(); strings.HasPrefix(msg, "tls: ") || msg == tlsHandshakeTimeout {
 			return true
 		}
 	}

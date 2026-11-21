@@ -16,6 +16,12 @@ import (
 const (
 	maxIdleConnsPerHost = 16
 	idleConnTimeout     = 90 * time.Second
+	// h2SendPingTimeout and h2PingTimeout are the HTTP/2 health check: a
+	// connection on which nothing arrived for h2SendPingTimeout gets a
+	// ping and is closed if no answer comes within h2PingTimeout, so a
+	// silently dead connection does not keep taking requests.
+	h2SendPingTimeout = 15 * time.Second
+	h2PingTimeout     = 10 * time.Second
 )
 
 // Options configure the routes of a Set.
@@ -65,8 +71,8 @@ func newRoute(name string, n Network, opts Options) *Route {
 	if r.clock == nil {
 		r.clock = SystemClock()
 	}
-	r.transport = newTransport(r.dial)
-	r.icyTransport = newTransport(r.dialICY)
+	r.transport = newTransport(r.dial, r.upstream.ConnectTimeout)
+	r.icyTransport = newTransport(r.dialICY, r.upstream.ConnectTimeout)
 	return r
 }
 
@@ -74,11 +80,21 @@ func newRoute(name string, n Network, opts Options) *Route {
 // connects only through dial. A route can hold more than one (e.g. one
 // whose dial wraps connections for raw streams) without sharing pooled
 // connections.
-func newTransport(dial func(ctx context.Context, network, address string) (net.Conn, error)) *http.Transport {
+//
+// handshakeTimeout (connect_timeout) bounds the TLS handshake. The
+// transport dials with a context detached from the request, so without
+// it a handshake the upstream never answers would hold its goroutine and
+// connection after the request ended (spec 3.4).
+func newTransport(dial func(ctx context.Context, network, address string) (net.Conn, error), handshakeTimeout time.Duration) *http.Transport {
 	return &http.Transport{
 		Proxy:               nil, // never an environment proxy: it would bypass the route
 		DialContext:         dial,
+		TLSHandshakeTimeout: handshakeTimeout,
 		ForceAttemptHTTP2:   true,
+		HTTP2: &http.HTTP2Config{
+			SendPingTimeout: h2SendPingTimeout,
+			PingTimeout:     h2PingTimeout,
+		},
 		MaxIdleConnsPerHost: maxIdleConnsPerHost,
 		IdleConnTimeout:     idleConnTimeout,
 	}

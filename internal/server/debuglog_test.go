@@ -312,3 +312,38 @@ url = "http://` + closed + `/broken/` + idToken + `/seg.ts?token=secret-token"
 		}
 	}
 }
+
+// TestLogsHideMalformedRedirectTarget: a redirect to a scheme-relative
+// Location that does not parse as an http URL fails without its path or
+// query in the warn line (spec 8, #157).
+func TestLogsHideMalformedRedirectTarget(t *testing.T) {
+	for _, loc := range []string{
+		"//::/secretdir/file.m3u8?token=secret-token",
+		"//:http://x/secretdir/y?token=secret-token",
+		"//http::/secretdir/file.m3u8?token=secret-token",
+	} {
+		t.Run(loc, func(t *testing.T) {
+			e := newDirectEnv(t, allowLoopback, `
+tunnel = "direct"
+[[channel]]
+name = "Raw"
+url = "{UP}/start.ts"
+[channel.upstream]
+type = "raw"
+`)
+			e.up.add("/start.ts", file{status: http.StatusFound, header: http.Header{"Location": {loc}}})
+			if resp, _ := e.get(t, "/c/raw", nil); resp.StatusCode != http.StatusBadGateway {
+				t.Fatalf("GET /c/raw: status %d, want 502", resp.StatusCode)
+			}
+			logs := e.logs.String()
+			if !strings.Contains(logs, `msg="upstream request failed"`) || !strings.Contains(logs, "invalid redirect location") {
+				t.Errorf("log lacks the failed request:\n%s", logs)
+			}
+			for _, s := range []string{"secretdir", "secret-token", "token="} {
+				if strings.Contains(logs, s) {
+					t.Errorf("log contains %q:\n%s", s, logs)
+				}
+			}
+		})
+	}
+}
