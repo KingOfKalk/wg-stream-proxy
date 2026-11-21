@@ -210,32 +210,22 @@ func (s *Server) respond(w http.ResponseWriter, r *http.Request, g *generation, 
 		return false
 	}
 
-	body := bufio.NewReaderSize(resp.Body, hls.SniffLen)
-	ctype := resp.Header.Get("Content-Type")
-	typ := hls.Detect(ctype, nil, f.configured)
-	if typ == hls.Raw && r.Method != http.MethodHead {
-		// Look at the start of the body: an auto channel or resource may
-		// be HLS or DASH (spec 3.1 steps 2.3, 2.4), and no channel may pipe
-		// a playlist the proxy does not rewrite (spec 3.3). A HEAD request
-		// closes the upstream body unread (spec 3.4); it sends no URLs.
-		// XML without its root element in the first bytes is read
-		// further (hls.Sniff).
-		prefix, rest, err := hls.Sniff(body)
-		body = rest
-		if err != nil {
-			rq.Response(resp.StatusCode)
-			s.fail(w, r, g, ch, f, err, rq.Error)
-			return false
-		}
-		typ = hls.Detect(ctype, prefix, f.configured)
-		if typ == hls.Raw {
-			if format := hls.Unsupported(ctype, prefix, f.configured); format != "" {
-				s.refuse(w, r, g, ch, f, rq, resp, format)
-				return false
-			}
-		}
-	}
-	if typ == hls.Raw {
+	// Unless the type is known, look at the start of the body: an auto
+	// channel or resource may be HLS or DASH (spec 3.1 steps 2.3, 2.4),
+	// and no channel may pipe a playlist the proxy does not rewrite (spec
+	// 3.3). A HEAD request closes the upstream body unread (spec 3.4); it
+	// sends no URLs.
+	typ, format, body, err := hls.Classify(resp.Header.Get("Content-Type"),
+		bufio.NewReaderSize(resp.Body, hls.SniffLen), f.configured, r.Method != http.MethodHead)
+	switch {
+	case err != nil:
+		rq.Response(resp.StatusCode)
+		s.fail(w, r, g, ch, f, err, rq.Error)
+		return false
+	case format != "":
+		s.refuse(w, r, g, ch, f, rq, resp, format)
+		return false
+	case typ == hls.Raw:
 		rq.SetKind(f.other)
 		rq.Response(resp.StatusCode)
 		s.stream(w, r, ch, rq, resp, body)

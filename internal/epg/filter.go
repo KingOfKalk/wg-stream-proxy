@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/KingOfKalk/wg-stream-proxy/internal/xmlw"
 	"golang.org/x/net/html/charset"
 )
 
@@ -201,7 +202,7 @@ func (f *filter) run() error {
 			}
 			if f.out != nil && f.skip == 0 && len(t) > 0 { // an empty CDATA section is no content
 				f.closeStart()
-				*f.out = appendText(*f.out, t)
+				*f.out = xmlw.AppendText(*f.out, t)
 				if err := f.checkSize(); err != nil {
 					return err
 				}
@@ -313,7 +314,7 @@ func (f *filter) end(t xml.EndElement, depth int) error {
 		*f.out = append(*f.out, "/>"...)
 		f.pending = false
 	} else {
-		*f.out = append(appendName(append(*f.out, "</"...), t.Name), '>')
+		*f.out = xmlw.AppendEndTag(*f.out, t.Name)
 	}
 	if depth == 2 {
 		*f.out = append(*f.out, '\n')
@@ -360,33 +361,20 @@ func attr(t xml.StartElement, name string) (string, bool) {
 }
 
 // plainName reports whether n has no prefix and a local name of the form
-// [A-Za-z][A-Za-z0-9._-]*. XML allows more, but players' lighter parsers
-// read other names differently.
-func plainName(n xml.Name) bool {
-	if n.Space != "" || n.Local == "" || !isLetter(n.Local[0]) {
-		return false
-	}
-	for i := 1; i < len(n.Local); i++ {
-		if c := n.Local[i]; !isLetter(c) && (c < '0' || c > '9') && c != '.' && c != '_' && c != '-' {
-			return false
-		}
-	}
-	return true
-}
-
-func isLetter(c byte) bool { return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' }
+// [A-Za-z][A-Za-z0-9._-]* (xmlw.ValidName). XML allows more, but players'
+// lighter parsers read other names differently.
+func plainName(n xml.Name) bool { return n.Space == "" && xmlw.ValidName(n) }
 
 // appendStartTag appends a start tag without its closing '>': the name
 // and the attributes with plain names, the first of each name only,
 // values escaped in double quotes.
 func appendStartTag(dst []byte, t xml.StartElement) []byte {
-	dst = appendName(append(dst, '<'), t.Name)
+	dst = xmlw.AppendStartTag(dst, t.Name, nil)
 	for i, a := range t.Attr {
 		if !plainName(a.Name) || repeated(t.Attr[:i], a.Name) {
 			continue
 		}
-		dst = appendName(append(dst, ' '), a.Name)
-		dst = append(appendEscaped(append(dst, `="`...), a.Value), '"')
+		dst = xmlw.AppendAttr(dst, a)
 	}
 	return dst
 }
@@ -399,56 +387,6 @@ func repeated(attrs []xml.Attr, n xml.Name) bool {
 		}
 	}
 	return false
-}
-
-// appendName appends a name; kept names have no prefix.
-func appendName(dst []byte, n xml.Name) []byte { return append(dst, n.Local...) }
-
-// appendEscaped appends s escaped for an attribute value in double
-// quotes, like xml.EscapeText.
-func appendEscaped(dst []byte, s string) []byte {
-	for i := 0; i < len(s); i++ {
-		switch c := s[i]; c {
-		case '&':
-			dst = append(dst, "&amp;"...)
-		case '<':
-			dst = append(dst, "&lt;"...)
-		case '>':
-			dst = append(dst, "&gt;"...)
-		case '"':
-			dst = append(dst, "&#34;"...)
-		case '\'':
-			dst = append(dst, "&#39;"...)
-		case '\t':
-			dst = append(dst, "&#x9;"...)
-		case '\n':
-			dst = append(dst, "&#xA;"...)
-		case '\r':
-			dst = append(dst, "&#xD;"...)
-		default:
-			dst = append(dst, c)
-		}
-	}
-	return dst
-}
-
-// appendText appends s escaped as text: '&', '<', '>' and CR.
-func appendText(dst []byte, s []byte) []byte {
-	for _, c := range s {
-		switch c {
-		case '&':
-			dst = append(dst, "&amp;"...)
-		case '<':
-			dst = append(dst, "&lt;"...)
-		case '>':
-			dst = append(dst, "&gt;"...)
-		case '\r':
-			dst = append(dst, "&#xD;"...)
-		default:
-			dst = append(dst, c)
-		}
-	}
-	return dst
 }
 
 // ParseTime parses an XMLTV time of the form YYYYMMDDhhmm or

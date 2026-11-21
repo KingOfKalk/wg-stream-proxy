@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/KingOfKalk/wg-stream-proxy/internal/config"
 	"github.com/KingOfKalk/wg-stream-proxy/internal/dash"
 	"github.com/KingOfKalk/wg-stream-proxy/internal/hls"
 	"github.com/KingOfKalk/wg-stream-proxy/internal/route"
@@ -166,7 +167,7 @@ func Run(ctx context.Context, rawURL string, opts Options) *Report {
 		target, err := cur.final.Parse(cur.next)
 		var s *Step
 		switch {
-		case err != nil || target.Scheme != "http" && target.Scheme != "https" || target.Host == "":
+		case err != nil || !config.IsHTTPURL(target):
 			// The URI is not logged: it may carry tokens.
 			s = &Step{Role: role, URL: route.LogURL(cur.final.String()), Class: string(route.ReasonOther), Error: "first " + role + " is not an http(s) URL"}
 		default:
@@ -228,7 +229,9 @@ func (p *prober) step(ctx context.Context, role, rawURL string, icy bool) *Step 
 		s.OK = true
 		return s
 	}
-	typ, refused, body, err := detect(resp.Header.Get("Content-Type"), body)
+	// Classified like the server does (proxy.go respond), as for /c/ of an
+	// auto channel.
+	typ, refused, body, err := hls.Classify(resp.Header.Get("Content-Type"), body, hls.Auto, true)
 	switch {
 	case err != nil:
 		s.fail(string(route.Classify(err)), "reading the response: "+err.Error())
@@ -248,26 +251,6 @@ func (p *prober) step(ctx context.Context, role, rawURL string, icy bool) *Step 
 		s.OK = true
 	}
 	return s
-}
-
-// detect classifies a response like the server does (proxy.go respond):
-// by Content-Type first, then by the start of the body. This is the one
-// place that names the formats; refused is the format of a playlist the
-// proxy does not rewrite.
-func detect(contentType string, body *bufio.Reader) (typ hls.Type, refused string, rest *bufio.Reader, err error) {
-	typ = hls.Detect(contentType, nil, hls.Auto)
-	if typ != hls.Raw {
-		return typ, "", body, nil
-	}
-	prefix, rest, err := hls.Sniff(body)
-	if err != nil {
-		return typ, "", rest, err
-	}
-	typ = hls.Detect(contentType, prefix, hls.Auto)
-	if typ == hls.Raw {
-		refused = hls.Unsupported(contentType, prefix, hls.Auto)
-	}
-	return typ, refused, rest, nil
 }
 
 // manifest reads and checks a DASH manifest like the proxy does before
