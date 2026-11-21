@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.2](https://github.com/KingOfKalk/wg-stream-proxy/compare/v0.5.1...v0.5.2) (2026-11-21)
+
+
+### Bug Fixes
+
+* **server:** a request just before a tunnel reload can hit the retired tunnel ([#171](https://github.com/KingOfKalk/wg-stream-proxy/issues/171)) ([a32444d](https://github.com/KingOfKalk/wg-stream-proxy/commit/a32444d61e01a21778ed90b226c1b8a55aabbfbf))
+
 ## [0.5.1](https://github.com/KingOfKalk/wg-stream-proxy/compare/v0.5.0...v0.5.1) (2026-11-21)
 
 
