@@ -170,6 +170,8 @@ func FuzzUnsupported(f *testing.F) {
 		"<x/><MPD></MPD>", ttml, "<tt><!---></tt><MPD/>--></tt>",
 		"x<MPD>", "\ufeff\ufeff<MPD>", "#c\n<MPD/>", "\u00a0<MPD>", "\x00<mpd:MPD/>", "WEBVTT\n\n", "plain text, no playlist",
 		"\x00\x01\x02\xff<MPD=a=\"b\">", "\x00<MPD!", "WEBVTT\n\n" + strings.Repeat("x", 600) + "<MPD>",
+		"<asx><title>\xd6</title></asx>", "<playlist></playlist>\x00", "<html>\xe4\x00", "; \xe4\n[playlist]\n", "<\x9a\x01\xff",
+		"<asx x=\"\xd6\">\x00", "<?xml \xd6?><!--\x00--><x:playlist\x00", "<!DOCTYPE\x00",
 	} {
 		f.Add("", []byte(s), uint8(Auto))
 		f.Add("audio/x-scpls", []byte(s), uint8(Raw))
@@ -362,5 +364,91 @@ func TestUnsupportedMPDTag(t *testing.T) {
 	}
 	if got := Unsupported("text/vtt", prefix, Auto); got != FormatDASH {
 		t.Errorf("MPD after 512 bytes of WebVTT: %q, want dash", got)
+	}
+}
+
+// TestUnsupportedLegacyEncodings checks spec 3.3 for playlists that are
+// not UTF-8 text (issue 155): a legacy encoding (ISO-8859-1,
+// Windows-1252) or a control byte after the root element does not let
+// them stream, on auto and raw channels and resources; media still
+// streams. The Content-Type is outside the refusal table.
+func TestUnsupportedLegacyEncodings(t *testing.T) {
+	const bom = "\xef\xbb\xbf"
+	ref := `<entry><ref href="http://direct.example/secret/stream"/></entry>`
+	rnd := rand.New(rand.NewPCG(5, 6))
+	random := make([]byte, 4096)
+	for i := range random {
+		random[i] = byte(rnd.Uint32())
+	}
+	tests := []struct {
+		name, body, want string
+	}{
+		{"asx with a latin-1 title", `<asx version="3.0"><title>Radio \xd6sterreich</title>` + ref + `</asx>`, "asx"},
+		{"asx with a windows-1252 byte", "<ASX version=\"3.0\"><Title>News \x96 Live</Title>" + ref + "</ASX>", "asx"},
+		{"asx after BOM and whitespace", bom + "\r\n <asx version=\"3.0\"><title>\xd6</title>" + ref + "</asx>", "asx"},
+		{"latin-1 byte in a prolog comment", "<!-- \xd6 -->\n<asx>" + ref + "</asx>", "asx"},
+		{"latin-1 byte in the root tag", "<asx version=\"3.0\" title=\"\xd6\">" + ref + "</asx>", "unknown"},
+		{
+			"xspf in latin-1",
+			"<?xml version=\"1.0\" encoding=\"ISO-8859-1\"?>\n<playlist version=\"1\" xmlns=\"http://xspf.org/ns/0/\"><title>Caf\xe9</title>" +
+				"<trackList><track><location>http://direct.example/secret/stream</location></track></trackList></playlist>",
+			"xspf",
+		},
+		{"html in latin-1", "<!DOCTYPE html>\n<html><head><title>R\xe4dio</title></head><body><a href=\"http://direct.example/s\">x</a></body></html>", "unknown"},
+		{"xspf root followed by NUL", "<playlist version=\"1\"><trackList><track><location>http://direct.example/s</location></track></trackList></playlist>\x00", "xspf"},
+		{"asx root followed by NULs", "<asx version=\"3.0\">" + ref + "</asx>\x00\x00\x00", "asx"},
+		{"control byte inside the playlist", "<playlist><title>a\x01b</title><trackList><track><location>http://direct.example/s</location></track></trackList></playlist>", "xspf"},
+		{"other root followed by NUL", "<smil><body><seq><media src=\"http://direct.example/s\"/></seq></body></smil>\x00", "unknown"},
+		{"latin-1 xml without a root in the window", "<!--" + strings.Repeat("\xd6", 1000), "unknown"},
+		{"pls after a latin-1 comment", "; R\xe4dio\n[playlist]\nFile1=http://direct.example/s\n", "unknown"},
+		{"latin-1 plain text", "Sender nicht verf\xfcgbar, bitte sp\xe4ter erneut versuchen\n", "unknown"},
+
+		// encoding/xml fails before the root and a control byte makes
+		// the body binary: the start is read lexically.
+		{"latin-1 attribute in the root tag and NUL", "<asx version=\"3.0\" x=\"\xd6\">" + ref + "</asx>\x00", "asx"},
+		{
+			"latin-1 declaration and root attribute, NUL",
+			"<?xml version=\"1.0\" encoding=\"ISO-8859-1\" x=\"\xd6\"?>\n<!-- c -->\n<asx version=\"3.0\" x=\"\xd6\">" + ref + "</asx>\x00",
+			"asx",
+		},
+		{"prefixed root with a latin-1 attribute and NUL", "<a:ASX x=\"\xd6\">" + ref + "</a:ASX>\x00", "asx"},
+		{"root name at the end of the prefix", "<?xml \x00?> <asx", "asx"},
+		{"xspf with a latin-1 attribute and NUL", "<playlist version=\"1\" title=\"Caf\xe9\"><trackList><track><location>http://direct.example/s</location></track></trackList></playlist>\x00", "xspf"},
+		{"short asx tag with a latin-1 attribute", "<asx x=\"\xd6\">", "asx"},
+		{"declaration and NUL", "<?xml version=\"1.0\"\x00", "unknown"},
+		{"declaration in upper case and NUL", "<?XML version=\"1.0\"?>\x00<x>", "unknown"},
+		{"comment and NUL", "<!--\x00 -->", "unknown"},
+		{"doctype and NUL", "<!doctype asx\x00>", "unknown"},
+
+		// Media streams, also when it starts with '<'.
+		{"mpeg-ts", strings.Repeat("\x47\x40\x00\x10"+strings.Repeat("\xff", 184), 4), ""},
+		{"fmp4", "\x00\x00\x00\x18ftypiso6\x00\x00\x00\x00iso6dash" + strings.Repeat("\x00", 600), ""},
+		{"adts", strings.Repeat("\xff\xf1\x50\x80\x02\x1f\xfc\x21\x00\x49\x90\x02\x19", 60), ""},
+		{"mp3", "ID3\x04\x00\x00\x00\x00\x00\x23TSSE\x00\x00\x00\x0f\x00\x00\x03Lavf" + strings.Repeat("\xff\xfb\x90\x64", 200), ""},
+		{"mp3 from mid-frame starting with <", "\x3c\x9a\x01" + strings.Repeat("\xff\xfb\x90\x64\x00\x0f\xf0\x00\x00\x69", 300), ""},
+		{"ogg", "OggS\x00\x02" + strings.Repeat("\x00\x11\x7e\x9c", 200), ""},
+		{"flac", "fLaC\x00\x00\x00\x22\x12\x00\x12\x00" + strings.Repeat("\x00\x8a\xc4\x42", 200), ""},
+		{"aes ciphertext", string(random), ""},
+		{"aes ciphertext starting with <", "<" + string(random), ""},
+		{"aes ciphertext starting with whitespace and <", " \r\n<" + string(random[100:]), ""},
+		{"aes key without control bytes", "\xd6\x8f\xa1\x3c\xe1\x92\x7b\x85\x6d\xaa\xb0\xc4\x4e\xc7\x99\x21", ""},
+		{"aes key starting with <", "<\xd6\x8f\xa1\x3c\xe1\x92\x7b\x85\x6d\xaa\xb0\xc4\x4e\xc7\x99", ""},
+	}
+	for _, tt := range tests {
+		for _, configured := range []Type{Auto, Raw} {
+			t.Run(tt.name+"/"+configured.String(), func(t *testing.T) {
+				body := bufio.NewReaderSize(strings.NewReader(tt.body), SniffLen)
+				typ, refused, rest, err := Classify("video/x-ms-asf", body, configured, true)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if typ != Raw || refused != tt.want {
+					t.Errorf("Classify = %v, %q; want raw, %q", typ, refused, tt.want)
+				}
+				if b, err := io.ReadAll(rest); err != nil || string(b) != tt.body {
+					t.Errorf("rest of the body changed: %d bytes, %v", len(b), err)
+				}
+			})
+		}
 	}
 }
