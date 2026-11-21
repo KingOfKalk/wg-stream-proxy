@@ -3,6 +3,7 @@
 package route
 
 import (
+	"compress/gzip"
 	"errors"
 	"fmt"
 	"io"
@@ -14,6 +15,110 @@ import (
 
 // ErrTooLarge: a playlist body is larger than [upstream] max_playlist_size.
 var ErrTooLarge = errors.New("route: playlist too large")
+
+var (
+	// ErrContentEncoding: the response has a Content-Encoding the proxy
+	// does not decode (spec 3.4).
+	ErrContentEncoding = errors.New("route: unsupported content encoding")
+	// ErrEncodedPartial: a 206 response with a Content-Encoding, whose
+	// Content-Range counts encoded bytes (spec 3.4).
+	ErrEncodedPartial = errors.New("route: partial response with a content encoding")
+)
+
+// maxCodingText bounds the Content-Encoding value quoted in an error.
+const maxCodingText = 64
+
+// DecodeBody undoes a Content-Encoding of resp that the transport did
+// not undo (spec 3.4). Go's transport decodes gzip only if it asked for
+// it, which it does not for a request with Range or an Accept-Encoding
+// of upstream.headers, and never decodes x-gzip; some servers send
+// pre-compressed objects whatever the request said. It must run before
+// the body is classified or relayed:
+//   - no coding, or only identity or none: resp is unchanged;
+//   - exactly one gzip or x-gzip (identity and none ignored): the body
+//     is decoded while it is read and resp looks like a transparently
+//     decompressed response (Uncompressed, no Content-Encoding and
+//     Content-Length, so CopyResponseHeader drops Content-Length and
+//     ETag);
+//   - a 206 with any coding fails with ErrEncodedPartial: its
+//     Content-Range counts encoded bytes, so the caller fetches the
+//     resource again without Range. The same holds for a 206 the
+//     transport decoded;
+//   - any other coding, or several, fails with ErrContentEncoding: the
+//     proxy cannot tell whether the body is a playlist.
+//
+// The errors are *Error values; the caller closes resp.Body in every
+// case.
+func DecodeBody(resp *http.Response) error {
+	var codings []string
+	for _, v := range resp.Header.Values("Content-Encoding") {
+		for c := range strings.SplitSeq(v, ",") {
+			if c = strings.Trim(c, " \t"); c != "" && !isIdentity(c) {
+				codings = append(codings, c)
+			}
+		}
+	}
+	if len(codings) == 0 && !resp.Uncompressed {
+		return nil
+	}
+	if resp.StatusCode == http.StatusPartialContent {
+		return encodingError(resp, ErrEncodedPartial)
+	}
+	if len(codings) == 0 {
+		return nil
+	}
+	if len(codings) > 1 || !strings.EqualFold(codings[0], "gzip") && !strings.EqualFold(codings[0], "x-gzip") {
+		text := strings.Join(codings, ", ")
+		if len(text) > maxCodingText {
+			text = text[:maxCodingText] + "…"
+		}
+		return encodingError(resp, fmt.Errorf("%w %q", ErrContentEncoding, text))
+	}
+	resp.Body = &gzipBody{body: resp.Body}
+	resp.Header.Del("Content-Encoding")
+	resp.Header.Del("Content-Length")
+	resp.ContentLength = -1
+	resp.Uncompressed = true
+	return nil
+}
+
+// encodingError wraps err with the logged form of the response's URL.
+func encodingError(resp *http.Response, err error) error {
+	u := "(invalid URL)"
+	if resp.Request != nil && resp.Request.URL != nil {
+		u = LogURL(resp.Request.URL.String())
+	}
+	return &Error{URL: u, Err: err}
+}
+
+// gzipBody decodes a gzip body. The gzip header is read with the first
+// Read, so a body that is closed unread (HEAD, spec 3.4) is never read.
+// Read errors of the underlying body pass unchanged (read_timeout).
+type gzipBody struct {
+	body io.ReadCloser
+	zr   *gzip.Reader
+	err  error
+}
+
+func (b *gzipBody) Read(p []byte) (int, error) {
+	if b.zr == nil && b.err == nil {
+		b.zr, b.err = gzip.NewReader(b.body)
+		if b.err != nil && b.err != io.EOF {
+			b.err = fmt.Errorf("route: gzip body: %w", b.err)
+		}
+	}
+	if b.err != nil {
+		return 0, b.err
+	}
+	n, err := b.zr.Read(p)
+	if err != nil && err != io.EOF {
+		err = fmt.Errorf("route: gzip body: %w", err)
+	}
+	return n, err
+}
+
+// Close closes the underlying body.
+func (b *gzipBody) Close() error { return b.body.Close() }
 
 // copiedHeaders are always copied from the upstream response (spec 3.4).
 var copiedHeaders = []string{"Content-Type", "Content-Range", "Accept-Ranges", "Cache-Control", "Last-Modified"}
@@ -117,4 +222,11 @@ func logFileName(seg string) string {
 		return logNameFallback
 	}
 	return name
+}
+
+// isIdentity reports whether a content coding leaves the body unchanged:
+// identity, or "none", which is no registered coding but which servers
+// send on plain bodies (spec 3.4). Case-insensitive.
+func isIdentity(c string) bool {
+	return strings.EqualFold(c, "identity") || strings.EqualFold(c, "none")
 }
