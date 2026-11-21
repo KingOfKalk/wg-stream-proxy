@@ -37,17 +37,22 @@ func brokenFiles() map[string]map[string]string {
 // proxy serves on. It returns serve's exit code and logs.
 func serveWithBrokenFiles(t *testing.T, broken map[string]string, cmd func(dir string, c *cli, out, errOut *syncBuffer)) (code int, logs string) {
 	t.Helper()
-	free := func() string {
-		t.Helper()
+	// Both ports are picked while both listeners are open: after a close
+	// the OS may hand the same port out again, and serve rejects a debug
+	// port equal to the listen port.
+	var addrs [2]string
+	var lns [2]net.Listener
+	for i := range addrs {
 		ln, err := net.Listen("tcp", "127.0.0.1:0")
 		if err != nil {
 			t.Fatal(err)
 		}
-		addr := ln.Addr().String()
-		_ = ln.Close()
-		return addr
+		addrs[i], lns[i] = ln.Addr().String(), ln
 	}
-	listen, debug := free(), free()
+	for _, ln := range lns {
+		_ = ln.Close()
+	}
+	listen, debug := addrs[0], addrs[1]
 	dir := writeDir(t, map[string]string{
 		"config.toml": "listen = \"" + listen + "\"\n[debug]\nlisten = \"" + debug + "\"\n" +
 			"[reload]\nwatch_interval = \"0\"\n[upstream.allow_private]\ndirect = [\"127.0.0.0/8\"]\n",
@@ -91,7 +96,7 @@ func TestHealthcheckBrokenFiles(t *testing.T) {
 				code = c.run([]string{"healthcheck", "--config-dir", dir})
 			})
 			if serveCode != 0 {
-				t.Fatalf("serve exit code = %d, want 0 (a broken file must not stop it)", serveCode)
+				t.Fatalf("serve exit code = %d, want 0 (a broken file must not stop it); logs:\n%s", serveCode, logs)
 			}
 			if code != 0 {
 				t.Fatalf("exit code = %d, want 0; stderr: %s", code, errOut)
@@ -113,12 +118,12 @@ func TestTunnelListBrokenFiles(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			var code int
 			var out, errOut *syncBuffer
-			serveCode, _ := serveWithBrokenFiles(t, broken, func(dir string, c *cli, o, e *syncBuffer) {
+			serveCode, logs := serveWithBrokenFiles(t, broken, func(dir string, c *cli, o, e *syncBuffer) {
 				out, errOut = o, e
 				code = c.run([]string{"tunnel", "list", "--config-dir", dir})
 			})
 			if serveCode != 0 {
-				t.Fatalf("serve exit code = %d, want 0 (a broken file must not stop it)", serveCode)
+				t.Fatalf("serve exit code = %d, want 0 (a broken file must not stop it); logs:\n%s", serveCode, logs)
 			}
 			if code != 0 {
 				t.Fatalf("exit code = %d, want 0; stderr: %s", code, errOut)
@@ -146,12 +151,12 @@ func TestProbeBrokenFiles(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			var code int
 			var out, errOut *syncBuffer
-			serveCode, _ := serveWithBrokenFiles(t, broken, func(dir string, c *cli, o, e *syncBuffer) {
+			serveCode, logs := serveWithBrokenFiles(t, broken, func(dir string, c *cli, o, e *syncBuffer) {
 				out, errOut = o, e
 				code = c.run([]string{"probe", "--config-dir", dir, up.URL + "/radio"})
 			})
 			if serveCode != 0 {
-				t.Fatalf("serve exit code = %d, want 0 (a broken file must not stop it)", serveCode)
+				t.Fatalf("serve exit code = %d, want 0 (a broken file must not stop it); logs:\n%s", serveCode, logs)
 			}
 			if code != 0 {
 				t.Fatalf("exit code = %d, want 0; stderr: %s", code, errOut)

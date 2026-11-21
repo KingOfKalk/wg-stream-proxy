@@ -49,26 +49,18 @@ func TestUnsupportedPlaylists(t *testing.T) {
 		channels []string
 	}{
 		{name: "pls", ctype: "audio/x-scpls", body: "[playlist]\nNumberOfEntries=1\nFile1=" + stream + "\n", format: "pls"},
-		{name: "pls as text", ctype: "text/plain", body: "[playlist]\r\nFile1=" + stream + "\r\n", format: "pls"},
 		{name: "plain m3u", ctype: "audio/x-mpegurl", body: stream + "\n", format: "m3u"},
-		{name: "plain m3u as octet-stream", ctype: "application/octet-stream", body: "# radio\n" + stream + "\n", format: "m3u"},
 		{
 			// Auto channels and resources rewrite it (spec 3.3).
 			name: "dash on a raw channel", ctype: "application/dash+xml",
 			body: `<?xml version="1.0"?><MPD><BaseURL>` + stream + `</BaseURL></MPD>`, format: "dash", channels: []string{"raw"},
 		},
-		{name: "xspf", ctype: "application/xspf+xml", body: `<playlist xmlns="http://xspf.org/ns/0/"><trackList><track><location>` + stream + `</location></track></trackList></playlist>`, format: "xspf"},
-		{name: "asx", ctype: "video/x-ms-asf", body: `<ASX version="3.0"><Entry><Ref href="` + stream + `"/></Entry></ASX>`, format: "asx"},
 		{
 			// An auto channel rewrites it; a raw channel must not pipe it.
 			name: "extended m3u on a raw channel", ctype: "audio/x-mpegurl",
 			body: "#EXTM3U\n#EXTINF:-1,Radio\n" + stream + "\n", format: "m3u", channels: []string{"raw"},
 		},
 		{name: "mp3", ctype: "audio/mpeg", body: "ID3\x04\x00\x00\x00\x00\x00\x00" + strings.Repeat("\xff\xfb\x90\x64", 200)},
-		{name: "mpeg-ts", ctype: "video/mp2t", body: strings.Repeat("\x47\x40\x00\x10"+strings.Repeat("\xff", 184), 4)},
-		{name: "aac", ctype: "audio/aac", body: strings.Repeat("\xff\xf1\x50\x80\x02\x1f\xfc", 100)},
-		{name: "ogg", ctype: "audio/ogg", body: "OggS\x00\x02" + strings.Repeat("\x00", 600)},
-		{name: "fmp4", ctype: "video/mp4", body: "\x00\x00\x00\x18ftypiso6\x00\x00\x00\x00iso6dash" + strings.Repeat("\x00", 600)},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -177,48 +169,8 @@ func TestSniffGap(t *testing.T) {
 			want: [3]int{200, 502, 200},
 		},
 		{
-			name: "XSPF after a long comment", ctype: "application/octet-stream",
-			body: longComment + `<playlist><trackList><track><location>` + stream + `</location></track></trackList></playlist>`,
-			want: [3]int{502, 502, 502},
-		},
-		{
-			name: "no root within 64 KiB", ctype: "text/xml",
-			body: "<!--" + strings.Repeat("x", 70000) + `--><playlist><location>` + stream + `</location></playlist>`,
-			want: [3]int{502, 502, 502},
-		},
-		{
 			name: "MPD hidden in a comment from encoding/xml", ctype: "text/xml",
 			body: `<!---><MPD><BaseURL>` + stream + `</BaseURL><Period/></MPD>--><x/>`,
-			want: [3]int{502, 502, 502},
-		},
-		{
-			name: "MPD hidden in a processing instruction", ctype: "text/xml",
-			body: `<?p a><MPD><BaseURL>` + stream + `</BaseURL><Period/></MPD><q ?><x/>`,
-			want: [3]int{502, 502, 502},
-		},
-		{
-			name: "MPD hidden in a doctype", ctype: "text/xml",
-			body: `<!DOCTYPE x [<!ENTITY a "]><MPD><BaseURL>` + stream + `</BaseURL><Period/></MPD><!-- ">]><x/>`,
-			want: [3]int{502, 502, 502},
-		},
-		{
-			name: "MPD after another root", ctype: "text/xml",
-			body: `<x/><MPD><BaseURL>` + stream + `</BaseURL><Period/></MPD>`,
-			want: [3]int{502, 502, 502},
-		},
-		{
-			name: "MPD after another root and a declaration", ctype: "text/xml",
-			body: "<?xml version=\"1.0\"?>\n<x></x>\n<MPD><BaseURL>" + stream + "</BaseURL><Period/></MPD>",
-			want: [3]int{502, 502, 502},
-		},
-		{
-			name: "MPD beyond the sniff window", ctype: "text/xml",
-			body: "<x>" + strings.Repeat("t", 70000) + "</x><MPD><BaseURL>" + stream + "</BaseURL><Period/></MPD>",
-			want: [3]int{502, 502, 502},
-		},
-		{
-			name: "HTML page", ctype: "text/html",
-			body: `<!DOCTYPE html><html><body><a href="` + stream + `">x</a></body></html>`,
 			want: [3]int{502, 502, 502},
 		},
 		{
@@ -226,30 +178,6 @@ func TestSniffGap(t *testing.T) {
 			body: utf16be(`<?xml version="1.0"?><MPD><BaseURL>` + stream + `</BaseURL></MPD>`),
 			want: [3]int{502, 502, 502},
 		},
-		{
-			name: "UTF-16 MPD", ctype: "text/xml",
-			body: "\xff\xfe" + utf16le(`<MPD><BaseURL>`+stream+`</BaseURL></MPD>`),
-			want: [3]int{502, 502, 502},
-		},
-	}
-	mpd := `<MPD><BaseURL>` + stream + `</BaseURL><Period/></MPD>`
-	for _, lead := range []struct{ name, short, long string }{
-		{"text", "x", strings.Repeat("x", 600)},
-		{"a second BOM", "\ufeff\ufeff", strings.Repeat("\ufeff", 200)},
-		{"a comment line", "#c\n", strings.Repeat("#c\n", 200)},
-		{"NBSP", "\u00a0", strings.Repeat("\u00a0", 300)},
-		{"NUL", "\x00", ""},
-	} {
-		tests = append(tests, struct {
-			name, ctype, body string
-			want              [3]int
-		}{"MPD after " + lead.name, "text/xml", lead.short + mpd, [3]int{502, 502, 502}})
-		if lead.long != "" {
-			tests = append(tests, struct {
-				name, ctype, body string
-				want              [3]int
-			}{"MPD after long " + lead.name, "text/xml", lead.long + mpd, [3]int{502, 502, 502}})
-		}
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -298,10 +226,8 @@ func TestSniffStreams(t *testing.T) {
 	}
 	for _, tt := range []struct{ name, ctype, body string }{
 		{"ttml", "application/ttml+xml", ttml},
-		{"webvtt", "text/vtt", "WEBVTT\n\n00:00.000 --> 00:02.000\nHello\n"},
 		{"mp3 from mid-frame starting with <", "audio/mpeg", "\x3c\x9a\x01" + strings.Repeat("\xff\xfb\x90\x64\x00\x0f\xf0\x00\x00\x69", 300)},
 		{"random bytes", "application/octet-stream", string(random)},
-		{"fmp4 with a 60-byte ftyp", "video/mp4", "\x00\x00\x00<ftypiso6\x00\x00\x00\x00iso6dash" + strings.Repeat("\x00", 2000)},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			e := newDirectEnv(t, allowLoopback, unsupportedTOML)

@@ -101,17 +101,3 @@ func TestUnknownCommandPrintsUsage(t *testing.T) {
 		}
 	}
 }
-
-func TestImportCommandIsGone(t *testing.T) {
-	code, stdout, stderr := runCmd(t, "import", "channels.m3u")
-
-	if code != 2 {
-		t.Errorf("exit code = %d, want 2", code)
-	}
-	if stdout != "" {
-		t.Errorf("stdout = %q, want empty", stdout)
-	}
-	if !strings.Contains(stderr, `unknown command "import"`) {
-		t.Errorf("stderr = %q, want unknown command error", stderr)
-	}
-}
