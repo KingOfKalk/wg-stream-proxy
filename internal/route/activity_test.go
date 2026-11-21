@@ -131,3 +131,57 @@ func TestNewSetActivityForUnknownRoute(t *testing.T) {
 		t.Errorf("NewSet error = %v, want one naming \"gr\"", err)
 	}
 }
+
+// TestBeginCountsAcrossFetches: Route.Begin counts one request across
+// several fetches (a refetch, spec 3.4): a Fetch with its context does not
+// count again, a Fetch on another route or without it does.
+func TestBeginCountsAcrossFetches(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "ok")
+	}))
+	t.Cleanup(srv.Close)
+	gr, uk := &countingActivity{}, &countingActivity{}
+	nets := map[string]Network{}
+	for _, name := range []string{"gr", "uk"} {
+		nets[name] = fixtureNet(srv.Listener.Addr().String(), fixtureHosts)
+	}
+	s, err := NewSet(Host(), nets, Options{Upstream: testUpstream, Clock: newFakeClock(), Activity: map[string]Activity{"gr": gr, "uk": uk}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(s.CloseIdleConnections)
+	rgr, _ := s.Route("gr")
+	ruk, _ := s.Route("uk")
+
+	fetchWith := func(ctx context.Context, r *Route) {
+		t.Helper()
+		resp, err := r.Fetch(ctx, Request{URL: "http://cdn.example.com/"})
+		if err != nil {
+			t.Fatalf("Fetch: %v", err)
+		}
+		readClose(t, resp)
+	}
+
+	ctx, end := rgr.Begin(context.Background())
+	gr.want(t, 1, 1)
+	for range 2 {
+		fetchWith(ctx, rgr)
+		gr.want(t, 1, 1)
+	}
+	fetchWith(ctx, ruk)
+	uk.want(t, 0, 1)
+	end()
+	gr.want(t, 0, 1)
+	// A second end does nothing; without the context Fetch counts.
+	end()
+	readClose(t, mustFetch(t, rgr, Request{URL: "http://cdn.example.com/"}))
+	gr.want(t, 0, 2)
+
+	// The direct route has no Activity.
+	direct, _ := s.Route("direct")
+	if _, end := direct.Begin(context.Background()); end == nil {
+		t.Fatal("Begin on a route without Activity: nil end")
+	} else {
+		end()
+	}
+}

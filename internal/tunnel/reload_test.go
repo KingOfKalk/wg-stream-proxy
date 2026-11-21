@@ -110,7 +110,7 @@ func TestApplyChanges(t *testing.T) {
 			for _, tun := range m.Tunnels() {
 				before[tun.Name()] = tun
 			}
-			got, err := m.Apply(tt.next, testDrain)
+			got, err := apply(m, tt.next)
 			if err != nil {
 				t.Fatalf("Apply: %v", err)
 			}
@@ -151,7 +151,7 @@ func TestApplyKeepsUnchangedTunnelRunning(t *testing.T) {
 	defer func() { _ = c.Close() }()
 	stops := stopped(tun)
 
-	if _, err := m.Apply([]*wgquick.Tunnel{tunneltest.ParseTunnel(t, "gr", withComment(peer.ClientConfig()))}, testDrain); err != nil {
+	if _, err := apply(m, []*wgquick.Tunnel{tunneltest.ParseTunnel(t, "gr", withComment(peer.ClientConfig()))}); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	if got := mustTunnel(t, m, "gr"); got != tun {
@@ -203,7 +203,7 @@ func TestApplyRetiresChangedAndRemovedTunnels(t *testing.T) {
 			if _, err := get(t, e.old, "http://"+target+"/"); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := e.m.Apply(e.changeTo, testDrain); err != nil {
+			if _, err := apply(e.m, e.changeTo); err != nil {
 				t.Fatalf("Apply: %v", err)
 			}
 			waitClosed(t, e.stops, "retired tunnel stop")
@@ -243,7 +243,7 @@ func TestApplyRetiresChangedAndRemovedTunnels(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer func() { _ = c.Close() }()
-			if _, err := e.m.Apply(e.changeTo, testDrain); err != nil {
+			if _, err := apply(e.m, e.changeTo); err != nil {
 				t.Fatalf("Apply: %v", err)
 			}
 			e.env.clock.waitArmed(t, testDrain)
@@ -274,7 +274,7 @@ func TestApplyRetiresChangedAndRemovedTunnels(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer func() { _ = c.Close() }()
-			if _, err := e.m.Apply(e.changeTo, testDrain); err != nil {
+			if _, err := apply(e.m, e.changeTo); err != nil {
 				t.Fatalf("Apply: %v", err)
 			}
 			e.env.clock.waitArmed(t, testDrain)
@@ -306,7 +306,7 @@ func TestApplyCancelsStart(t *testing.T) {
 	}
 	// The start waits for a handshake that never comes.
 	env.clock.waitTimers(1)
-	if _, err := m.Apply([]*wgquick.Tunnel{up.ClientTunnel(t, "gr")}, testDrain); err != nil {
+	if _, err := apply(m, []*wgquick.Tunnel{up.ClientTunnel(t, "gr")}); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	for range waiters {
@@ -356,7 +356,7 @@ func TestApplyErrorsChangeNothing(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			m, _ := newManager(t, a.ClientTunnel(t, "a"))
 			before := mustTunnel(t, m, "a")
-			_, err := m.Apply(tt.next(t), testDrain)
+			_, err := apply(m, tt.next(t))
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("Apply: err = %v, want %q", err, tt.want)
 			}
@@ -370,7 +370,7 @@ func TestApplyErrorsChangeNothing(t *testing.T) {
 func TestApplyAfterClose(t *testing.T) {
 	m, _ := newManager(t)
 	_ = m.Close()
-	if _, err := m.Apply(nil, testDrain); !errors.Is(err, ErrClosed) {
+	if _, err := apply(m, nil); !errors.Is(err, ErrClosed) {
 		t.Errorf("Apply after Close: err = %v, want ErrClosed", err)
 	}
 }
@@ -387,7 +387,7 @@ func TestCloseCoversDrainingTunnels(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = c.Close() }()
-	if _, err := m.Apply(nil, testDrain); err != nil {
+	if _, err := apply(m, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := m.Close(); err != nil {
@@ -455,5 +455,182 @@ func TestSetTimeoutsErrors(t *testing.T) {
 		if err := m.SetTimeouts(tt.connect, tt.idle); err == nil {
 			t.Errorf("SetTimeouts(%s, %s) succeeded", tt.connect, tt.idle)
 		}
+	}
+}
+
+// apply runs a whole reload: Apply, then Commit with testDrain.
+func apply(m *Manager, next []*wgquick.Tunnel) (Changes, error) {
+	u, err := m.Apply(next)
+	if err != nil {
+		return Changes{}, err
+	}
+	u.Commit(testDrain)
+	return u.Changes, nil
+}
+
+// TestApplyRetiresAtCommit: Apply only adds the new set; the changed and
+// removed tunnels keep working until Commit, which a reload calls after
+// new requests use the new set (spec 5.6). Then they drain as before.
+func TestApplyRetiresAtCommit(t *testing.T) {
+	target := tunneltest.ServerAddr4.String() + ":80"
+	for _, remove := range []bool{false, true} {
+		t.Run(map[bool]string{false: "changed", true: "removed"}[remove], func(t *testing.T) {
+			peer := tunneltest.Start(t, tunneltest.Options{})
+			other := tunneltest.Start(t, tunneltest.Options{})
+			m, _ := newManager(t, peer.ClientTunnel(t, "gr"))
+			old := mustTunnel(t, m, "gr")
+			stops := stopped(old)
+			if _, err := get(t, old, "http://"+target+"/"); err != nil {
+				t.Fatal(err)
+			}
+			var next []*wgquick.Tunnel
+			if !remove {
+				next = []*wgquick.Tunnel{other.ClientTunnel(t, "gr")}
+			}
+			u, err := m.Apply(next)
+			if err != nil {
+				t.Fatalf("Apply: %v", err)
+			}
+			if got, ok := m.Tunnel("gr"); ok == remove || got == old {
+				t.Fatalf("Tunnel(gr) after Apply = %p, %v; want the new set", got, ok)
+			}
+			// A request of the old set still works through the old device.
+			if _, err := get(t, old, "http://"+target+"/"); err != nil {
+				t.Fatalf("old tunnel before Commit: %v", err)
+			}
+			select {
+			case <-stops:
+				t.Fatal("old tunnel stopped before Commit")
+			default:
+			}
+
+			u.Commit(testDrain)
+			waitClosed(t, stops, "retired tunnel stop at Commit")
+			if _, err := old.DialContext(t.Context(), "tcp4", target); !errors.Is(err, ErrUnavailable) {
+				t.Errorf("dial on retired tunnel: err = %v, want ErrUnavailable", err)
+			}
+			// A second call does nothing.
+			u.Commit(testDrain)
+			u.Rollback()
+			if got, ok := m.Tunnel("gr"); ok == remove || got == old {
+				t.Errorf("Tunnel(gr) after Rollback of a committed update = %p, %v", got, ok)
+			}
+		})
+	}
+}
+
+// TestApplyRollback: a reload that fails after Apply restores the old set
+// (spec 5.6): the same *Tunnels, still running; the tunnels Apply created
+// never start.
+func TestApplyRollback(t *testing.T) {
+	peers := map[string]*tunneltest.Peer{}
+	for _, name := range []string{"a", "b", "c", "d"} {
+		peers[name] = tunneltest.Start(t, tunneltest.Options{})
+	}
+	parse := func(name string, edit func(string) string) *wgquick.Tunnel {
+		return tunneltest.ParseTunnel(t, name, edit(peers[name].ClientConfig()))
+	}
+	same := func(s string) string { return s }
+	target := tunneltest.ServerAddr4.String() + ":80"
+	m, _ := newManager(t, parse("a", same), parse("b", same), parse("c", same))
+	before := m.Tunnels()
+	b := mustTunnel(t, m, "b")
+	stops := stopped(b)
+	if _, err := get(t, b, "http://"+target+"/"); err != nil {
+		t.Fatal(err)
+	}
+
+	// a unchanged, b changed, c removed, d added.
+	u, err := m.Apply([]*wgquick.Tunnel{parse("a", same), parse("b", withMTU), parse("d", same)})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	created := []*Tunnel{mustTunnel(t, m, "b"), mustTunnel(t, m, "d")}
+	u.Rollback()
+
+	if got := m.Tunnels(); !slices.Equal(got, before) {
+		t.Fatalf("Tunnels after Rollback = %v, want the old set", names(got))
+	}
+	select {
+	case <-stops:
+		t.Fatal("old tunnel stopped by Rollback")
+	default:
+	}
+	if _, err := get(t, b, "http://"+target+"/"); err != nil {
+		t.Errorf("old tunnel after Rollback: %v", err)
+	}
+	if n := b.starts.Load(); n != 1 {
+		t.Errorf("old tunnel started %d times, want 1", n)
+	}
+	for _, tun := range created {
+		if _, err := tun.DialContext(t.Context(), "tcp4", target); !errors.Is(err, ErrUnavailable) {
+			t.Errorf("dial on rolled back tunnel %s: err = %v, want ErrUnavailable", tun.Name(), err)
+		}
+		if n := tun.starts.Load(); n != 0 {
+			t.Errorf("rolled back tunnel %s started %d times", tun.Name(), n)
+		}
+	}
+	// A second call does nothing; the next reload works.
+	u.Rollback()
+	u.Commit(testDrain)
+	if got := m.Tunnels(); !slices.Equal(got, before) {
+		t.Fatalf("Tunnels after Commit of a rolled back update = %v", names(got))
+	}
+	if _, err := apply(m, []*wgquick.Tunnel{parse("a", same)}); err != nil {
+		t.Fatalf("Apply after Rollback: %v", err)
+	}
+	waitClosed(t, stops, "changed tunnel stop after the next reload")
+}
+
+// TestApplyOneAtATime: Apply refuses a second update until the first is
+// committed or rolled back.
+func TestApplyOneAtATime(t *testing.T) {
+	peer := tunneltest.Start(t, tunneltest.Options{})
+	m, _ := newManager(t, peer.ClientTunnel(t, "gr"))
+	for _, finish := range []func(*Update){func(u *Update) { u.Commit(testDrain) }, (*Update).Rollback} {
+		u, err := m.Apply(nil)
+		if err != nil {
+			t.Fatalf("Apply: %v", err)
+		}
+		if _, err := m.Apply(nil); err == nil || !strings.Contains(err.Error(), "in progress") {
+			t.Errorf("second Apply: err = %v, want a reload in progress", err)
+		}
+		finish(u)
+	}
+}
+
+// TestCloseCoversPendingUpdate: Close also stops the tunnels an update
+// replaced but did not retire yet; Commit or Rollback after Close start
+// nothing.
+func TestCloseCoversPendingUpdate(t *testing.T) {
+	for _, commit := range []bool{true, false} {
+		t.Run(map[bool]string{true: "commit", false: "rollback"}[commit], func(t *testing.T) {
+			peer := tunneltest.Start(t, tunneltest.Options{})
+			m, _ := newManager(t, peer.ClientTunnel(t, "gr"))
+			old := mustTunnel(t, m, "gr")
+			stops := stopped(old)
+			c, err := old.DialContext(t.Context(), "tcp4", tunneltest.ServerAddr4.String()+":80")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = c.Close() }()
+			u, err := m.Apply(nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := m.Close(); err != nil {
+				t.Fatal(err)
+			}
+			waitClosed(t, stops, "replaced tunnel stop at Close")
+			readFails(t, c)
+			if commit {
+				u.Commit(testDrain)
+			} else {
+				u.Rollback()
+			}
+			if old.Running() {
+				t.Error("replaced tunnel running after Close")
+			}
+		})
 	}
 }

@@ -84,12 +84,13 @@ func (d *debugHandler) handleProbe(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	g := d.srv.use()
-	defer g.done()
 	name := req.Route
 	if name == "" {
 		name = config.RouteDirect
 	}
+	// Counted once for all its fetches.
+	g, ctx, done := d.srv.use(r.Context(), func(*generation) string { return name })
+	defer done()
 	rt, ok := g.routes.Route(name)
 	if !ok {
 		fail(http.StatusNotFound, "unknown route "+quote(name))
@@ -97,7 +98,7 @@ func (d *debugHandler) handleProbe(w http.ResponseWriter, r *http.Request) {
 	}
 	d.srv.log.Info("probe", "route", name, "url", route.LogURL(req.URL))
 
-	ctx, cancel := context.WithTimeout(r.Context(), probeTimeout)
+	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
 	rep := probe.Run(ctx, req.URL, probe.Options{Route: rt, Header: header, MaxPlaylistSize: g.cfg.Upstream().MaxPlaylistSize})
 	rep.Mode = probe.ModeProxy

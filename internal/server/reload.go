@@ -159,13 +159,21 @@ func (st *runState) reload(cfg *config.Config, err error) error {
 			"watch_interval", fx.watchInterval, "configured", cfg.WatchInterval())
 	}
 
-	changes, err := st.mgr.Apply(tunnels, tunnelDrainTimeout)
-	if err == nil {
-		err = st.mgr.SetTimeouts(cfg.Upstream().ConnectTimeout, cfg.IdleTimeout())
-	}
+	// Add, build, swap, retire (spec 5.6): the tunnels this reload
+	// replaces are retired only once no published route hands them to a
+	// new request, and after every request of the old generation counts
+	// on its tunnel (Server.use), so their drain waits for all of them.
+	update, err := st.mgr.Apply(tunnels)
 	var routes *route.Set
 	if err == nil {
-		routes, err = st.buildRoutes(cfg)
+		err = st.mgr.SetTimeouts(cfg.Upstream().ConnectTimeout, cfg.IdleTimeout())
+		if err == nil {
+			routes, err = st.buildRoutes(cfg)
+		}
+		if err != nil {
+			// The old generation keeps serving with its tunnels.
+			update.Rollback()
+		}
 	}
 	if err != nil {
 		// Only after a shutdown began, or with a config the loader should
@@ -177,6 +185,8 @@ func (st *runState) reload(cfg *config.Config, err error) error {
 	old := st.srv.active()
 	st.srv.swap(cfg, routes)
 	old.retire()
+	update.Commit(tunnelDrainTimeout)
+	changes := update.Changes
 	if st.opts.LogLevel != nil {
 		st.opts.LogLevel.Set(cfg.LogLevel())
 	}

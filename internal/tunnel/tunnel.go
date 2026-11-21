@@ -116,8 +116,8 @@ type Options struct {
 	OnStart func(tunnel string, took time.Duration)
 }
 
-// Manager owns the tunnels of one configuration, keyed by name. Apply
-// replaces them on a reload.
+// Manager owns the tunnels of one configuration, keyed by name. Apply and
+// Update.Commit replace them on a reload.
 type Manager struct {
 	opts Options
 	// connectTimeout and idleTimeout hold the current values of the
@@ -135,8 +135,11 @@ type Manager struct {
 	// draining are the tunnels a reload retired whose drain has not
 	// finished yet.
 	draining map[*Tunnel]struct{}
-	starts   sync.WaitGroup
-	drains   sync.WaitGroup
+	// update is the reload Apply began and Commit or Rollback has not
+	// finished yet, or nil.
+	update *Update
+	starts sync.WaitGroup
+	drains sync.WaitGroup
 }
 
 // Load reads and parses the tunnel files of a configuration with Parse
@@ -282,9 +285,10 @@ func (m *Manager) Tunnels() []*Tunnel {
 }
 
 // Close aborts pending starts and closes every running device at once,
-// including tunnels still draining after a reload. Open connections
-// through the tunnels break, so the caller ends its requests first. Later
-// calls on the tunnels return ErrClosed. Close is idempotent.
+// including tunnels still draining after a reload and those a pending
+// Update replaced. Open connections through the tunnels break, so the
+// caller ends its requests first. Later calls on the tunnels return
+// ErrClosed. Close is idempotent.
 func (m *Manager) Close() error {
 	m.mu.Lock()
 	if m.closed {
@@ -298,7 +302,13 @@ func (m *Manager) Close() error {
 	m.starts.Wait()
 	// Reload drains end at once when closing is closed.
 	m.drains.Wait()
-	for _, t := range m.Tunnels() {
+	m.mu.Lock()
+	tunnels := slices.Clone(m.sorted)
+	if m.update != nil {
+		tunnels = append(tunnels, m.update.replaced...)
+	}
+	m.mu.Unlock()
+	for _, t := range tunnels {
 		t.stop("shutdown")
 	}
 	return nil
@@ -320,9 +330,10 @@ type Tunnel struct {
 
 	run   atomic.Pointer[running]
 	start *startCall // guarded by m.mu
-	// retired: a reload changed or removed the tunnel (Manager.Apply). It
-	// never starts again; retiring is closed then, which cancels a start
-	// in progress. Guarded by m.mu.
+	// retired: a reload changed or removed the tunnel (Update.Commit), or
+	// a failed reload dropped it again (Update.Rollback). It never starts
+	// again; retiring is closed then, which cancels a start in progress.
+	// Guarded by m.mu.
 	retired  bool
 	retiring chan struct{}
 
