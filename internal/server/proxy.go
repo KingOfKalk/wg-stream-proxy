@@ -34,7 +34,8 @@ const copyBufferSize = 32 << 10
 // handleChannel serves /c/{id}, /c/{id}.m3u8 and /c/{id}.mpd (spec 3.1,
 // 6): the channel URL with the configured upstream type.
 func (s *Server) handleChannel(w http.ResponseWriter, r *http.Request) {
-	g := s.active()
+	g := s.use()
+	defer g.done()
 	id, ok := strings.CutSuffix(r.PathValue("id"), ".m3u8")
 	if !ok {
 		id = strings.TrimSuffix(id, ".mpd")
@@ -70,7 +71,8 @@ func (s *Server) handleResource(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	g := s.active()
+	g := s.use()
+	defer g.done()
 	ch, ok := g.channel(id)
 	if !ok {
 		http.NotFound(w, r)
@@ -90,7 +92,8 @@ func (s *Server) handlePrefix(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	g := s.active()
+	g := s.use()
+	defer g.done()
 	ch, ok := g.channel(pr.Channel)
 	if !ok {
 		http.NotFound(w, r)

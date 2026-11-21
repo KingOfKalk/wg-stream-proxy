@@ -238,7 +238,10 @@ and left out, as are the other direct imports of `cmd/wg-stream-proxy`.
 
 - A **generation** is one loaded `config.Config` plus the `route.Set`
   built for it, held in an `atomic.Pointer`. A request takes the current
-  generation once and keeps it to its end.
+  generation once and keeps it to its end. The users of its routes
+  (`/c/`, `/r/`, `/p/` requests, EPG fetches, the debug probe) are
+  counted; the last user of a replaced generation closes the idle
+  connections it left in the old pools, and nothing else keeps it.
 - `SIGHUP` and the changes `server.Watch` sees call `Reloader.Reload`. It
   loads all files (`config.Load`, `tunnel.Parse`); if they are valid,
   `Manager.Apply` swaps the tunnel set, `route.NewSet` builds new

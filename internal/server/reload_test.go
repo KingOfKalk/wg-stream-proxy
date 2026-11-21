@@ -13,12 +13,16 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+	"weak"
 
 	"github.com/KingOfKalk/wg-stream-proxy/internal/config"
+	"github.com/KingOfKalk/wg-stream-proxy/internal/route"
 	"github.com/KingOfKalk/wg-stream-proxy/internal/tunnel/tunneltest"
 )
 
@@ -575,6 +579,243 @@ func TestReloadLogsChannelChanges(t *testing.T) {
 			d := dbg[len(dbg)-1]
 			if !strings.Contains(d, " level=DEBUG ") || !strings.HasSuffix(d, tt.debug) || strings.Contains(d, "http") {
 				t.Errorf("debug line %q, want level DEBUG ending with %q and no URL", d, tt.debug)
+			}
+		})
+	}
+}
+
+// TestReloadReleasesReplacedRoutes: reloads do not keep the route sets
+// they replaced. With no request in flight, nothing refers to a replaced
+// set after the reload, however many reloads ran.
+func TestReloadReleasesReplacedRoutes(t *testing.T) {
+	peer, _ := newPeer(t, "seg")
+	dir := writeConfig(t, map[string]string{"tunnels/gr.conf": peer.ClientConfig(), "channels.d/gr.toml": tunnelChannels("gr")})
+	// Every route set gets its own network for gr: a weak pointer to it
+	// shows whether anything still refers to the set.
+	var (
+		mu    sync.Mutex
+		built []weak.Pointer[recorder]
+	)
+	e := startRun(t, dir, 0, func(o *RunOptions) {
+		o.WrapTunnel = func(_ string, n route.Network) route.Network {
+			r := &recorder{n: n}
+			mu.Lock()
+			built = append(built, weak.Make(r))
+			mu.Unlock()
+			return r
+		}
+	})
+	const reloads = 20
+	for range reloads {
+		if err := e.reload(t); err != nil {
+			t.Fatalf("Reload: %v", err)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(built) != reloads+1 {
+		t.Fatalf("route sets built = %d, want %d", len(built), reloads+1)
+	}
+	runtime.GC()
+	kept := 0
+	for _, w := range built[:reloads] {
+		if w.Value() != nil {
+			kept++
+		}
+	}
+	if kept != 0 {
+		t.Errorf("%d of %d replaced route sets still reachable", kept, reloads)
+	}
+	if built[reloads].Value() == nil {
+		t.Error("the active route set was collected")
+	}
+}
+
+// TestReloadClosesLateIdleConnections: a request that started before a
+// reload finishes on the old routes and may still open upstream
+// connections there, here by following a redirect sent after the
+// reload. The connection it leaves in the old pool is closed when the
+// request ends, not kept until the shutdown or the pool's idle timeout.
+func TestReloadClosesLateIdleConnections(t *testing.T) {
+	const size = 8192
+	arrived := make(chan struct{}, 1)
+	finish := make(chan struct{})
+	var finishOnce sync.Once
+	finishUp := func() { finishOnce.Do(func() { close(finish) }) }
+	t.Cleanup(finishUp)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/seg.ts", func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case arrived <- struct{}{}:
+		default:
+		}
+		select {
+		case <-finish:
+		case <-r.Context().Done():
+			return
+		}
+		http.Redirect(w, r, "/moved.ts", http.StatusFound)
+	})
+	mux.HandleFunc("/moved.ts", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "video/mp2t")
+		w.Header().Set("Content-Length", strconv.Itoa(size))
+		_, _ = io.WriteString(w, binaryBody('m', size))
+	})
+	// open counts the upstream connections not closed yet.
+	var (
+		mu      sync.Mutex
+		open    int
+		changed = make(chan struct{}, 1)
+	)
+	upSrv := httptest.NewUnstartedServer(mux)
+	upSrv.Config.ConnState = func(_ net.Conn, s http.ConnState) {
+		mu.Lock()
+		switch s {
+		case http.StateNew:
+			open++
+		case http.StateClosed, http.StateHijacked:
+			open--
+		}
+		mu.Unlock()
+		select {
+		case changed <- struct{}{}:
+		default:
+		}
+	}
+	upSrv.Start()
+	t.Cleanup(upSrv.Close)
+	dir := writeConfig(t, map[string]string{
+		"config.toml":        allowLoopback,
+		"channels.d/tv.toml": "tunnel = \"direct\"\n[[channel]]\nname = \"Seg\"\nurl = \"" + upSrv.URL + "/seg.ts\"\n",
+	})
+	e := startRun(t, dir, 0)
+
+	type result struct {
+		status int
+		size   int
+		err    error
+	}
+	done := make(chan result, 1)
+	u := e.url + newSigner(t).Path("seg", upSrv.URL+"/seg.ts")
+	go func() {
+		resp, err := e.client.Get(u)
+		if err != nil {
+			done <- result{err: err}
+			return
+		}
+		body, err := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		done <- result{status: resp.StatusCode, size: len(body), err: err}
+	}()
+	select {
+	case <-arrived:
+	case <-time.After(10 * time.Second):
+		t.Fatal("request did not reach the upstream")
+	}
+	if err := e.reload(t); err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+	finishUp()
+	if r := <-done; r.err != nil || r.status != http.StatusOK || r.size != size {
+		t.Fatalf("request: status %d, %d bytes, error %v; want 200, %d bytes", r.status, r.size, r.err, size)
+	}
+
+	giveUp := time.After(10 * time.Second)
+	for {
+		mu.Lock()
+		n := open
+		mu.Unlock()
+		if n == 0 {
+			return
+		}
+		select {
+		case <-changed:
+		case <-giveUp:
+			t.Fatalf("%d upstream connection(s) of the replaced routes still open 10s after their request ended", n)
+		}
+	}
+}
+
+// TestReloadRestartWarnings: a setting that needs a restart is compared
+// with the value in effect, the one of the startup, not with the last
+// loaded config (spec 5.6).
+func TestReloadRestartWarnings(t *testing.T) {
+	tests := []struct {
+		name string
+		// toml returns config.toml with the setting at v.
+		toml func(v string) string
+		// msg is the warning, attr the log key of the value in effect.
+		msg, attr string
+		// a is the startup value; the steps load b, a, b, c.
+		a, b, c string
+	}{
+		{
+			name: "listen",
+			toml: func(v string) string { return "listen = \"" + v + "\"\n" },
+			msg:  "reload: listen changed", attr: "listen",
+			a: "127.0.0.1:2001", b: "127.0.0.1:2002", c: "127.0.0.1:2003",
+		},
+		{
+			// Only two formats: the last step loads b again, which still
+			// differs from the format in effect.
+			name: "log_format",
+			toml: func(v string) string { return "log_format = \"" + v + "\"\n" },
+			msg:  "reload: log_format changed", attr: "log_format",
+			a: "text", b: "json", c: "json",
+		},
+		{
+			name: "debug.listen",
+			toml: func(v string) string { return "[debug]\nlisten = \"" + v + "\"\n" },
+			msg:  "reload: debug.listen changed", attr: "debug_listen",
+			a: "", b: "127.0.0.1:2101", c: "127.0.0.1:2102",
+		},
+		{
+			name: "reload.watch_interval",
+			toml: func(v string) string { return "[reload]\nwatch_interval = \"" + v + "\"\n" },
+			msg:  "reload: reload.watch_interval changed", attr: "watch_interval",
+			a: "5s", b: "0", c: "10s",
+		},
+	}
+	logValue := func(v string) string {
+		switch v {
+		case "":
+			return `""`
+		case "0":
+			return "0s"
+		}
+		return v
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := writeConfig(t, map[string]string{"config.toml": tt.toml(tt.a)})
+			e := startRun(t, dir, 0)
+			steps := []struct {
+				load string
+				// warn: the reload logs the warning, naming a as in effect.
+				warn bool
+			}{
+				{load: tt.b, warn: true},
+				{load: tt.a, warn: false},
+				{load: tt.b, warn: true},
+				{load: tt.c, warn: true},
+			}
+			for i, step := range steps {
+				before := len(reloadLines(e.logs.String(), `"`+tt.msg))
+				writeFiles(t, dir, map[string]string{"config.toml": tt.toml(step.load)})
+				if err := e.reload(t); err != nil {
+					t.Fatalf("step %d: Reload: %v", i, err)
+				}
+				lines := reloadLines(e.logs.String(), `"`+tt.msg)[before:]
+				if !step.warn {
+					if len(lines) != 0 {
+						t.Errorf("step %d: back to the value in effect, but warned: %v", i, lines)
+					}
+					continue
+				}
+				want := " " + tt.attr + "=" + logValue(tt.a) + " configured=" + logValue(step.load)
+				if len(lines) != 1 || !strings.Contains(lines[0], " level=WARN ") || !strings.HasSuffix(lines[0], want) {
+					t.Errorf("step %d (%s=%q): warnings %v, want one ending with %q", i, tt.attr, step.load, lines, want)
+				}
 			}
 		})
 	}

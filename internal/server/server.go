@@ -118,12 +118,50 @@ func New(opts Options) (*Server, error) {
 	return s, nil
 }
 
-// generation is one configuration with the routes built for it. It is
-// immutable: a request uses the generation it started with to its end,
-// while a reload swaps in the next one for new requests (spec 5.6).
+// generation is one configuration with the routes built for it. A
+// request uses the generation it started with to its end, while a reload
+// swaps in the next one for new requests (spec 5.6). cfg and routes never
+// change.
+//
+// Nothing keeps a generation a reload replaced (retire): its last user
+// closes the idle connections it left in the old pools (done), after that
+// the generation and its routes are garbage.
 type generation struct {
 	cfg    *config.Config
 	routes *route.Set
+	// users counts the requests and fetches using routes (Server.use);
+	// retired is set once a reload replaced the generation.
+	users   atomic.Int64
+	retired atomic.Bool
+}
+
+// use returns the active generation for a request or fetch that uses its
+// routes. The caller calls done when it is finished with them: every
+// upstream response closed.
+func (s *Server) use() *generation {
+	g := s.gen.Load()
+	g.users.Add(1)
+	return g
+}
+
+// done ends a use of g. The last user of a retired generation closes the
+// idle connections of its routes: connections that requests started
+// before the reload returned to the old pools after retire closed them,
+// and those the old transports opened since (a redirect followed on the
+// old routes, a refetch).
+func (g *generation) done() {
+	if g.users.Add(-1) == 0 && g.retired.Load() {
+		g.routes.CloseIdleConnections()
+	}
+}
+
+// retire marks g as replaced by a reload and closes the idle connections
+// of its routes; users still running close them again when the last one
+// ends (done). A user that took g just before the reload counts too: it
+// sees the retired flag at its done.
+func (g *generation) retire() {
+	g.retired.Store(true)
+	g.routes.CloseIdleConnections()
 }
 
 // swap makes cfg and routes the active generation and applies the EPG
