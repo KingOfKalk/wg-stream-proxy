@@ -12,10 +12,14 @@ import (
 // Cooldown gives in-flight requests a bounded time before the device
 // closes.
 //
-// Activity is a request counted with Begin, plus the time of the latest
-// lookup, dial, Begin or end (LastActivity). The idle timer runs only
-// while no request is in flight; connections the caller keeps idle for
-// reuse are not activity.
+// Activity is a request counted with Begin, plus the time of its Begin
+// and end and of the latest lookup or dial outside any request
+// (LastActivity). The idle time runs from the latest activity, or from
+// the start of the device if that is later (idleSince); the idle timer
+// runs only while no request is in flight. A background request
+// (BeginBackground: an EPG fetch, spec 6.1) is in flight like a request
+// but is not activity. Connections the caller keeps idle for reuse are
+// not activity.
 
 // Begin counts a request that uses the tunnel, from before its first
 // lookup or dial until its response body is closed; the returned end
@@ -24,19 +28,37 @@ import (
 // Cooldown wait for it. Begin starts nothing: the first lookup or dial does.
 func (t *Tunnel) Begin() (end func()) {
 	t.touch()
+	t.add()
+	return sync.OnceFunc(func() { t.end(true) })
+}
+
+// BeginBackground counts a background request, like Begin, that is not
+// activity: an EPG fetch (spec 2.1, 6.1). While it is in flight the
+// tunnel is not closed for idleness, and a reload removal or Cooldown
+// wait for it; neither it nor its lookups and dials restart the idle
+// time. When it ends, the idle timer runs for what is left of the idle
+// timeout since idleSince, which may be nothing.
+func (t *Tunnel) BeginBackground() (end func()) {
+	t.add()
+	return sync.OnceFunc(func() { t.end(false) })
+}
+
+// add counts a request in flight and stops the idle timer.
+func (t *Tunnel) add() {
 	t.mu.Lock()
+	defer t.mu.Unlock()
 	t.inflight++
 	if t.inflight == 1 {
 		t.busy = make(chan struct{})
 	}
 	t.disarmIdle()
-	t.mu.Unlock()
-	var once sync.Once
-	return func() { once.Do(t.end) }
 }
 
-func (t *Tunnel) end() {
-	t.touch()
+// end ends a request; activity reports whether Begin counted it.
+func (t *Tunnel) end(activity bool) {
+	if activity {
+		t.touch()
+	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.inflight--
@@ -47,7 +69,8 @@ func (t *Tunnel) end() {
 	}
 }
 
-// inFlight returns the number of requests between Begin and end.
+// inFlight returns the number of requests between Begin or
+// BeginBackground and end.
 func (t *Tunnel) inFlight() int {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -64,9 +87,28 @@ func (t *Tunnel) OnStop(f func()) {
 	t.onStop = f
 }
 
-// armIdle starts the idle timer for the full idle timeout. t.mu is held.
+// idleSince returns the time the idle time runs from: the latest
+// activity, or the start of the running device if that is later. So a
+// tunnel that only background requests used closes idle timeout after
+// its start.
+func (t *Tunnel) idleSince() time.Time {
+	since := t.LastActivity()
+	if r := t.run.Load(); r != nil && r.started.After(since) {
+		since = r.started
+	}
+	return since
+}
+
+// idleLeft returns the rest of the idle timeout since idleSince; 0 or
+// less when it is over.
+func (t *Tunnel) idleLeft() time.Duration {
+	return t.m.idle() - t.m.opts.Clock.Now().Sub(t.idleSince())
+}
+
+// armIdle starts the idle timer for the rest of the idle timeout since
+// idleSince, at once if it is over. t.mu is held.
 func (t *Tunnel) armIdle() {
-	t.armIdleIn(t.m.idle())
+	t.armIdleIn(max(0, t.idleLeft()))
 }
 
 // armIdleIn starts the idle timer for d, replacing an armed one, if idle
@@ -99,7 +141,7 @@ func (t *Tunnel) idleFired(gen uint64) {
 		return
 	}
 	t.idle = nil
-	if rest := t.m.idle() - t.m.opts.Clock.Now().Sub(t.LastActivity()); rest > 0 {
+	if rest := t.idleLeft(); rest > 0 {
 		t.armIdleIn(rest)
 		t.mu.Unlock()
 		return

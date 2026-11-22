@@ -12,12 +12,14 @@ import (
 	"testing"
 )
 
-// countingActivity records Begin and end calls.
+// countingActivity records Begin, BeginBackground and end calls; begins
+// counts both, backgrounds only BeginBackground.
 type countingActivity struct {
-	mu       sync.Mutex
-	inflight int
-	begins   int
-	ends     int
+	mu          sync.Mutex
+	inflight    int
+	begins      int
+	backgrounds int
+	ends        int
 }
 
 func (a *countingActivity) Begin() func() {
@@ -31,6 +33,19 @@ func (a *countingActivity) Begin() func() {
 		a.inflight--
 		a.ends++
 	}
+}
+
+func (a *countingActivity) BeginBackground() func() {
+	a.mu.Lock()
+	a.backgrounds++
+	a.mu.Unlock()
+	return a.Begin()
+}
+
+func (a *countingActivity) background() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.backgrounds
 }
 
 func (a *countingActivity) state() (inflight, begins, ends int) {
@@ -181,6 +196,43 @@ func TestBeginCountsAcrossFetches(t *testing.T) {
 	direct, _ := s.Route("direct")
 	if _, end := direct.Begin(context.Background()); end == nil {
 		t.Fatal("Begin on a route without Activity: nil end")
+	} else {
+		end()
+	}
+}
+
+// TestBeginBackground: Route.BeginBackground counts a background request
+// (an EPG fetch, spec 6.1) with the Activity's BeginBackground across
+// fetches, like Begin does with Begin.
+func TestBeginBackground(t *testing.T) {
+	r, _, _ := newFixture(t, func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "ok") })
+	act := &countingActivity{}
+	r.activity = act
+
+	ctx, end := r.BeginBackground(context.Background())
+	act.want(t, 1, 1)
+	if n := act.background(); n != 1 {
+		t.Errorf("BeginBackground calls = %d, want 1", n)
+	}
+	for range 2 {
+		resp, err := r.Fetch(ctx, Request{URL: "http://cdn.example.com/"})
+		if err != nil {
+			t.Fatalf("Fetch: %v", err)
+		}
+		readClose(t, resp)
+		act.want(t, 1, 1)
+	}
+	end()
+	end()
+	act.want(t, 0, 1)
+	if n := act.background(); n != 1 {
+		t.Errorf("BeginBackground calls = %d, want 1", n)
+	}
+
+	// A route without Activity counts nothing.
+	direct, _, _ := newFixture(t, func(http.ResponseWriter, *http.Request) {})
+	if _, end := direct.BeginBackground(context.Background()); end == nil {
+		t.Fatal("BeginBackground on a route without Activity: nil end")
 	} else {
 		end()
 	}

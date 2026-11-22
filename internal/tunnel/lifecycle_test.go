@@ -51,6 +51,17 @@ func (l *lifecycle) request(t *testing.T) {
 	}
 }
 
+// background runs a whole background request (an EPG fetch) through the
+// tunnel, between BeginBackground and end.
+func (l *lifecycle) background(t *testing.T) {
+	t.Helper()
+	end := l.tun.BeginBackground()
+	defer end()
+	if _, err := get(t, l.tun, "http://"+tunneltest.ServerAddr4.String()+"/"); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+}
+
 // dial opens a connection to the peer's HTTP port that stays open: a
 // stream that never ends on its own.
 func (l *lifecycle) dial(t *testing.T) net.Conn {
@@ -158,6 +169,87 @@ func TestIdleClose(t *testing.T) {
 			},
 		},
 		{
+			name: "background requests are not activity",
+			run: func(t *testing.T, l *lifecycle) {
+				l.request(t)
+				l.env.clock.waitArmed(t, testIdle)
+				l.env.clock.advance(testIdle / 2)
+				// Its lookup and dial are not activity either.
+				l.background(t)
+				l.env.clock.waitArmed(t, testIdle/2)
+				l.env.clock.advance(testIdle/2 - time.Nanosecond)
+				l.wantRunning(t, true, 0)
+				l.env.clock.advance(time.Nanosecond)
+				l.wantRunning(t, false, 1)
+			},
+		},
+		{
+			name: "background requests alone: idle time runs from the start",
+			run: func(t *testing.T, l *lifecycle) {
+				// The first one starts the tunnel and is in flight for 20m.
+				end := l.tun.BeginBackground()
+				if _, err := get(t, l.tun, "http://"+tunneltest.ServerAddr4.String()+"/"); err != nil {
+					t.Fatalf("get: %v", err)
+				}
+				l.env.clock.advance(20 * time.Minute)
+				end()
+				l.env.clock.waitArmed(t, testIdle-20*time.Minute)
+				// A failing EPG source retried every 10 minutes.
+				for range 3 {
+					l.env.clock.advance(10 * time.Minute)
+					l.background(t)
+				}
+				l.env.clock.waitArmed(t, testIdle-50*time.Minute)
+				l.env.clock.advance(testIdle - 50*time.Minute - time.Nanosecond)
+				l.wantRunning(t, true, 0)
+				l.env.clock.advance(time.Nanosecond)
+				l.wantRunning(t, false, 1)
+			},
+		},
+		{
+			name: "background request in flight keeps it up",
+			run: func(t *testing.T, l *lifecycle) {
+				l.request(t)
+				l.env.clock.waitArmed(t, testIdle)
+				end := l.tun.BeginBackground()
+				c := l.dial(t)
+				if n := l.env.clock.pending(); n != 0 {
+					t.Errorf("%d timers armed while a request is in flight, want 0", n)
+				}
+				l.env.clock.advance(2 * testIdle)
+				l.wantRunning(t, true, 0)
+				// The idle time is over when it ends: the tunnel closes.
+				_ = c.Close()
+				end()
+				end() // idempotent
+				l.env.clock.waitArmed(t, 0)
+				l.env.clock.advance(0)
+				l.wantRunning(t, false, 1)
+			},
+		},
+		{
+			name: "request ends during a background request",
+			run: func(t *testing.T, l *lifecycle) {
+				endBackground := l.tun.BeginBackground()
+				c := l.dial(t)
+				end := l.tun.Begin()
+				l.env.clock.advance(10 * time.Minute)
+				end()
+				if n := l.env.clock.pending(); n != 0 {
+					t.Errorf("%d timers armed while a background request is in flight, want 0", n)
+				}
+				l.env.clock.advance(20 * time.Minute)
+				_ = c.Close()
+				endBackground()
+				// The idle time runs from the end of the request.
+				l.env.clock.waitArmed(t, testIdle-20*time.Minute)
+				l.env.clock.advance(testIdle - 20*time.Minute - time.Nanosecond)
+				l.wantRunning(t, true, 0)
+				l.env.clock.advance(time.Nanosecond)
+				l.wantRunning(t, false, 1)
+			},
+		},
+		{
 			name: "next request starts it again",
 			run: func(t *testing.T, l *lifecycle) {
 				l.request(t)
@@ -245,6 +337,29 @@ func TestDrain(t *testing.T) {
 				if n := l.env.clock.pending(); n != 0 {
 					t.Errorf("%d timers armed after drain, want 0", n)
 				}
+			},
+		},
+		{
+			name: "waits for background requests",
+			run: func(t *testing.T, l *lifecycle) {
+				end := l.tun.BeginBackground()
+				l.dial(t)
+				done := make(chan error, 1)
+				go func() { done <- drain(l.m, "gr", testDrain) }()
+				l.env.clock.waitArmed(t, testDrain)
+				select {
+				case err := <-done:
+					t.Fatalf("Drain returned with a background request in flight: %v", err)
+				default:
+				}
+				if got := l.tun.Snapshot().ActiveRequests; got != 1 {
+					t.Errorf("ActiveRequests = %d, want 1", got)
+				}
+				end()
+				if err := <-done; err != nil {
+					t.Fatalf("Drain: %v", err)
+				}
+				l.wantRunning(t, false, 1)
 			},
 		},
 		{

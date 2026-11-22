@@ -37,7 +37,8 @@ type Snapshot struct {
 	// device runs.
 	StartedAt     time.Time
 	LastHandshake time.Time
-	// ActiveRequests counts the requests in flight (Begin until end).
+	// ActiveRequests counts the requests in flight (Begin or
+	// BeginBackground until end), EPG fetches included.
 	ActiveRequests int
 }
 

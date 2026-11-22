@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/KingOfKalk/wg-stream-proxy/internal/epg"
+	"github.com/KingOfKalk/wg-stream-proxy/internal/route"
 	"github.com/KingOfKalk/wg-stream-proxy/internal/tunnel"
 	"github.com/KingOfKalk/wg-stream-proxy/internal/tunnel/tunneltest"
 )
@@ -179,5 +181,65 @@ url = "http://upstream.test/radio"
 	clk.advance(idle)
 	if n := idleCloses(); n != 2 {
 		t.Errorf("idle closes after the stream ended = %d, want 2", n)
+	}
+}
+
+// guideClock runs the guide on the tunnels' clock, so one advance moves
+// both the EPG refreshes and the idle timers.
+type guideClock struct{ c *tunnelClock }
+
+func (g guideClock) Now() time.Time { return g.c.Now() }
+
+func (g guideClock) AfterFunc(d time.Duration, f func()) route.Timer {
+	return guideTimer{g.c.AfterFunc(d, f)}
+}
+
+// guideTimer is a tunnelTimer as a route.Timer; the guide never resets
+// its timers.
+type guideTimer struct{ tunnel.Timer }
+
+func (guideTimer) Reset(time.Duration) bool { panic("guideTimer: Reset not supported") }
+
+// TestRunEPGSourceIdleClose: EPG fetches are not activity (spec 2.1,
+// 6.1). A tunnel used only by a failing EPG source, retried every 10
+// minutes, closes idle_timeout after its start.
+func TestRunEPGSourceIdleClose(t *testing.T) {
+	const idle = 25 * time.Minute
+	peer := tunneltest.Start(t, tunneltest.Options{Handler: newUpstream()}) // every path 404
+	peer.SetHost("epg.test", tunneltest.ServerAddr4)
+	dir := writeConfig(t, map[string]string{
+		"config.toml": "[tunnels]\nidle_timeout = \"25m\"\n" +
+			"[[epg.source]]\nname = \"vpn\"\nurl = \"http://epg.test/epg.xml\"\ntunnel = \"gr\"\n",
+		"tunnels/gr.conf":    peer.ClientConfig(),
+		"channels.d/tv.toml": epgOneChannel,
+	})
+	clk := newTunnelClock()
+	e := startRun(t, dir, 0, func(o *RunOptions) {
+		o.TunnelClock = clk
+		o.EPGClock = guideClock{clk}
+	})
+	idleCloses := func() int { return strings.Count(e.logs.String(), `msg="tunnel closed" tunnel=gr reason=idle`) }
+	failed := func() int { return strings.Count(e.logs.String(), `msg="epg source failed`) }
+
+	// The startup fetch starts the tunnel and fails.
+	clk.waitArmed(t, epg.RetryInterval)
+	clk.waitArmed(t, idle)
+	// Two retries, the source still fails: they do not restart the
+	// idle time.
+	for i, rest := range []time.Duration{idle - 10*time.Minute, idle - 20*time.Minute} {
+		clk.advance(epg.RetryInterval)
+		clk.waitArmed(t, epg.RetryInterval)
+		clk.waitArmed(t, rest)
+		if n := failed(); n != i+2 {
+			t.Fatalf("failed fetches = %d, want %d\n%s", n, i+2, e.logs.String())
+		}
+	}
+	clk.advance(idle - 20*time.Minute - time.Second)
+	if n := idleCloses(); n != 0 {
+		t.Fatalf("tunnel closed before idle_timeout: %d", n)
+	}
+	clk.advance(time.Second)
+	if n := idleCloses(); n != 1 {
+		t.Errorf("idle closes = %d, want 1\n%s", n, e.logs.String())
 	}
 }

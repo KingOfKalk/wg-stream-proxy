@@ -56,9 +56,10 @@ func (s *Server) handleEPG(w http.ResponseWriter, r *http.Request) {
 
 // fetchEPG fetches an EPG source through its route in the active
 // generation (spec 3.4 rules: guard, [upstream] timeouts, redirects);
-// a running tunnel is used, a stopped one starts.
+// a running tunnel is used, a stopped one starts. The fetch is not
+// activity for the idle close (spec 2.1, 6.1).
 func (s *Server) fetchEPG(ctx context.Context, src config.EPGSource) (*http.Response, error) {
-	g, ctx, done := s.use(ctx, func(*generation) string { return src.Route })
+	g, ctx, done := s.useBackground(ctx, func(*generation) string { return src.Route })
 	rt, ok := g.routes.Route(src.Route)
 	if !ok {
 		done()
