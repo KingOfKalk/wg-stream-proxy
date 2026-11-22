@@ -14,8 +14,9 @@ import (
 // each by path, size and modification time (symlinks are followed, like
 // Load does). Two fingerprints are equal exactly if none of these files
 // was added, removed or changed in between, as far as size and mtime
-// show it. Other files, like editor swap files, do not count. Missing
-// files and directories are fine; nothing is read but the metadata.
+// show it. Other files, like editor swap files, and dotfiles do not count
+// (listFiles skips them). Missing files and directories are fine; nothing
+// is read but the metadata.
 func Fingerprint(p Paths) string {
 	var b strings.Builder
 	add := func(path string) {

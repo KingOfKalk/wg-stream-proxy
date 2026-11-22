@@ -98,6 +98,18 @@ func TestFingerprint(t *testing.T) {
 				t.Fatal(err)
 			}
 		}, false},
+		{"dotfiles", func(t *testing.T, p Paths) {
+			for _, f := range []string{"channels.d/._tv.toml", "channels.d/.hidden.toml", "tunnels/._gr.conf"} {
+				if err := os.WriteFile(filepath.Join(p.ConfigDir, filepath.FromSlash(f)), []byte("z"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, f := range []string{"channels.d/.#tv.toml", "tunnels/.#gr.conf"} {
+				if err := os.Symlink("nobody@host.1234", filepath.Join(p.ConfigDir, filepath.FromSlash(f))); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
