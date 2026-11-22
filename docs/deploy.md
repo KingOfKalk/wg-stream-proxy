@@ -54,10 +54,12 @@ docker run -d --name wg-stream-proxy -p 2349:2349 \
 ```
 <!-- x-release-please-end -->
 
-Compose: [`deploy/compose/compose.yaml`](../deploy/compose/compose.yaml) (`read_only`, `cap_drop: [ALL]`, config mounted read-only, signing key file, healthcheck); put the config dir next to it as `./config`, then `docker compose up -d`.
+Compose: [`deploy/compose/compose.yaml`](../deploy/compose/compose.yaml) (`read_only`, `cap_drop: [ALL]`, config mounted read-only, signing key file, healthcheck, log driver); put the config dir next to it as `./config`, then `docker compose up -d`.
 
 - Stop: `docker compose down` sends `SIGTERM`, on which the proxy drains in-flight requests for up to 30 s ([spec 2.1](spec.md#21-tunnels)); the service sets `stop_grace_period: 35s` so Docker's default 10 s does not cut the drain short.
 - Reload: `docker compose kill -s HUP wg-stream-proxy`.
+- Logs: `docker compose logs wg-stream-proxy`. The proxy logs only to stdout, so the log is what Docker keeps: the service sets the `local` driver (compressed, at most 5 × 10 MB), which keeps it across restarts and reboots. Without it the log can be short-lived: the LibreELEC Docker add-on logs to journald, which LibreELEC keeps in memory with a few MB for the whole system, about an hour.
+- Update: recreating the container deletes its log, so save it first: `docker compose logs --no-color wg-stream-proxy > wg-stream-proxy-$(date +%F).log`, then `docker compose pull && docker compose up -d`.
 - Commands in the container (`probe`, `tunnel list`, below): `docker compose exec wg-stream-proxy /wg-stream-proxy …`; the `docker exec wg-stream-proxy …` examples assume `docker run --name wg-stream-proxy`.
 - LibreELEC 12+ on Raspberry Pi 4/5: the Docker add-on runs the `linux/arm64` image.
 
