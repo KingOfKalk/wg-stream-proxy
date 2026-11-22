@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -105,7 +106,10 @@ func localURL(listen, path string) (string, error) {
 	case "::":
 		host = "::1"
 	}
-	return "http://" + net.JoinHostPort(host, port) + path, nil
+	// URL.String escapes the % of an IPv6 zone as %25; http.NewRequest
+	// unescapes it again for the dial.
+	u := url.URL{Scheme: "http", Host: net.JoinHostPort(host, port), Path: path}
+	return u.String(), nil
 }
 
 // firstLine returns the first line of an error message; config errors

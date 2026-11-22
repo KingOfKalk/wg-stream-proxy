@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"strings"
 
 	"github.com/KingOfKalk/wg-stream-proxy/internal/config"
 )
@@ -28,13 +27,14 @@ func CheckURL(raw string) error {
 // SetHeader sets the upstream request header name to value in h, with the
 // rules of the --header flag and of the headers of a channel (spec 5.4):
 // the name is canonicalised and must be an HTTP token, the value has no
-// line break or NUL; a later value replaces an earlier one; an empty
-// value removes the header, except for User-Agent, where it sends none.
+// control character (CR, LF, NUL, ...); a later value replaces an earlier
+// one; an empty value removes the header, except for User-Agent, where it
+// sends none.
 func SetHeader(h http.Header, name, value string) error {
 	switch {
 	case !config.ValidHeaderName(name):
 		return fmt.Errorf("invalid header name %q", name)
-	case strings.ContainsAny(value, "\r\n\x00"):
+	case !config.ValidHeaderValue(value):
 		return fmt.Errorf("invalid value for header %q", name)
 	}
 	name = http.CanonicalHeaderKey(name)

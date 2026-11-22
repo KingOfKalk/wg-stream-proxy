@@ -41,7 +41,7 @@ Retention: after every push to `main`, the `Prune` job keeps all `edge` and `X.Y
 
 - Entry point `/wg-stream-proxy`, default command `serve`; other commands as arguments (`docker run --rm … check`).
 - Config dir `/etc/wg-stream-proxy` (`WG_STREAM_PROXY_CONFIG_DIR`), port 2349.
-- `HEALTHCHECK`: `wg-stream-proxy healthcheck` every 30s (every 1s for the first 30s). It resolves the listen address like `serve` (only `listen` and `[debug] listen` of `config.toml`, not the tunnel and channel files) but does not see `serve` flags: set `listen` in `config.toml`.
+- `HEALTHCHECK`: `wg-stream-proxy healthcheck` every 30s (every 1s for the first 30s). It resolves the listen address like `serve` (only `listen` and `[debug] listen` of `config.toml`, not the tunnel and channel files) but does not see `serve` flags: set `listen` in `config.toml`. It reads the file on every run, but a reload keeps the old address (spec 5.6): after changing `listen`, restart the proxy. Until then the proxy serves on the old address, the healthcheck probes the new one and fails, and an orchestrator may restart the container as unhealthy.
 - Host files must be readable by UID 65532 (e.g. `chown -R 65532 config` and `chmod 640` on tunnel files and `signing.key`).
 
 <!-- x-release-please-start-version -->
@@ -213,7 +213,7 @@ listen = "127.0.0.1:2350"
 
 The endpoints have no authentication (spec 8): keep them on loopback, or at most on the LAN, never on a port reachable from the internet.
 
-In Docker, loopback means inside the container: nothing is published, and the CLI reaches it through `docker exec` (the image has no shell or curl; the command reads `[debug] listen` like `healthcheck` reads `listen`):
+In Docker, loopback means inside the container: nothing is published, and the CLI reaches it through `docker exec` (the image has no shell or curl; the command reads `[debug] listen` like `healthcheck` reads `listen`, so after changing `debug.listen` restart the proxy: until then `tunnel` and `probe` use the new address from the file and fail):
 
 ```bash
 docker exec wg-stream-proxy /wg-stream-proxy tunnel list
