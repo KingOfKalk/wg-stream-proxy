@@ -16,7 +16,7 @@ Every release from v0.5.4 on has a binary for `linux/amd64`, `linux/arm64` and `
 
 <!-- x-release-please-start-version -->
 ```bash
-v=0.5.4; t=linux_arm64
+v=0.6.0; t=linux_arm64
 gh release download "v$v" --repo KingOfKalk/wg-stream-proxy \
   --pattern "wg-stream-proxy_${v}_${t}.tar.gz" --pattern SHA256SUMS
 sha256sum --ignore-missing -c SHA256SUMS   # macOS: shasum -a 256 --ignore-missing -c SHA256SUMS
@@ -31,7 +31,7 @@ tar -xzf "wg-stream-proxy_${v}_${t}.tar.gz" wg-stream-proxy
 
 <!-- x-release-please-start-version -->
 ```bash
-go install github.com/KingOfKalk/wg-stream-proxy/cmd/wg-stream-proxy@v0.5.4
+go install github.com/KingOfKalk/wg-stream-proxy/cmd/wg-stream-proxy@v0.6.0
 ```
 <!-- x-release-please-end -->
 
@@ -65,7 +65,7 @@ docker run -d --name wg-stream-proxy -p 2349:2349 \
   --read-only --cap-drop ALL \
   -v ./config:/etc/wg-stream-proxy:ro \
   -e WG_STREAM_PROXY_SIGNING_KEY_FILE=/etc/wg-stream-proxy/signing.key \
-  ghcr.io/kingofkalk/wg-stream-proxy:0.5.4
+  ghcr.io/kingofkalk/wg-stream-proxy:0.6.0
 ```
 <!-- x-release-please-end -->
 
