@@ -495,7 +495,7 @@ Only `/c/`, `/r/` and `/p/` requests of enabled channels count; `channel` is the
 
 ## 10. Roadmap
 
-- Released ([changelog](../CHANGELOG.md)): **v0.1 Core** (config, tunnels, routes and guard, HLS and raw/ICY streams, channel list, `SIGHUP` reload, metrics, container image), **v0.2 Observability** (timing histograms, debug endpoints), **v0.3 Experience** (error clips, file-watch reload), **v0.4 Content** (DASH without DRM, EPG proxy mode, `probe`), **v0.5 Lean** (v0.5.0 to v0.5.2: slimming, review fixes, reload race; [#129](https://github.com/KingOfKalk/wg-stream-proxy/issues/129)).
+- Released ([changelog](../CHANGELOG.md)): **v0.1 Core** (config, tunnels, routes and guard, HLS and raw/ICY streams, channel list, `SIGHUP` reload, metrics, container image), **v0.2 Observability** (timing histograms, debug endpoints), **v0.3 Experience** (error clips, file-watch reload), **v0.4 Content** (DASH without DRM, EPG proxy mode, `probe`), **v0.5 Lean** (slimming, review fixes, reload race; [#129](https://github.com/KingOfKalk/wg-stream-proxy/issues/129)).
 - Next: nothing planned; decided by usage data from the Raspberry Pi.
 - Decided against: per-request segment prefetch ([#84](https://github.com/KingOfKalk/wg-stream-proxy/issues/84), reopen if Kodi stalls on HLS channels through a tunnel), in-flight clips ([#116](https://github.com/KingOfKalk/wg-stream-proxy/issues/116), the design is in the git history), logo proxy ([#88](https://github.com/KingOfKalk/wg-stream-proxy/issues/88)), ad-hoc proxy endpoint ([#89](https://github.com/KingOfKalk/wg-stream-proxy/issues/89)).
 
