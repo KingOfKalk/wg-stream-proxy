@@ -98,3 +98,27 @@ func TestTypeString(t *testing.T) {
 		}
 	}
 }
+
+func TestIsMedia(t *testing.T) {
+	tests := []struct {
+		name     string
+		playlist string
+		want     bool
+	}{
+		{"media", "#EXTM3U\n#EXT-X-TARGETDURATION:4\n#EXTINF:4,\nseg1.ts\n", true},
+		{"media CRLF, BOM and indented tags", "\ufeff#EXTM3U\r\n  #EXTINF:4.000,\r\nseg1.ts\r\n", true},
+		{"media with lone CR", "#EXTM3U\r#EXTINF:4,\rseg1.ts\r", true},
+		{"ended media", "#EXTM3U\n#EXTINF:4,\nseg1.ts\n#EXT-X-ENDLIST\n", true},
+		{"master", "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=800000\nlow/index.m3u8\n", false},
+		{"master with an EXTINF line", "#EXTM3U\n#EXTINF:4,\nseg1.ts\n#EXT-X-STREAM-INF:BANDWIDTH=1\nlow.m3u8\n", false},
+		{"no segment", "#EXTM3U\n#EXT-X-TARGETDURATION:4\n", false},
+		{"tag only in a comment", "#EXTM3U\n# #EXTINF:4,\n", false},
+		{"tag only in a URI", "#EXTM3U\nseg#EXTINF:4,\n", false},
+		{"empty", "", false},
+	}
+	for _, tt := range tests {
+		if got := IsMedia([]byte(tt.playlist)); got != tt.want {
+			t.Errorf("%s: IsMedia = %v, want %v", tt.name, got, tt.want)
+		}
+	}
+}

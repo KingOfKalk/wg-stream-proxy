@@ -467,6 +467,7 @@ func (r *recorder) used() int64 { return r.lookups.Load() + r.dials.Load() }
 // fixture upstream.
 type directEnv struct {
 	proxy   *httptest.Server
+	server  *Server
 	client  *http.Client
 	up      *upstream
 	upURL   string
@@ -489,8 +490,8 @@ func newDirectEnv(t *testing.T, configTOML, channels string) *directEnv {
 
 // newDirectEnvFiles is newDirectEnv with any channel files, by path
 // relative to the config dir; "{UP}" is replaced in each, "{UPHOST}"
-// with the upstream host and port.
-func newDirectEnvFiles(t *testing.T, configTOML string, channelFiles map[string]string) *directEnv {
+// with the upstream host and port. opts change the server options.
+func newDirectEnvFiles(t *testing.T, configTOML string, channelFiles map[string]string, opts ...func(*Options)) *directEnv {
 	t.Helper()
 	e := &directEnv{up: newUpstream(), logs: &syncBuffer{}, signer: newSigner(t), metrics: metrics.New(metrics.Options{})}
 	upSrv := httptest.NewServer(e.up)
@@ -506,10 +507,15 @@ func newDirectEnvFiles(t *testing.T, configTOML string, channelFiles map[string]
 		t.Fatal(err)
 	}
 	t.Cleanup(routes.CloseIdleConnections)
-	s, err := New(Options{Config: e.cfg, Routes: routes, Signer: e.signer, Logger: newLogger(e.logs), Version: "1.2.3", Metrics: e.metrics})
+	o := Options{Config: e.cfg, Routes: routes, Signer: e.signer, Logger: newLogger(e.logs), Version: "1.2.3", Metrics: e.metrics}
+	for _, opt := range opts {
+		opt(&o)
+	}
+	s, err := New(o)
 	if err != nil {
 		t.Fatal(err)
 	}
+	e.server = s
 	e.proxy = httptest.NewServer(s)
 	t.Cleanup(e.proxy.Close)
 	e.client = e.proxy.Client()

@@ -58,6 +58,9 @@ type Options struct {
 	// /r/ or /p/ request; refetch tells the second fetch of a 206 (spec
 	// 3.4). Tests hold a request there.
 	beforeFetch func(r *http.Request, refetch bool)
+	// now is the clock of the reload rule of error clips (spec 3.4); nil
+	// means time.Now.
+	now func() time.Time
 }
 
 // Server serves the player-facing HTTP interface. It is an http.Handler.
@@ -76,6 +79,9 @@ type Server struct {
 	epg *epg.Guide
 	// beforeFetch is Options.beforeFetch.
 	beforeFetch func(r *http.Request, refetch bool)
+	// players remembers which clients play the media playlist of which
+	// channel, for the reload rule of error clips (spec 3.4).
+	players *players
 
 	// mu guards closed and the Add calls of handlers, so drain does not
 	// race with a request that is just starting.
@@ -103,6 +109,10 @@ func New(opts Options) (*Server, error) {
 
 		beforeFetch: opts.beforeFetch,
 	}
+	if opts.now == nil {
+		opts.now = time.Now
+	}
+	s.players = newPlayers(opts.now)
 	if s.metrics == nil {
 		s.metrics = metrics.New(metrics.Options{})
 	}

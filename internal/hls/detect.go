@@ -122,3 +122,24 @@ func Classify(contentType string, body *bufio.Reader, configured Type, sniff boo
 	}
 	return typ, refused, rest, nil
 }
+
+// IsMedia reports whether playlist is an HLS media playlist: it has an
+// #EXTINF segment and no #EXT-X-STREAM-INF variant (a master playlist).
+// Tags count at the start of a line, after an optional UTF-8 BOM and
+// whitespace, with the line ends of Rewrite.
+func IsMedia(playlist []byte) bool {
+	playlist = bytes.TrimPrefix(playlist, []byte(utf8BOM))
+	segment := false
+	for rest := playlist; len(rest) > 0; {
+		var line []byte
+		line, _, rest = nextLine(rest)
+		line = bytes.TrimLeft(line, lineSpace)
+		switch {
+		case bytes.HasPrefix(line, []byte("#EXT-X-STREAM-INF:")):
+			return false
+		case bytes.HasPrefix(line, []byte("#EXTINF:")):
+			segment = true
+		}
+	}
+	return segment
+}

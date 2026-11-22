@@ -109,7 +109,9 @@ sequenceDiagram
   tunnel up and an idle pooled connection does not.
 - Failures map to `502` or `504` (spec 3.4). A `GET` of `/c/` of a channel
   listed with `.m3u8` gets an error clip instead: a VOD playlist with one
-  embedded segment from `internal/clips` under `/clip/{name}.ts`.
+  embedded segment from `internal/clips` under `/clip/{name}.ts`. A reload
+  of a live media playlist keeps the status: `players` remembers, per
+  channel and client address, the last media playlist served (30 s).
 - Raw and ICY streams (radio, MPEG-TS) take the same path without a
   rewrite: anything not detected as HLS or DASH is piped. `/c/` of `raw`
   and `auto` channels uses the route's second transport, whose connection
