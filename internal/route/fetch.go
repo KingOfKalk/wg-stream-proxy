@@ -50,6 +50,11 @@ var (
 // (spec 3.4), in canonical form.
 var clientHeaders = []string{"Range", "If-Range", "Icy-Metadata"}
 
+// credentialHeaders are the merged upstream.headers that go along on a
+// redirect only to the same scheme, host and port (spec 3.4), in
+// canonical form.
+var credentialHeaders = []string{"Authorization", "Proxy-Authorization", "Cookie", "Www-Authenticate"}
+
 // Request is an upstream request.
 type Request struct {
 	// URL is the absolute http(s) upstream URL.
@@ -138,8 +143,11 @@ func (r *Route) Fetch(ctx context.Context, req Request) (*http.Response, error) 
 }
 
 // follow sends the request through t and follows redirects. It returns
-// the last URL tried, for errors.
+// the last URL tried, for errors. The credential headers of req.Header go
+// along until the first hop to another origin and are not sent again
+// after it, also not on a later hop back (spec 3.4).
 func (r *Route) follow(ctx context.Context, t http.RoundTripper, u *url.URL, req Request) (*http.Response, *url.URL, error) {
+	credentials := true
 	for hop := 0; ; hop++ {
 		hreq, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 		if err != nil {
@@ -147,7 +155,7 @@ func (r *Route) follow(ctx context.Context, t http.RoundTripper, u *url.URL, req
 			// (spec 8).
 			return nil, u, errInvalidURL
 		}
-		hreq.Header = requestHeader(u, req.Header, req.Client, r.upstream.UserAgent)
+		hreq.Header = requestHeader(u, req.Header, req.Client, r.upstream.UserAgent, credentials)
 		resp, err := t.RoundTrip(hreq)
 		if err != nil {
 			return nil, u, err
@@ -186,6 +194,7 @@ func (r *Route) follow(ctx context.Context, t http.RoundTripper, u *url.URL, req
 			return nil, u, ErrRedirectRefused
 		}
 		req.Trace.redirected()
+		credentials = credentials && sameOrigin(u, next)
 		u = next
 	}
 }
@@ -248,16 +257,21 @@ func parseUpstreamURL(s string) (*url.URL, error) {
 }
 
 // requestHeader builds the upstream request headers for u (spec 3.4): the
-// merged channel headers, User-Agent from them or else userAgent, and
-// Range, If-Range and Icy-MetaData from the client; no Range for
-// playlist paths; Authorization: Basic from the user info of u unless the
-// merged headers set Authorization (http.Transport ignores URL.User). It
-// is applied on every redirect hop, so Go adds no Referer of its own and
-// an empty User-Agent sends none.
-func requestHeader(u *url.URL, merged, client http.Header, userAgent string) http.Header {
+// merged channel headers, without credentialHeaders unless credentials is
+// set, User-Agent from them or else userAgent, and Range, If-Range and
+// Icy-MetaData from the client; no Range for playlist paths;
+// Authorization: Basic from the user info of u unless the merged headers
+// sent set Authorization (http.Transport ignores URL.User). It is applied
+// on every redirect hop, so Go adds no Referer of its own and an empty
+// User-Agent sends none.
+func requestHeader(u *url.URL, merged, client http.Header, userAgent string, credentials bool) http.Header {
 	h := make(http.Header, len(merged)+len(clientHeaders)+1)
 	for k, v := range merged {
-		h[http.CanonicalHeaderKey(k)] = slices.Clone(v)
+		k = http.CanonicalHeaderKey(k)
+		if !credentials && slices.Contains(credentialHeaders, k) {
+			continue
+		}
+		h[k] = slices.Clone(v)
 	}
 	if _, ok := h["User-Agent"]; !ok {
 		h["User-Agent"] = []string{userAgent}
