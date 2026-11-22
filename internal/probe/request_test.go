@@ -46,6 +46,9 @@ func TestSetHeader(t *testing.T) {
 		{"empty name", "", "1", nil, "invalid header name"},
 		{"line break", "X-Token", "a\r\nb", nil, "invalid value for header"},
 		{"NUL", "X-Token", "a\x00b", nil, "invalid value for header"},
+		{"control character", "X-Token", "a\x01b", nil, "invalid value for header"},
+		{"DEL", "X-Token", "a\x7fb", nil, "invalid value for header"},
+		{"tab and non-ASCII are valid", "X-Token", "a\tb \u00e4", http.Header{"X-Token": {"a\tb \u00e4"}}, ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

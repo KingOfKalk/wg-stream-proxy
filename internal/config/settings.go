@@ -103,8 +103,8 @@ func (c *Config) applySettings(raw rawConfig, src string, ov Overrides, routes m
 	c.upstream.UserAgent = defaultUserAgent
 	if up.UserAgent != nil {
 		c.upstream.UserAgent = *up.UserAgent
-		if hasLineBreak(*up.UserAgent) {
-			fail("upstream.user_agent", src, "must not contain line breaks")
+		if !ValidHeaderValue(*up.UserAgent) {
+			fail("upstream.user_agent", src, "must not contain control characters")
 		}
 	}
 	duration := func(key string, raw *string, def time.Duration) time.Duration {
@@ -173,6 +173,12 @@ func (c *Config) applySettings(raw rawConfig, src string, ov Overrides, routes m
 			case p != p.Masked():
 				fail(key, src, "%q has host bits set, use %q", s, p.Masked().String())
 			default:
+				// The guard unmaps addresses before matching, so an IPv4-mapped
+				// prefix would never apply: store the IPv4 prefix. Below /96 a
+				// prefix cannot be inside ::ffff:0:0/96 (host bits would be set).
+				if p.Addr().Is4In6() && p.Bits() >= 96 {
+					p = netip.PrefixFrom(p.Addr().Unmap(), p.Bits()-96)
+				}
 				c.allowPrivate[route] = append(c.allowPrivate[route], p)
 			}
 		}

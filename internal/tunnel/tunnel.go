@@ -404,7 +404,7 @@ func newTunnel(m *Manager, cfg *wgquick.Tunnel) *Tunnel {
 		t.dnsTypes = append(t.dnsTypes, dnsmessage.TypeAAAA)
 	}
 	for _, a := range cfg.DNS {
-		if t.check(a) == nil {
+		if t.cfg.Reaches(a) { // the rule of the check warnings (wgquick.Parse)
 			t.dns = append(t.dns, a)
 		}
 	}

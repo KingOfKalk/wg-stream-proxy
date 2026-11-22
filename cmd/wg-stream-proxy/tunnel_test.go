@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -23,6 +24,8 @@ func TestDebugBaseURL(t *testing.T) {
 		{"127.0.0.1:2350", "http://127.0.0.1:2350"},
 		{"192.0.2.7:2350", "http://192.0.2.7:2350"},
 		{"[2001:db8::1]:2350", "http://[2001:db8::1]:2350"},
+		{"[fe80::1%eth0]:2350", "http://[fe80::1%25eth0]:2350"},
+		{"[fe80::1%en0.1]:2350", "http://[fe80::1%25en0.1]:2350"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.listen, func(t *testing.T) {
@@ -267,5 +270,21 @@ func TestServeDebugListenError(t *testing.T) {
 	}
 	if !strings.Contains(errOut.String(), `msg="cannot listen" addr=`+busy.Addr().String()) {
 		t.Errorf("stderr lacks the debug listen error:\n%s", errOut)
+	}
+}
+
+// TestLocalURLZone: the zone of a link-local listen address is escaped in
+// the URL and parses back to the host the listener is bound to.
+func TestLocalURLZone(t *testing.T) {
+	got, err := localURL("[fe80::1%eth0]:2350", "/healthz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, err := url.Parse(got)
+	if err != nil {
+		t.Fatalf("url.Parse(%q): %v", got, err)
+	}
+	if u.Hostname() != "fe80::1%eth0" || u.Port() != "2350" || u.Path != "/healthz" {
+		t.Errorf("url %q parses to host %q port %q path %q", got, u.Hostname(), u.Port(), u.Path)
 	}
 }

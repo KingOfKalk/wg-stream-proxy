@@ -294,6 +294,43 @@ func TestParseWarnings(t *testing.T) {
 				{Tunnel: "t", Msg: "no DNS server: upstream host names cannot be resolved"},
 			},
 		},
+		{
+			name:  "DNS outside AllowedIPs",
+			input: conf("PrivateKey = "+testPrivA+"\nAddress = 192.0.2.2/32\nDNS = 192.0.2.53", "PublicKey = "+testPubSrv+"\nEndpoint = vpn.example.com:51820\nAllowedIPs = 198.51.100.0/24"),
+			want: []Warning{
+				{Tunnel: "t", Line: 4, Msg: "DNS server 192.0.2.53 ignored: outside AllowedIPs"},
+				{Tunnel: "t", Msg: "no reachable DNS server: upstream host names cannot be resolved"},
+			},
+		},
+		{
+			name:  "DNS of a family without tunnel address",
+			input: conf("PrivateKey = "+testPrivA+"\nAddress = 192.0.2.2/32\nDNS = 2001:db8::53", "PublicKey = "+testPubSrv+"\nEndpoint = vpn.example.com:51820\nAllowedIPs = 0.0.0.0/0, ::/0"),
+			want: []Warning{
+				{Tunnel: "t", Line: 4, Msg: "DNS server 2001:db8::53 ignored: tunnel has no IPv6 address"},
+				{Tunnel: "t", Msg: "no reachable DNS server: upstream host names cannot be resolved"},
+			},
+		},
+		{
+			name:  "IPv4 DNS in an IPv6-only tunnel",
+			input: conf("PrivateKey = "+testPrivA+"\nAddress = 2001:db8::2/128\nDNS = 192.0.2.53", "PublicKey = "+testPubSrv+"\nEndpoint = vpn.example.com:51820\nAllowedIPs = 0.0.0.0/0, ::/0"),
+			want: []Warning{
+				{Tunnel: "t", Line: 4, Msg: "DNS server 192.0.2.53 ignored: tunnel has no IPv4 address"},
+				{Tunnel: "t", Msg: "no reachable DNS server: upstream host names cannot be resolved"},
+			},
+		},
+		{
+			name:  "one reachable DNS server left",
+			input: conf("PrivateKey = "+testPrivA+"\nAddress = 192.0.2.2/32\nDNS = 192.0.2.53, 2001:db8::53\nDNS = 198.51.100.53", "PublicKey = "+testPubSrv+"\nEndpoint = vpn.example.com:51820\nAllowedIPs = 192.0.2.0/24"),
+			want: []Warning{
+				{Tunnel: "t", Line: 4, Msg: "DNS server 2001:db8::53 ignored: tunnel has no IPv6 address"},
+				{Tunnel: "t", Line: 5, Msg: "DNS server 198.51.100.53 ignored: outside AllowedIPs"},
+			},
+		},
+		{
+			name:  "IPv4-mapped DNS server is checked as IPv4",
+			input: conf("PrivateKey = "+testPrivA+"\nAddress = 192.0.2.2/32\nDNS = ::ffff:192.0.2.53", basePeer),
+			want:  nil,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -532,5 +569,27 @@ func TestEqual(t *testing.T) {
 	}
 	if a.Equal(nil) {
 		t.Error("Equal(nil) = true")
+	}
+}
+
+func TestTunnelReaches(t *testing.T) {
+	tun := &Tunnel{
+		Addresses: []netip.Prefix{netip.MustParsePrefix("192.0.2.2/32")},
+		Peer:      Peer{AllowedIPs: []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24"), netip.MustParsePrefix("2001:db8::/32")}},
+	}
+	tests := []struct {
+		addr string
+		want bool
+	}{
+		{"192.0.2.53", true},
+		{"::ffff:192.0.2.53", true},
+		{"198.51.100.1", false}, // outside AllowedIPs
+		{"2001:db8::53", false}, // inside AllowedIPs, but no IPv6 address
+		{"2001:db9::53", false},
+	}
+	for _, tt := range tests {
+		if got := tun.Reaches(netip.MustParseAddr(tt.addr)); got != tt.want {
+			t.Errorf("Reaches(%s) = %v, want %v", tt.addr, got, tt.want)
+		}
 	}
 }
