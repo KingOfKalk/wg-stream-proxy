@@ -202,9 +202,8 @@ func (guideTimer) Reset(time.Duration) bool { panic("guideTimer: Reset not suppo
 
 // TestRunEPGSourceIdleClose: EPG fetches are not activity (spec 2.1,
 // 6.1). A tunnel used only by a failing EPG source, retried every 10
-// minutes, closes idle_timeout after its start.
+// minutes, starts for each fetch and closes when it ends.
 func TestRunEPGSourceIdleClose(t *testing.T) {
-	const idle = 25 * time.Minute
 	peer := tunneltest.Start(t, tunneltest.Options{Handler: newUpstream()}) // every path 404
 	peer.SetHost("epg.test", tunneltest.ServerAddr4)
 	dir := writeConfig(t, map[string]string{
@@ -218,28 +217,25 @@ func TestRunEPGSourceIdleClose(t *testing.T) {
 		o.TunnelClock = clk
 		o.EPGClock = guideClock{clk}
 	})
-	idleCloses := func() int { return strings.Count(e.logs.String(), `msg="tunnel closed" tunnel=gr reason=idle`) }
-	failed := func() int { return strings.Count(e.logs.String(), `msg="epg source failed`) }
+	count := func(s string) int { return strings.Count(e.logs.String(), s) }
 
-	// The startup fetch starts the tunnel and fails.
-	clk.waitArmed(t, epg.RetryInterval)
-	clk.waitArmed(t, idle)
-	// Two retries, the source still fails: they do not restart the
-	// idle time.
-	for i, rest := range []time.Duration{idle - 10*time.Minute, idle - 20*time.Minute} {
-		clk.advance(epg.RetryInterval)
-		clk.waitArmed(t, epg.RetryInterval)
-		clk.waitArmed(t, rest)
-		if n := failed(); n != i+2 {
-			t.Fatalf("failed fetches = %d, want %d\n%s", n, i+2, e.logs.String())
+	// The startup fetch and two retries: each starts the tunnel, fails
+	// and closes it.
+	for i := 1; i <= 3; i++ {
+		if i > 1 {
+			clk.advance(epg.RetryInterval)
 		}
-	}
-	clk.advance(idle - 20*time.Minute - time.Second)
-	if n := idleCloses(); n != 0 {
-		t.Fatalf("tunnel closed before idle_timeout: %d", n)
-	}
-	clk.advance(time.Second)
-	if n := idleCloses(); n != 1 {
-		t.Errorf("idle closes = %d, want 1\n%s", n, e.logs.String())
+		clk.waitArmed(t, epg.RetryInterval)
+		clk.waitArmed(t, 0)
+		clk.advance(0)
+		if n := count(`msg="epg source failed`); n != i {
+			t.Fatalf("failed fetches = %d, want %d\n%s", n, i, e.logs.String())
+		}
+		if n := count(`msg="tunnel closed" tunnel=gr reason=idle`); n != i {
+			t.Fatalf("idle closes = %d, want %d\n%s", n, i, e.logs.String())
+		}
+		if n := count(`msg="tunnel started" tunnel=gr`); n != i {
+			t.Fatalf("tunnel starts = %d, want %d\n%s", n, i, e.logs.String())
+		}
 	}
 }

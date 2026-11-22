@@ -14,12 +14,12 @@ import (
 //
 // Activity is a request counted with Begin, plus the time of its Begin
 // and end and of the latest lookup or dial outside any request
-// (LastActivity). The idle time runs from the latest activity, or from
-// the start of the device if that is later (idleSince); the idle timer
-// runs only while no request is in flight. A background request
-// (BeginBackground: an EPG fetch, spec 6.1) is in flight like a request
-// but is not activity. Connections the caller keeps idle for reuse are
-// not activity.
+// (LastActivity). The idle time runs from the latest activity; the
+// start of the device is none of its own. The idle timer runs only
+// while no request is in flight. A background request (BeginBackground:
+// an EPG fetch, spec 6.1) is in flight like a request but is not
+// activity. Connections the caller keeps idle for reuse are not
+// activity.
 
 // Begin counts a request that uses the tunnel, from before its first
 // lookup or dial until its response body is closed; the returned end
@@ -37,7 +37,8 @@ func (t *Tunnel) Begin() (end func()) {
 // tunnel is not closed for idleness, and a reload removal or Cooldown
 // wait for it; neither it nor its lookups and dials restart the idle
 // time. When it ends, the idle timer runs for what is left of the idle
-// timeout since idleSince, which may be nothing.
+// timeout since LastActivity; without activity in that time the tunnel
+// closes at once.
 func (t *Tunnel) BeginBackground() (end func()) {
 	t.add()
 	return sync.OnceFunc(func() { t.end(false) })
@@ -87,26 +88,16 @@ func (t *Tunnel) OnStop(f func()) {
 	t.onStop = f
 }
 
-// idleSince returns the time the idle time runs from: the latest
-// activity, or the start of the running device if that is later. So a
-// tunnel that only background requests used closes idle timeout after
-// its start.
-func (t *Tunnel) idleSince() time.Time {
-	since := t.LastActivity()
-	if r := t.run.Load(); r != nil && r.started.After(since) {
-		since = r.started
-	}
-	return since
-}
-
-// idleLeft returns the rest of the idle timeout since idleSince; 0 or
-// less when it is over.
+// idleLeft returns the rest of the idle timeout since LastActivity; 0
+// or less when it is over, also without any activity. The start of the
+// device is no activity of its own: a tunnel that only background
+// requests used closes when the last of them ends.
 func (t *Tunnel) idleLeft() time.Duration {
-	return t.m.idle() - t.m.opts.Clock.Now().Sub(t.idleSince())
+	return t.m.idle() - t.m.opts.Clock.Now().Sub(t.LastActivity())
 }
 
 // armIdle starts the idle timer for the rest of the idle timeout since
-// idleSince, at once if it is over. t.mu is held.
+// LastActivity, at once if it is over. t.mu is held.
 func (t *Tunnel) armIdle() {
 	t.armIdleIn(max(0, t.idleLeft()))
 }

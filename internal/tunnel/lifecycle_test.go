@@ -184,7 +184,7 @@ func TestIdleClose(t *testing.T) {
 			},
 		},
 		{
-			name: "background requests alone: idle time runs from the start",
+			name: "background requests alone: closes when each ends",
 			run: func(t *testing.T, l *lifecycle) {
 				// The first one starts the tunnel and is in flight for 20m.
 				end := l.tun.BeginBackground()
@@ -192,15 +192,43 @@ func TestIdleClose(t *testing.T) {
 					t.Fatalf("get: %v", err)
 				}
 				l.env.clock.advance(20 * time.Minute)
+				l.wantRunning(t, true, 0)
 				end()
-				l.env.clock.waitArmed(t, testIdle-20*time.Minute)
-				// A failing EPG source retried every 10 minutes.
-				for range 3 {
+				// The start is no activity: nothing in idle_timeout.
+				l.env.clock.waitArmed(t, 0)
+				l.env.clock.advance(0)
+				l.wantRunning(t, false, 1)
+				// A failing EPG source retried every 10 minutes starts it
+				// for each fetch only.
+				for i := range 3 {
 					l.env.clock.advance(10 * time.Minute)
 					l.background(t)
+					l.env.clock.waitArmed(t, 0)
+					l.env.clock.advance(0)
+					l.wantRunning(t, false, int64(i+2))
 				}
-				l.env.clock.waitArmed(t, testIdle-50*time.Minute)
-				l.env.clock.advance(testIdle - 50*time.Minute - time.Nanosecond)
+				if got := l.tun.starts.Load(); got != 4 {
+					t.Errorf("devices created = %d, want 4", got)
+				}
+			},
+		},
+		{
+			name: "request during a background request that started it",
+			run: func(t *testing.T, l *lifecycle) {
+				endBackground := l.tun.BeginBackground()
+				c := l.dial(t) // starts the tunnel
+				l.request(t)
+				l.env.clock.advance(5 * time.Minute)
+				l.request(t)
+				if n := l.env.clock.pending(); n != 0 {
+					t.Errorf("%d timers armed while a background request is in flight, want 0", n)
+				}
+				l.env.clock.advance(10 * time.Minute)
+				_ = c.Close()
+				endBackground()
+				// The idle time runs from the end of the request.
+				l.env.clock.waitArmed(t, testIdle-10*time.Minute)
+				l.env.clock.advance(testIdle - 10*time.Minute - time.Nanosecond)
 				l.wantRunning(t, true, 0)
 				l.env.clock.advance(time.Nanosecond)
 				l.wantRunning(t, false, 1)

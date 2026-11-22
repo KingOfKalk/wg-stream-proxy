@@ -191,7 +191,7 @@ func (m *Manager) drainRetired(t *Tunnel, timeout time.Duration) {
 // timeout (a reload of [upstream] connect_timeout and [tunnels]
 // idle_timeout). A running tunnel without requests in flight re-arms its
 // idle timer for the rest of the new idle timeout since its last
-// activity or its start (idleSince); 0 disables idle close.
+// activity; 0 disables idle close.
 func (m *Manager) SetTimeouts(connect, idle time.Duration) error {
 	if err := checkTimeouts(connect, idle); err != nil {
 		return err
