@@ -183,7 +183,7 @@ An HLS channel (one listed with `.m3u8`) that fails to start plays a short error
 | Channel blocked by configuration | The private-range guard or the tunnel's `AllowedIPs` refused the address | `[upstream.allow_private]`, `AllowedIPs` |
 | Channel not available | Everything else: DNS, connect, TLS or timeout errors, an upstream error status (geo-block `403`, `404`, `5xx`), a playlist the proxy refused | The `warn` line of the request, with its `reason` and `clip` |
 
-Radio and other channels listed without `.m3u8` still get an HTTP error, as do segment requests during playback. `[clips] error = false` in `config.toml` turns the clips off (applies on reload).
+Radio and other channels listed without `.m3u8` still get an HTTP error, as do segment requests and playlist reloads during playback, so the player retries a channel that fails while it plays. `[clips] error = false` in `config.toml` turns the clips off (applies on reload).
 
 ## Testing a channel URL
 

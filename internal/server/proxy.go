@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strconv"
 	"strings"
@@ -56,10 +57,14 @@ func (s *Server) handleChannel(w http.ResponseWriter, r *http.Request) {
 	// known only from the response, and the ICY wrapper leaves HTTP
 	// responses unchanged, so an auto channel that turns out to be HLS or
 	// DASH works too. HLS and DASH channels use the normal pool.
-	s.proxy(w, r, g, ch, fetch{
-		upstream: ch.URL(), configured: typ, icy: typ == hls.Auto || typ == hls.Raw, other: metrics.KindRaw,
-		errorClips: errorClips(r, g.cfg, ch),
-	})
+	f := fetch{upstream: ch.URL(), configured: typ, icy: typ == hls.Auto || typ == hls.Raw, other: metrics.KindRaw}
+	if errorClips(r, g.cfg, ch) {
+		// A reload of a live media playlist gets the HTTP status (spec
+		// 3.4).
+		f.player = clientAddr(r)
+		f.errorClips = !s.players.reload(f.player, ch)
+	}
+	s.proxy(w, r, g, ch, f)
 }
 
 // handleResource serves /r/{channel}/{sig}/{b64url}/{name} (spec 4).
@@ -139,6 +144,10 @@ type fetch struct {
 	// errorClips: a failure is answered with an error clip instead of an
 	// HTTP error (spec 3.4).
 	errorClips bool
+	// player, if valid, is the client of a GET of /c/ with error clips
+	// on: a rewritten media playlist is recorded for it, so its reloads
+	// get no clip (spec 3.4).
+	player netip.Addr
 	// redirect, if set, is route.Request.Redirect: which redirects are
 	// followed (prefix-signed resources, spec 4.1).
 	redirect func(*url.URL) bool
@@ -368,6 +377,9 @@ func (s *Server) rewrite(w http.ResponseWriter, r *http.Request, g *generation, 
 	h.Set("Content-Length", strconv.Itoa(len(out)))
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(out)
+	if f.player.IsValid() && typ != hls.DASH && hls.IsMedia(data) {
+		s.players.served(f.player, ch)
+	}
 	s.log.Debug("playlist", "channel", ch.ID(), "url", route.LogURL(final.String()))
 }
 

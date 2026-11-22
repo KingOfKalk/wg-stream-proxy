@@ -32,7 +32,8 @@ const clipContentType = "video/mp2t"
 
 // errorClips reports whether a request to /c/ of ch answers failures with
 // an error clip: GET, an HLS channel by the rule of the channel list
-// (spec 6) and [clips] error on.
+// (spec 6) and [clips] error on. A reload of the channel's media playlist
+// still gets the HTTP error (players).
 func errorClips(r *http.Request, cfg *config.Config, ch config.Channel) bool {
 	return r.Method == http.MethodGet && cfg.Clips().Error &&
 		strings.HasSuffix(playlist.ChannelPath(ch), ".m3u8")
