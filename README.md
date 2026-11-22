@@ -8,7 +8,7 @@ Route each IPTV and internet radio channel through its own userspace WireGuard t
 - MPEG-DASH without DRM: manifests are rewritten so every segment, the time source and manifest reloads go through the channel's route; `SegmentTemplate`, `SegmentTimeline`, `SegmentList`, live and VOD. DRM manifests are refused.
 - Radio: raw and ICY (Icecast, Shoutcast) audio streams.
 - Per-channel routes: each channel uses a named WireGuard tunnel or `direct`; several tunnels run in one process. A channel never silently bypasses its tunnel, and a private-range guard blocks the LAN and the host.
-- One M3U channel list (`/playlist.m3u8`) with EPG link, logos and Kodi directives. To convert an M3U file, run the `import` command of the 0.4.x image once.
+- One M3U channel list (`/playlist.m3u8`) with EPG link, logos and Kodi directives.
 - One XMLTV guide (`/epg.xml.gz`): EPG sources fetched through their routes, filtered to your channels and merged.
 - Metrics: Prometheus metrics on `/metrics` including timing histograms, and a Grafana dashboard.
 - Error clips: an HLS channel that fails to start shows a short clip with the reason ("Tunnel not reachable", "Channel not available", …) instead of a failure dialog.
