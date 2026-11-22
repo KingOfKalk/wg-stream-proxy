@@ -12,7 +12,7 @@
 #   docker compose kill -s HUP wg-stream-proxy
 services:
   wg-stream-proxy:
-    image: ghcr.io/kingofkalk/wg-stream-proxy:0.5.3 # x-release-please-version
+    image: ghcr.io/kingofkalk/wg-stream-proxy:0.5.4 # x-release-please-version
     restart: unless-stopped
     stop_grace_period: 35s # SIGTERM drain takes up to 30 s; Docker's default 10 s would cut it short
     read_only: true

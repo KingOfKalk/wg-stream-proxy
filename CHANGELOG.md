@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.5.4](https://github.com/KingOfKalk/wg-stream-proxy/compare/v0.5.3...v0.5.4) (2026-11-22)
+
+
+### Bug Fixes
+
+* **config:** dotfiles in channels.d and the tunnels dir are loaded ([#190](https://github.com/KingOfKalk/wg-stream-proxy/issues/190)) ([0753bbb](https://github.com/KingOfKalk/wg-stream-proxy/commit/0753bbb80e94201936271926e7f15d08caf987c1))
+* **config:** reject more settings that cannot work ([#191](https://github.com/KingOfKalk/wg-stream-proxy/issues/191)) ([c6a5075](https://github.com/KingOfKalk/wg-stream-proxy/commit/c6a5075e1993fa04f980deb55e027e64f3d501b1))
+* **epg:** one slow source delays or starves the guide ([#189](https://github.com/KingOfKalk/wg-stream-proxy/issues/189)) ([438750b](https://github.com/KingOfKalk/wg-stream-proxy/commit/438750b28e5016dcec42382cba2325f45d0e54e1))
+* **route:** configured credential headers go to redirect targets on other hosts ([#197](https://github.com/KingOfKalk/wg-stream-proxy/issues/197)) ([4ac4a97](https://github.com/KingOfKalk/wg-stream-proxy/commit/4ac4a97f0043729f0121a492a23e6f27226d275b))
+* **route:** credentials in upstream URLs are never sent ([#187](https://github.com/KingOfKalk/wg-stream-proxy/issues/187)) ([d77c461](https://github.com/KingOfKalk/wg-stream-proxy/commit/d77c4610cb32970652833c4d6c8702e8ddae7eaa))
+* **server:** an upstream 502 writes no warn line ([#202](https://github.com/KingOfKalk/wg-stream-proxy/issues/202)) ([cd0db7e](https://github.com/KingOfKalk/wg-stream-proxy/commit/cd0db7e8729bd7bcb63b29bd260c07e901db7058))
+* **server:** error clip on a media playlist reload ends live playback ([#200](https://github.com/KingOfKalk/wg-stream-proxy/issues/200)) ([8222b8a](https://github.com/KingOfKalk/wg-stream-proxy/commit/8222b8a880424532cb478d1fcf0e310ef162fe91))
+* **tunnel:** a failing EPG source keeps its tunnel up forever ([#188](https://github.com/KingOfKalk/wg-stream-proxy/issues/188)) ([864734e](https://github.com/KingOfKalk/wg-stream-proxy/commit/864734ef3f55df873affad5ba9a776caf391a7e2))
+* **tunnel:** DNS lookup fails when one record type gets no answer ([#193](https://github.com/KingOfKalk/wg-stream-proxy/issues/193)) ([8b7b04a](https://github.com/KingOfKalk/wg-stream-proxy/commit/8b7b04ae150339f597a6586491831e3317fd2efb))
+
+
+### Documentation
+
+* **deploy:** proxy logs are lost after a reboot or a recreated container ([#199](https://github.com/KingOfKalk/wg-stream-proxy/issues/199)) ([8db75bb](https://github.com/KingOfKalk/wg-stream-proxy/commit/8db75bb78406ec22d82cf2984b322cfd65c5a43f))
+* **deploy:** restart after changing listen or debug.listen ([#186](https://github.com/KingOfKalk/wg-stream-proxy/issues/186)) ([bd480eb](https://github.com/KingOfKalk/wg-stream-proxy/commit/bd480eb065ee9cbbab65bbd7326dd7ee0ac66cd8))
+* drop version mentions that go stale ([#196](https://github.com/KingOfKalk/wg-stream-proxy/issues/196)) ([4f7effa](https://github.com/KingOfKalk/wg-stream-proxy/commit/4f7effa194263c8e76d3c4bd86978d22fa114a87))
+
 ## [0.5.3](https://github.com/KingOfKalk/wg-stream-proxy/compare/v0.5.2...v0.5.3) (2026-11-21)
 
 
