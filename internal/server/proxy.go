@@ -224,8 +224,11 @@ func (s *Server) respond(w http.ResponseWriter, r *http.Request, g *generation, 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		rq.Response(resp.StatusCode)
 		code := route.ClientStatus(resp.StatusCode)
-		if clip := f.clip(nil); code != resp.StatusCode || clip != "" {
-			// A 4xx is relayed; with an error clip it is logged like a 5xx.
+		if clip := f.clip(nil); code != resp.StatusCode || resp.StatusCode >= 500 || clip != "" {
+			// Every 5xx (also a 502, whose status stays) and other
+			// non-4xx statuses are answered with the proxy's own status
+			// and logged. A 4xx is relayed; with an error clip it is
+			// logged like a 5xx.
 			s.log.Warn("upstream error status", withClip([]any{
 				"channel", ch.ID(), "route", ch.Route(),
 				"url", route.LogURL(final.String()), "upstream_status", resp.StatusCode, "status", code,
