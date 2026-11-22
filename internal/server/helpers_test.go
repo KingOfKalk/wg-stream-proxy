@@ -145,7 +145,7 @@ type file struct {
 
 // seen is a request the fixture received.
 type seen struct {
-	Method, Path, Query, Range, UserAgent, Referer, Icy, Remote string
+	Method, Path, Query, Range, UserAgent, Referer, Icy, Remote, Auth string
 	// Names lists the request header names sent, sorted, comma-separated.
 	Names string
 }
@@ -191,7 +191,7 @@ func (u *upstream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	u.mu.Lock()
 	u.reqs = append(u.reqs, seen{
 		Method: r.Method, Path: r.URL.Path, Query: r.URL.RawQuery, Range: r.Header.Get("Range"),
-		UserAgent: r.Header.Get("User-Agent"), Referer: r.Header.Get("Referer"),
+		UserAgent: r.Header.Get("User-Agent"), Referer: r.Header.Get("Referer"), Auth: r.Header.Get("Authorization"),
 		Icy: r.Header.Get("Icy-MetaData"), Remote: r.RemoteAddr,
 		Names: headerNames(r.Header),
 	})
@@ -488,7 +488,8 @@ func newDirectEnv(t *testing.T, configTOML, channels string) *directEnv {
 }
 
 // newDirectEnvFiles is newDirectEnv with any channel files, by path
-// relative to the config dir; "{UP}" is replaced in each.
+// relative to the config dir; "{UP}" is replaced in each, "{UPHOST}"
+// with the upstream host and port.
 func newDirectEnvFiles(t *testing.T, configTOML string, channelFiles map[string]string) *directEnv {
 	t.Helper()
 	e := &directEnv{up: newUpstream(), logs: &syncBuffer{}, signer: newSigner(t), metrics: metrics.New(metrics.Options{})}
@@ -497,7 +498,7 @@ func newDirectEnvFiles(t *testing.T, configTOML string, channelFiles map[string]
 	e.upURL = upSrv.URL
 	files := map[string]string{"config.toml": strings.ReplaceAll(configTOML, "{UP}", upSrv.URL)}
 	for name, content := range channelFiles {
-		files[name] = strings.ReplaceAll(content, "{UP}", upSrv.URL)
+		files[name] = strings.NewReplacer("{UP}", upSrv.URL, "{UPHOST}", upSrv.Listener.Addr().String()).Replace(content)
 	}
 	e.cfg = loadConfig(t, files)
 	routes, err := route.NewSet(route.Host(), nil, route.Options{Upstream: e.cfg.Upstream(), AllowPrivate: e.cfg.AllowPrivate()})
