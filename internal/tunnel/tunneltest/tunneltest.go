@@ -99,7 +99,8 @@ type Peer struct {
 	tcpQueries []string
 	dropNext   int // UDP queries to drop; < 0 drops all
 	dropped    int
-	failNext   int // queries to answer with failRCode; < 0 fails all
+	dropTypes  map[dnsmessage.Type]bool // UDP queries of these types are dropped
+	failNext   int                      // queries to answer with failRCode; < 0 fails all
 	failRCode  dnsmessage.RCode
 	truncate   bool
 	ttl        uint32 // of answer records and of the SOA of negative answers
@@ -384,6 +385,19 @@ func (p *Peer) DropDNS(n int) {
 	p.dropNext = n
 }
 
+// DropDNSType makes the DNS server drop every UDP query of type typ
+// without an answer while on is set, like a server or middlebox that
+// swallows AAAA queries. Other types are answered. TCP queries are never
+// dropped.
+func (p *Peer) DropDNSType(typ dnsmessage.Type, on bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.dropTypes == nil {
+		p.dropTypes = map[dnsmessage.Type]bool{}
+	}
+	p.dropTypes[typ] = on
+}
+
 // DroppedDNS returns the number of UDP queries dropped so far.
 func (p *Peer) DroppedDNS() int {
 	p.mu.Lock()
@@ -435,7 +449,7 @@ func (p *Peer) serveDNS(c net.PacketConn) {
 		if err != nil {
 			return
 		}
-		if p.dropUDP() {
+		if p.dropUDP(buf[:n]) {
 			continue
 		}
 		resp, ok := p.answer(buf[:n], false)
@@ -448,13 +462,22 @@ func (p *Peer) serveDNS(c net.PacketConn) {
 
 // dropUDP counts the UDP query just received and reports whether to drop
 // it, counting that too.
-func (p *Peer) dropUDP() bool {
+func (p *Peer) dropUDP(req []byte) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.received++
 	if p.receivedCh != nil {
 		close(p.receivedCh)
 		p.receivedCh = nil
+	}
+	if len(p.dropTypes) > 0 {
+		var parser dnsmessage.Parser
+		if _, err := parser.Start(req); err == nil {
+			if q, err := parser.Question(); err == nil && p.dropTypes[q.Type] {
+				p.dropped++
+				return true
+			}
+		}
 	}
 	if p.dropNext == 0 {
 		return false

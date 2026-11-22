@@ -131,7 +131,10 @@ type dnsFlight struct {
 
 // lookup resolves host from the cache or with one query per type of the
 // client, shared with concurrent lookups of the same name. It returns
-// when ctx ends, even if the shared query goes on for others.
+// when ctx ends, even if the shared query goes on for others. If ctx ends
+// before every type is answered, the addresses of the types that were
+// are the result (as with Go's resolver); the error is only returned if
+// there are none.
 func (c *dnsClient) lookup(ctx context.Context, host string) ([]netip.Addr, error) {
 	name, ok := queryName(host)
 	if !ok {
@@ -169,8 +172,31 @@ func (c *dnsClient) lookup(ctx context.Context, host string) ([]netip.Addr, erro
 		return slices.Clone(f.addrs), f.err
 	case <-ctx.Done():
 		c.leave(key, f)
+		// Every answered type is in the cache: the flight stores it as
+		// soon as it arrives, so this holds for each waiter, whether it
+		// was the last or not. Not for a tunnel that stopped or a name
+		// that does not exist.
+		if addrs := c.cachedAddrs(key); len(addrs) > 0 {
+			return addrs, nil
+		}
 		return nil, fmt.Errorf("lookup %s: %w", host, ctx.Err())
 	}
+}
+
+// cachedAddrs returns the cached addresses of the name key, whatever
+// types are missing. It returns none after close or for a name cached as
+// NXDOMAIN.
+func (c *dnsClient) cachedAddrs(key string) []netip.Addr {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return nil
+	}
+	cached, _, notFound := c.cache.get(key, c.types, c.clock.Now())
+	if notFound {
+		return nil
+	}
+	return flatten(c.types, cached)
 }
 
 // leave removes a lookup whose ctx ended from flight f. The last one
@@ -189,12 +215,21 @@ func (c *dnsClient) leave(key string, f *dnsFlight) {
 	}
 }
 
-// fly runs flight f: it asks the missing types, caches what was answered
-// and sets the result for all waiters.
+// fly runs flight f: it asks the missing types, caches each answer as it
+// arrives and sets the result for all waiters. The flight ends early only
+// when its last waiter gave up or the client closed; nobody reads the
+// result of the former, and the answers it got stay cached.
 func (c *dnsClient) fly(ctx context.Context, f *dnsFlight, key, host string, name dnsmessage.Name, cached map[dnsmessage.Type][]netip.Addr, missing []dnsmessage.Type) {
 	defer c.flights.Done()
 	defer f.cancel()
-	queries, err := c.exchange(ctx, host, name, missing)
+	queries, err := c.exchange(ctx, host, name, missing, func(q *dnsQuery) {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		if !c.closed {
+			now := c.clock.Now()
+			c.cache.put(dnsKey{key, q.q.Type}, dnsEntry{addrs: q.addrs, expires: now.Add(clampTTL(q.ttl))}, now)
+		}
+	})
 
 	c.mu.Lock()
 	if c.pending[key] == f {
@@ -206,13 +241,6 @@ func (c *dnsClient) fly(ctx context.Context, f *dnsFlight, key, host string, nam
 	case errors.Is(err, errNXDOMAIN):
 		for _, typ := range c.types {
 			c.cache.put(dnsKey{key, typ}, dnsEntry{notFound: true, expires: now.Add(dnsMinTTL)}, now)
-		}
-	default:
-		// Also the answered queries of a flight that ended early.
-		for _, q := range queries {
-			if q.done && q.err == nil {
-				c.cache.put(dnsKey{key, q.q.Type}, dnsEntry{addrs: q.addrs, expires: now.Add(clampTTL(q.ttl))}, now)
-			}
 		}
 	}
 	c.mu.Unlock()
@@ -393,7 +421,10 @@ type dnsExchange struct {
 // asked again; a query fails once every server did. It returns the
 // queries with their answers, and errNXDOMAIN if a server said name does
 // not exist, or ctx's error; then some queries may be done, others not.
-func (c *dnsClient) exchange(ctx context.Context, host string, name dnsmessage.Name, types []dnsmessage.Type) ([]*dnsQuery, error) {
+// answered is called for every query that got an answer, as it does, so
+// the caller can keep it even if ctx ends before the other queries are
+// done.
+func (c *dnsClient) exchange(ctx context.Context, host string, name dnsmessage.Name, types []dnsmessage.Type, answered func(*dnsQuery)) ([]*dnsQuery, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	l := &dnsExchange{
 		c:       c,
@@ -453,6 +484,9 @@ func (c *dnsClient) exchange(ctx context.Context, host string, name dnsmessage.N
 			}
 			q.done = true
 			q.timer.Stop()
+			if q.err == nil {
+				answered(q)
+			}
 			pending--
 		}
 	}

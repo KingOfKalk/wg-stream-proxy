@@ -907,3 +907,169 @@ func TestLookupOutsideAllowedIPs(t *testing.T) {
 		t.Errorf("unknown name: err = %v wraps ErrNotAllowed", err)
 	}
 }
+
+// waitDNSAnswered blocks until a DNS server has answered a query of the
+// running tun (the client of a freshTunnel starts without an answer). The
+// exchange records that answer before it looks at its context again.
+// It fails t after 10s.
+func waitDNSAnswered(t *testing.T, tun *Tunnel) {
+	t.Helper()
+	c := tun.run.Load().dns
+	giveUp := time.Now().Add(10 * time.Second)
+	for !c.answered.Load() {
+		if time.Now().After(giveUp) {
+			t.Fatal("no DNS answer after 10s")
+		}
+		runtime.Gosched()
+	}
+}
+
+func TestLookupPartialAnswerWhenOneTypeIsNotAnswered(t *testing.T) {
+	peer := tunneltest.Start(t, dualStack)
+	peer.SetHost("dual.test", upstream6, upstream4)
+	tun, env := freshTunnel(t, peer)
+	peer.DropDNSType(dnsmessage.TypeAAAA, true)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := lookupAsync(ctx, tun, "dual.test")
+	waitDNSAnswered(t, tun)
+	assertPending(t, done)
+	cancel()
+	r := <-done
+	if r.err != nil || !slices.Equal(r.addrs, []netip.Addr{upstream4}) {
+		t.Fatalf("LookupNetIP = %v, %v; want [%v]", r.addrs, r.err, upstream4)
+	}
+	if got := env.clock.pending(); got != 0 {
+		t.Errorf("%d timers left armed", got)
+	}
+
+	// The unanswered type is not cached as missing: once the server
+	// answers it, the next lookup has both. The A answer is cached.
+	peer.DropDNSType(dnsmessage.TypeAAAA, false)
+	got, err := tun.LookupNetIP(t.Context(), "dual.test")
+	if err != nil || !slices.Equal(got, []netip.Addr{upstream4, upstream6}) {
+		t.Errorf("second LookupNetIP = %v, %v; want [%v %v]", got, err, upstream4, upstream6)
+	}
+	if n := countQueries(peer.Queries(), "dual.test A"); n != 1 {
+		t.Errorf("A queries = %d, want 1 (cached)", n)
+	}
+}
+
+func TestLookupPartialAnswerAtDeadline(t *testing.T) {
+	peer := tunneltest.Start(t, dualStack)
+	peer.SetHost("dual.test", upstream6, upstream4)
+	tun, _ := startedTunnel(t, peer)
+	peer.DropDNSType(dnsmessage.TypeAAAA, true)
+
+	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
+	defer cancel()
+	got, err := tun.LookupNetIP(ctx, "dual.test")
+	if err != nil || !slices.Equal(got, []netip.Addr{upstream4}) {
+		t.Errorf("LookupNetIP = %v, %v; want [%v]", got, err, upstream4)
+	}
+}
+
+func TestLookupPartialAnswerForEverySharedCaller(t *testing.T) {
+	peer := tunneltest.Start(t, dualStack)
+	peer.SetHost("dual.test", upstream6, upstream4)
+	tun, _ := freshTunnel(t, peer)
+	peer.DropDNSType(dnsmessage.TypeAAAA, true)
+
+	ctx1, cancel1 := context.WithCancel(t.Context())
+	defer cancel1()
+	ctx2, cancel2 := context.WithCancel(t.Context())
+	defer cancel2()
+	first := lookupAsync(ctx1, tun, "dual.test")
+	second := lookupAsync(ctx2, tun, "dual.test")
+	waitWaiters(t, tun, "dual.test", 2)
+	waitDNSAnswered(t, tun)
+
+	// The first caller's deadline ends while the second still waits.
+	cancel1()
+	if r := <-first; r.err != nil || !slices.Equal(r.addrs, []netip.Addr{upstream4}) {
+		t.Errorf("first: LookupNetIP = %v, %v; want [%v]", r.addrs, r.err, upstream4)
+	}
+	assertPending(t, second)
+	cancel2()
+	if r := <-second; r.err != nil || !slices.Equal(r.addrs, []netip.Addr{upstream4}) {
+		t.Errorf("second: LookupNetIP = %v, %v; want [%v]", r.addrs, r.err, upstream4)
+	}
+}
+
+func TestLookupNothingAnsweredStillFails(t *testing.T) {
+	peer := tunneltest.Start(t, dualStack)
+	peer.SetHost("dual.test", upstream6, upstream4)
+	tun, _ := startedTunnel(t, peer)
+	peer.DropDNSType(dnsmessage.TypeA, true)
+	peer.DropDNSType(dnsmessage.TypeAAAA, true)
+
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	defer cancel()
+	got, err := tun.LookupNetIP(ctx, "dual.test")
+	if !errors.Is(err, context.DeadlineExceeded) || len(got) != 0 {
+		t.Errorf("LookupNetIP = %v, %v; want context.DeadlineExceeded", got, err)
+	}
+}
+
+func TestLookupNoAddressesAnsweredStillFails(t *testing.T) {
+	// The A query is answered, without records; AAAA is lost.
+	peer := tunneltest.Start(t, dualStack)
+	peer.SetHost("v6only.test", upstream6)
+	tun, _ := freshTunnel(t, peer)
+	peer.DropDNSType(dnsmessage.TypeAAAA, true)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := lookupAsync(ctx, tun, "v6only.test")
+	waitDNSAnswered(t, tun)
+	cancel()
+	r := <-done
+	if !errors.Is(r.err, context.Canceled) || len(r.addrs) != 0 {
+		t.Errorf("LookupNetIP = %v, %v; want context.Canceled", r.addrs, r.err)
+	}
+}
+
+func TestLookupNXDOMAINWithOtherTypeUnanswered(t *testing.T) {
+	peer := tunneltest.Start(t, dualStack)
+	tun, _ := startedTunnel(t, peer)
+	peer.DropDNSType(dnsmessage.TypeAAAA, true)
+
+	_, err := tun.LookupNetIP(t.Context(), "missing.test")
+	var de *net.DNSError
+	if !errors.As(err, &de) || !de.IsNotFound {
+		t.Errorf("err = %v, want not-found *net.DNSError", err)
+	}
+}
+
+func TestLookupPartialAnswerEndsWhenTunnelStops(t *testing.T) {
+	peer := tunneltest.Start(t, dualStack)
+	peer.SetHost("dual.test", upstream6, upstream4)
+	m, _ := newManager(t, peer.ClientTunnel(t, "gr"))
+	tun := mustTunnel(t, m, "gr")
+	if _, err := tun.LookupNetIP(t.Context(), tunneltest.ServerAddr4.String()); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	peer.DropDNSType(dnsmessage.TypeAAAA, true)
+
+	done := lookupAsync(t.Context(), tun, "dual.test")
+	waitWaiters(t, tun, "dual.test", 1)
+	waitDNSAnswered(t, tun)
+	if err := drain(m, "gr", 0); err != nil {
+		t.Fatalf("Drain: %v", err)
+	}
+	if r := <-done; !errors.Is(r.err, ErrUnavailable) {
+		t.Errorf("LookupNetIP = %v, %v; want ErrUnavailable", r.addrs, r.err)
+	}
+}
+
+// countQueries returns how often q is in queries.
+func countQueries(queries []string, q string) int {
+	n := 0
+	for _, s := range queries {
+		if s == q {
+			n++
+		}
+	}
+	return n
+}
