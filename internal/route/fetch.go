@@ -4,6 +4,7 @@ package route
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -168,6 +169,7 @@ func (r *Route) follow(ctx context.Context, t http.RoundTripper, u *url.URL, req
 		case !config.IsHTTPURL(next):
 			return nil, u, fmt.Errorf("%w: scheme %q", errBadRedirect, next.Scheme)
 		}
+		next.User = redirectUser(u, next)
 		// A scheme-relative target is parsed without a scheme, where the
 		// authority is checked less strictly, and may print as an http URL
 		// that does not parse again ("//::/x"). The target is checked like
@@ -198,6 +200,38 @@ func isRedirect(code int) bool {
 	return false
 }
 
+// redirectUser returns the user info for the redirect from u to next
+// (spec 3.4): next's own, else u's if next has the same scheme, host and
+// port, else none, so credentials never reach another host. A relative
+// Location already carries u's.
+func redirectUser(u, next *url.URL) *url.Userinfo {
+	if next.User != nil {
+		return next.User
+	}
+	if u.User != nil && sameOrigin(u, next) {
+		return u.User
+	}
+	return nil
+}
+
+// sameOrigin reports whether a and b have the same scheme, host
+// (case-insensitive) and port (an explicit default port counts as none).
+func sameOrigin(a, b *url.URL) bool {
+	return a.Scheme == b.Scheme && strings.EqualFold(a.Hostname(), b.Hostname()) && effectivePort(a) == effectivePort(b)
+}
+
+// effectivePort returns the port of the http(s) URL u, the scheme's
+// default if it has none.
+func effectivePort(u *url.URL) string {
+	if p := u.Port(); p != "" {
+		return p
+	}
+	if u.Scheme == "https" {
+		return "443"
+	}
+	return "80"
+}
+
 // parseUpstreamURL checks the length and form of an upstream URL.
 func parseUpstreamURL(s string) (*url.URL, error) {
 	if len(s) > MaxURLLen {
@@ -216,8 +250,10 @@ func parseUpstreamURL(s string) (*url.URL, error) {
 // requestHeader builds the upstream request headers for u (spec 3.4): the
 // merged channel headers, User-Agent from them or else userAgent, and
 // Range, If-Range and Icy-MetaData from the client; no Range for
-// playlist paths. It is applied on every redirect hop, so Go adds no
-// Referer of its own and an empty User-Agent sends none.
+// playlist paths; Authorization: Basic from the user info of u unless the
+// merged headers set Authorization (http.Transport ignores URL.User). It
+// is applied on every redirect hop, so Go adds no Referer of its own and
+// an empty User-Agent sends none.
 func requestHeader(u *url.URL, merged, client http.Header, userAgent string) http.Header {
 	h := make(http.Header, len(merged)+len(clientHeaders)+1)
 	for k, v := range merged {
@@ -233,6 +269,10 @@ func requestHeader(u *url.URL, merged, client http.Header, userAgent string) htt
 	}
 	if IsPlaylistPath(u.Path) {
 		h.Del("Range")
+	}
+	if _, ok := h["Authorization"]; !ok && u.User != nil {
+		pw, _ := u.User.Password()
+		h["Authorization"] = []string{"Basic " + base64.StdEncoding.EncodeToString([]byte(u.User.Username()+":"+pw))}
 	}
 	return h
 }
