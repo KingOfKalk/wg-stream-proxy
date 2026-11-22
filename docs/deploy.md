@@ -12,7 +12,22 @@ Companion to [spec.md](spec.md). All variants use the same config layout (spec 5
 
 ## Standalone
 
-There are no release binaries. Build the binary from source (`go build ./cmd/wg-stream-proxy`) or install it with `go install` (Go 1.27.4 or newer, see `go.mod`); the container image below needs no Go toolchain.
+Every release has a binary for `linux/amd64`, `linux/arm64` and `darwin/arm64` ([`binaries.yml`](../.github/workflows/binaries.yml)): `wg-stream-proxy_<version>_<os>_<arch>.tar.gz` (the binary, `LICENSE`, `README.md`) and `SHA256SUMS`; no Go toolchain needed. Download, verify and unpack (set the version and the target `<os>_<arch>`):
+
+<!-- x-release-please-start-version -->
+```bash
+v=0.5.4; t=linux_arm64
+gh release download "v$v" --repo KingOfKalk/wg-stream-proxy \
+  --pattern "wg-stream-proxy_${v}_${t}.tar.gz" --pattern SHA256SUMS
+sha256sum --ignore-missing -c SHA256SUMS   # macOS: shasum -a 256 --ignore-missing -c SHA256SUMS
+gh attestation verify "wg-stream-proxy_${v}_${t}.tar.gz" --repo KingOfKalk/wg-stream-proxy
+tar -xzf "wg-stream-proxy_${v}_${t}.tar.gz" wg-stream-proxy
+```
+<!-- x-release-please-end -->
+
+- `sha256sum -c` checks the download; `gh attestation verify` checks that this repository's GitHub Actions workflow built it.
+- macOS: the binary is not signed or notarized (no Apple developer account). Gatekeeper blocks a file downloaded with a browser until you run `xattr -d com.apple.quarantine wg-stream-proxy`; downloads with `curl` or `gh` are not quarantined.
+- Without a release binary (another platform, an unreleased commit): build from source (`go build ./cmd/wg-stream-proxy`) or install with `go install` (Go 1.27.4 or newer, see `go.mod`).
 
 <!-- x-release-please-start-version -->
 ```bash

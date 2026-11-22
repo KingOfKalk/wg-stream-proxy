@@ -26,7 +26,7 @@
 ### 1.3 Platforms
 
 - Build targets (cross-compiled in CI): `linux/amd64`, `linux/arm64`, `darwin/arm64`; `CGO_ENABLED=0`.
-- Distribution: the container image (`linux/amd64` + `linux/arm64`). Binaries: build from source or `go install`; there are no release binaries.
+- Distribution: the container image (`linux/amd64` + `linux/arm64`) and, on every release, binaries for the three build targets as `wg-stream-proxy_<version>_<os>_<arch>.tar.gz` (binary, `LICENSE`, `README.md`) with a `SHA256SUMS` file and build provenance attestations, attached to the GitHub release by `binaries.yml`. The macOS binary is not signed or notarized. Without a release binary: build from source or `go install`.
 - LibreELEC 12+ uses an aarch64 userland on Raspberry Pi 4/5 (since 12.0, May 2024), so the `linux/arm64` container (Docker add-on) runs on default installs. Only 32-bit images (Raspberry Pi 2/3, Allwinner H3/R40, Rockchip RK3288) would need `linux/arm`, which is not built.
 
 ## 2. Architecture
@@ -497,7 +497,7 @@ Only `/c/`, `/r/` and `/p/` requests of enabled channels count; `channel` is the
 ## 10. Roadmap
 
 - Released ([changelog](../CHANGELOG.md)): **v0.1 Core** (config, tunnels, routes and guard, HLS and raw/ICY streams, channel list, `SIGHUP` reload, metrics, container image), **v0.2 Observability** (timing histograms, debug endpoints), **v0.3 Experience** (error clips, file-watch reload), **v0.4 Content** (DASH without DRM, EPG proxy mode, `probe`), **v0.5 Lean** (slimming, review fixes, reload race; [#129](https://github.com/KingOfKalk/wg-stream-proxy/issues/129)).
-- Next: nothing planned; decided by usage data from the Raspberry Pi.
+- Next: **v0.6 Distribution** (release binaries for `linux/amd64`, `linux/arm64` and `darwin/arm64`, 1.3; [#203](https://github.com/KingOfKalk/wg-stream-proxy/issues/203)); after that nothing planned, decided by usage data from the Raspberry Pi.
 - Decided against: per-request segment prefetch ([#84](https://github.com/KingOfKalk/wg-stream-proxy/issues/84), reopen if Kodi stalls on HLS channels through a tunnel), in-flight clips ([#116](https://github.com/KingOfKalk/wg-stream-proxy/issues/116), the design is in the git history), logo proxy ([#88](https://github.com/KingOfKalk/wg-stream-proxy/issues/88)), ad-hoc proxy endpoint ([#89](https://github.com/KingOfKalk/wg-stream-proxy/issues/89)).
 
 ## 11. Risks

@@ -1,0 +1,182 @@
+name: Binaries
+
+on:
+  # release-please publishes the release as the release App, so the event
+  # fires (GITHUB_TOKEN events would not start this workflow).
+  release:
+    types:
+      - published
+  # Adds the binaries to an existing release, e.g. one made before this
+  # workflow existed: gh workflow run binaries.yml -f tag=v0.5.4
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to build and upload (vX.Y.Z)
+        required: true
+        type: string
+  # Pull requests that change this workflow: build and summary only, no
+  # upload and no attestation.
+  pull_request:
+    paths:
+      - .github/workflows/binaries.yml
+
+permissions: {}
+
+# One run per tag; a rerun or a second trigger for the same tag queues.
+# Pull requests: a newer push cancels the running build.
+concurrency:
+  group: binaries-${{ github.event.release.tag_name || inputs.tag || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Not a required check (it runs only when its own file or a release
+# changes). Release binaries for linux/amd64, linux/arm64 and darwin/arm64,
+# cross-compiled on one runner, with the flags of the Dockerfile and of the
+# Build job in ci.yml. macOS binaries are not signed.
+#
+# Three jobs, so that each token has the least permission:
+#   build   contents: read; runs the toolchain, never holds a write token
+#   attest  id-token + attestations: write; only on release and dispatch
+#   upload  contents: write; only on release and dispatch
+# permissions cannot depend on the event, hence the separate jobs; a pull
+# request run stops after build.
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      # The tag is validated before checkout; inputs reach scripts through
+      # env, never through ${{ }} in run.
+      - name: Resolve tag
+        id: tag
+        env:
+          EVENT: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          case "$EVENT" in
+            release) tag="$RELEASE_TAG" ;;
+            workflow_dispatch) tag="$INPUT_TAG" ;;
+            *) tag="" ;;
+          esac
+          if [ -n "$tag" ] && [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::unexpected tag: ${tag}"
+            exit 1
+          fi
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # The release tag; empty (the default ref) on pull requests.
+          ref: ${{ steps.tag.outputs.tag && format('refs/tags/{0}', steps.tag.outputs.tag) || '' }}
+          # Tags and history for git describe on pull requests.
+          fetch-depth: 0
+      - uses: ./.github/actions/setup-go
+        with:
+          key: binaries
+          workflow: .github/workflows/binaries.yml
+      - name: Build
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+          CGO_ENABLED: "0"
+        run: |
+          # The version is the tag (vX.Y.Z), like the container image's.
+          version="${TAG:-$(git describe --tags --always)}"
+          # Same commit time for every file: reruns give identical archives.
+          mtime="$(git log -1 --format=%ct)"
+          mkdir -p dist "$RUNNER_TEMP/stage"
+          {
+            echo "## Binaries"
+            echo
+            echo "Version \`${version}\`, \`CGO_ENABLED=0\`, \`-trimpath\`."
+            echo
+            echo "| File | Size | SHA-256 |"
+            echo "| --- | --- | --- |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          for target in linux/amd64 linux/arm64 darwin/arm64; do
+            os="${target%/*}"
+            arch="${target#*/}"
+            stage="$RUNNER_TEMP/stage/${os}_${arch}"
+            archive="wg-stream-proxy_${version#v}_${os}_${arch}.tar.gz"
+            mkdir -p "$stage"
+            GOOS="$os" GOARCH="$arch" go build -trimpath -ldflags "-s -w -X main.version=${version}" \
+              -o "$stage/wg-stream-proxy" ./cmd/wg-stream-proxy
+            cp LICENSE README.md "$stage/"
+            chmod 0755 "$stage/wg-stream-proxy"
+            chmod 0644 "$stage/LICENSE" "$stage/README.md"
+            # Flat archive; fixed order, owner and time; gzip -n leaves
+            # the name and time out of the header.
+            tar --sort=name --owner=0 --group=0 --numeric-owner --mtime="@${mtime}" \
+              -C "$stage" -cf - LICENSE README.md wg-stream-proxy | gzip -n > "dist/${archive}"
+            # The runner is linux/amd64: run that binary once.
+            if [ "$target" = linux/amd64 ]; then
+              "$stage/wg-stream-proxy" version | head -n 1 | grep -Fx "wg-stream-proxy ${version}"
+            fi
+          done
+          (cd dist && sha256sum -- *.tar.gz > SHA256SUMS)
+          for f in dist/*; do
+            echo "| \`${f#dist/}\` | $(stat -c %s "$f") bytes | \`$(sha256sum "$f" | cut -d' ' -f1)\` |" >> "$GITHUB_STEP_SUMMARY"
+          done
+          cat dist/SHA256SUMS
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: binaries
+          path: dist/*
+          if-no-files-found: error
+
+  # Release and dispatch only. Build provenance for the archives, verifiable
+  # with: gh attestation verify <file> --repo KingOfKalk/wg-stream-proxy
+  attest:
+    name: Attest
+    needs: build
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: binaries
+          path: dist
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/*.tar.gz
+
+  # Release and dispatch only. --clobber replaces the files of an earlier
+  # run. No checkout and no other permission: the job only moves files.
+  upload:
+    name: Upload
+    needs: [build, attest]
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: binaries
+          path: dist
+      - name: Upload to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.build.outputs.tag }}
+        run: |
+          gh release upload "$TAG" dist/* --clobber
+          {
+            echo "## Upload"
+            echo
+            echo "Uploaded to [\`${TAG}\`](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/${TAG}):"
+            echo
+            for f in dist/*; do
+              echo "- \`${f#dist/}\`"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"

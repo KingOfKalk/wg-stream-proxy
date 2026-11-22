@@ -18,7 +18,7 @@ Route each IPTV and internet radio channel through its own userspace WireGuard t
 
 - Container image `ghcr.io/kingofkalk/wg-stream-proxy` (`linux/amd64`, `linux/arm64`); pin a version tag from the [releases](https://github.com/KingOfKalk/wg-stream-proxy/releases) (there is no `latest` tag).
 - Docker run and Compose: [docs/deploy.md](docs/deploy.md); Compose file: [`deploy/compose/compose.yaml`](deploy/compose/compose.yaml).
-- Binary: there are no release binaries yet; `go install github.com/KingOfKalk/wg-stream-proxy/cmd/wg-stream-proxy@<version>` or build from source.
+- Binary: `linux/amd64`, `linux/arm64` and `darwin/arm64` archives with checksums on the [releases](https://github.com/KingOfKalk/wg-stream-proxy/releases) page ([docs/deploy.md](docs/deploy.md#standalone)); or `go install github.com/KingOfKalk/wg-stream-proxy/cmd/wg-stream-proxy@<version>`, or build from source.
 - Config: copy [`examples/config`](examples/config) (it connects nowhere until you add your own tunnel file), run `wg-stream-proxy check --config-dir <dir>`, then `wg-stream-proxy serve --config-dir <dir>`.
 - Point the player at `http://<host>:2349/playlist.m3u8`.
 - Commands and flags: `wg-stream-proxy help` and `wg-stream-proxy help <command>`.

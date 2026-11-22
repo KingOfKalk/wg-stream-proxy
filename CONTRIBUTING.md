@@ -157,6 +157,8 @@ Releases are automated with
 - the workflows authenticate as the GitHub App `KingOfKalk-Release-Bot`,
   so release PRs and auto-merges trigger the other workflows;
   `GITHUB_TOKEN` events don't
+- the published release starts `container.yml` (image tags) and
+  `binaries.yml` (release binaries, see [Binaries](#binaries))
 
 Do not tag, bump versions, or edit `CHANGELOG.md` by hand.
 
@@ -235,6 +237,24 @@ docker buildx build --platform linux/amd64,linux/arm64 \
 .github/scripts/container-smoke.sh wg-stream-proxy:dev
 docker compose -f deploy/compose/compose.yaml config --quiet
 ```
+
+### Binaries
+
+[`.github/workflows/binaries.yml`](.github/workflows/binaries.yml) builds the
+release binaries. Not a required check: on pull requests it runs only when
+the workflow itself changes.
+
+| Job | When | What |
+| --- | --- | --- |
+| `Build` | published release, manual run, pull request that changes the workflow | `linux/amd64`, `linux/arm64` and `darwin/arm64` cross-compiled on one runner (`CGO_ENABLED=0`, flags of the `Dockerfile`, version = release tag); flat, reproducible `wg-stream-proxy_<version>_<os>_<arch>.tar.gz` (binary, `LICENSE`, `README.md`) and `SHA256SUMS`; uploaded as workflow artifact `binaries`. Permissions: `contents: read` |
+| `Attest` | release and manual run, never on pull requests | build provenance of the archives (`actions/attest-build-provenance`); `id-token` and `attestations: write` |
+| `Upload` | release and manual run, never on pull requests | `gh release upload <tag> … --clobber`, so a rerun replaces the files; `contents: write` |
+
+- Add the binaries to an existing release: `gh workflow run binaries.yml -f tag=vX.Y.Z`
+  (the tag must match `vX.Y.Z`; the workflow builds exactly that tag).
+- Verify a download: `gh attestation verify <file> --repo KingOfKalk/wg-stream-proxy`
+  ([deploy.md](docs/deploy.md#standalone)).
+- macOS binaries are not signed or notarized.
 
 ### Weekly
 
