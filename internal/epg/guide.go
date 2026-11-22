@@ -246,8 +246,11 @@ func (g *Guide) Run(ctx context.Context) {
 			if ctx.Err() != nil {
 				return
 			}
+			// Serve each source as soon as it is fetched, not when the
+			// round is done: a slow source must not hold the guide back.
+			g.merge()
 		}
-		g.merge()
+		g.merge() // a config change without a fetch
 
 		var timer route.Timer
 		if d, ok := g.untilNext(); ok {
@@ -280,19 +283,41 @@ func (g *Guide) interval(st *sourceState) time.Duration {
 	return g.refresh
 }
 
-// due returns the first source in config order that is due, with the
-// ids to filter it for.
+// dueAt is when a source is next due: zero (before any other) while it
+// was never fetched or must be fetched at once, else its last fetch
+// start plus the interval.
+func (g *Guide) dueAt(st *sourceState) time.Time {
+	if st.force || st.tried.IsZero() {
+		return time.Time{}
+	}
+	return st.tried.Add(g.interval(st))
+}
+
+// due returns the due source with the oldest due time, with the ids to
+// filter it for. Sources with the same due time (never fetched, or all
+// after a reload) go in config order. Not config order alone: a source
+// that is due again as soon as its fetch ends (a fetch longer than
+// [epg] refresh) would starve the later ones.
 func (g *Guide) due() (config.EPGSource, uint64, map[string]bool, bool) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	now := g.clock.Now()
+	var (
+		pick  config.EPGSource
+		first time.Time
+		found bool
+	)
 	for _, s := range g.sources {
-		st := g.state[s.Name]
-		if st.force || st.tried.IsZero() || !now.Before(st.tried.Add(g.interval(st))) {
-			return s, st.epoch, idsFor(s.Name, g.wants), true
+		at := g.dueAt(g.state[s.Name])
+		if now.Before(at) || found && !at.Before(first) {
+			continue
 		}
+		pick, first, found = s, at, true
 	}
-	return config.EPGSource{}, 0, nil, false
+	if !found {
+		return config.EPGSource{}, 0, nil, false
+	}
+	return pick, g.state[pick.Name].epoch, idsFor(pick.Name, g.wants), true
 }
 
 // untilNext returns the time until the next source is due; false
@@ -304,11 +329,9 @@ func (g *Guide) untilNext() (time.Duration, bool) {
 		return 0, false
 	}
 	now := g.clock.Now()
-	var next time.Time
-	for _, s := range g.sources {
-		st := g.state[s.Name]
-		at := st.tried.Add(g.interval(st))
-		if next.IsZero() || at.Before(next) {
+	next := g.dueAt(g.state[g.sources[0].Name])
+	for _, s := range g.sources[1:] {
+		if at := g.dueAt(g.state[s.Name]); at.Before(next) {
 			next = at
 		}
 	}

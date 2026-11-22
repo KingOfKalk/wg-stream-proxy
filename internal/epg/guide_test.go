@@ -198,6 +198,14 @@ func (e *guideEnv) load(t *testing.T, configTOML, channels string) *config.Confi
 // returns once the first round of fetches is done.
 func startGuide(t *testing.T, configTOML, channels string, answers map[string]func(context.Context) (*http.Response, error)) *guideEnv {
 	t.Helper()
+	e := startGuideNoWait(t, configTOML, channels, answers)
+	e.clock.waitIdle(t)
+	return e
+}
+
+// startGuideNoWait runs a guide like startGuide but returns at once.
+func startGuideNoWait(t *testing.T, configTOML, channels string, answers map[string]func(context.Context) (*http.Response, error)) *guideEnv {
+	t.Helper()
 	e := &guideEnv{clock: newManualClock(), src: &fakeSources{answers: answers}, logs: &syncBuf{}, dir: t.TempDir()}
 	log := slog.New(slog.NewTextHandler(e.logs, nil))
 	e.g = NewGuide(GuideOptions{Fetch: e.src.fetch, Clock: e.clock, Logger: log})
@@ -212,7 +220,6 @@ func startGuide(t *testing.T, configTOML, channels string, answers map[string]fu
 		cancel()
 		<-done
 	})
-	e.clock.waitIdle(t)
 	return e
 }
 
@@ -251,6 +258,90 @@ func TestGuideFirstFetch(t *testing.T) {
 	}
 	if !strings.Contains(e.logs.String(), "epg source fetched") || !strings.Contains(e.logs.String(), "url=https://epg.example.org/gr.xml.gz") {
 		t.Errorf("logs:\n%s", e.logs)
+	}
+}
+
+// A slow source must not hold back the guide: it is served once the
+// first source is fetched, while the second is still in progress.
+func TestGuideServedWhileASourceIsSlow(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	slow := func(ctx context.Context) (*http.Response, error) {
+		close(started)
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		return body(200, []byte(source("de", "b")))(ctx)
+	}
+	e := startGuideNoWait(t, twoSources("6h"), guideChannels, map[string]func(context.Context) (*http.Response, error){
+		"gr": body(200, []byte(source("gr", "a"))),
+		"de": slow,
+	})
+	select {
+	case <-started:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the second source is not fetched")
+	}
+	first := e.g.Output()
+	if first == nil {
+		t.Fatal("no guide while the second source is in progress")
+	}
+	if s := string(first.Plain); !strings.Contains(s, "<title>gr a</title>") || strings.Contains(s, "<title>de b</title>") ||
+		!first.Modified.Equal(filterNow) {
+		t.Errorf("guide (modified %v):\n%s", first.Modified, first.Plain)
+	}
+
+	e.clock.advance(time.Minute)
+	close(release)
+	e.clock.waitIdle(t)
+	out := e.g.Output()
+	if s := string(out.Plain); !strings.Contains(s, "<title>gr a</title>") || !strings.Contains(s, "<title>de b</title>") {
+		t.Errorf("guide:\n%s", s)
+	}
+	if out.ETag == first.ETag || !out.Modified.Equal(filterNow.Add(time.Minute)) {
+		t.Errorf("etag %s modified %v", out.ETag, out.Modified)
+	}
+}
+
+// With a refresh shorter than a fetch the first source is due again as
+// soon as it ends; the others are still fetched, the oldest due time
+// first.
+func TestGuideShortRefreshDoesNotStarve(t *testing.T) {
+	var e *guideEnv
+	grFetches := 0
+	ready := make(chan struct{}) // e is set
+	slowGR := func(ctx context.Context) (*http.Response, error) {
+		<-ready
+		grFetches++ // only the guide goroutine fetches
+		if grFetches <= 3 {
+			e.clock.advance(2 * time.Minute) // longer than the refresh
+		}
+		return body(200, []byte(source("gr", "a")))(ctx)
+	}
+	e = startGuideNoWait(t, twoSources("1m"), guideChannels, map[string]func(context.Context) (*http.Response, error){
+		"gr": slowGR,
+		"de": body(200, []byte(source("de", "b"))),
+	})
+	close(ready)
+	e.clock.waitIdle(t)
+	got := e.src.takeFetched()
+	if len(got) < 2 || got[0] != "gr" || got[1] != "de" {
+		t.Fatalf("fetched %v, want gr then de before gr again", got)
+	}
+	n := 0
+	for _, name := range got {
+		if name == "de" {
+			n++
+		}
+	}
+	if n < 2 {
+		t.Errorf("fetched %v: de is fetched less often than it is due", got)
+	}
+	out := e.g.Output()
+	if out == nil || !strings.Contains(string(out.Plain), "<title>gr a</title>") || !strings.Contains(string(out.Plain), "<title>de b</title>") {
+		t.Errorf("guide: %v", out)
 	}
 }
 
