@@ -350,6 +350,19 @@ func TestRewriteErrors(t *testing.T) {
 	}
 }
 
+// TestRewriteFinalWithUserInfo: every URL of a manifest fetched from a
+// URL with user info resolves to one with it, so the manifest is rejected
+// (spec 3.4, 3.6); a DASH channel sets Authorization in its headers.
+func TestRewriteFinalWithUserInfo(t *testing.T) {
+	opts := testOptions(t)
+	opts.Final = mustParse(t, "https://user:pw@a.example/live/m.mpd")
+	for _, in := range []string{`<MPD><Period/></MPD>`, `<MPD><BaseURL>dash/</BaseURL><Period/></MPD>`} {
+		if out, err := Rewrite([]byte(in), opts); !errors.Is(err, ErrInvalidManifest) {
+			t.Errorf("Rewrite(%s) = %q, %v; want ErrInvalidManifest", in, out, err)
+		}
+	}
+}
+
 func TestRewriteOptionErrors(t *testing.T) {
 	in := []byte(`<MPD><Period/></MPD>`)
 	for _, final := range []string{"", "/rel/m.mpd", "ftp://a.example/m.mpd", "https:///m.mpd"} {

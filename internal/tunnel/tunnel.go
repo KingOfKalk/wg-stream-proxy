@@ -340,7 +340,8 @@ type Tunnel struct {
 	// mu guards the activity state below. It is never held while m.mu
 	// is taken.
 	mu sync.Mutex
-	// inflight counts the requests between Begin and end.
+	// inflight counts the requests between Begin or BeginBackground and
+	// end.
 	inflight int
 	// busy is open while inflight > 0 and closed when it drops to 0.
 	busy chan struct{}
@@ -404,7 +405,7 @@ func newTunnel(m *Manager, cfg *wgquick.Tunnel) *Tunnel {
 		t.dnsTypes = append(t.dnsTypes, dnsmessage.TypeAAAA)
 	}
 	for _, a := range cfg.DNS {
-		if t.check(a) == nil {
+		if t.cfg.Reaches(a) { // the rule of the check warnings (wgquick.Parse)
 			t.dns = append(t.dns, a)
 		}
 	}
@@ -434,8 +435,10 @@ func (t *Tunnel) Up() bool {
 	return !hs.IsZero() && t.m.opts.Clock.Now().Sub(hs) < handshakeFresh
 }
 
-// LastActivity returns the time of the latest LookupNetIP or DialContext
-// call, or the zero time.
+// LastActivity returns the time of the latest activity: Begin or the end
+// of its request, or a LookupNetIP or DialContext call while no request
+// is in flight; or the zero time. Background requests (BeginBackground)
+// and the lookups and dials during any request are not counted.
 func (t *Tunnel) LastActivity() time.Time {
 	ns := t.lastActivity.Load()
 	if ns == 0 {
@@ -448,6 +451,17 @@ func (t *Tunnel) touch() {
 	t.lastActivity.Store(t.m.opts.Clock.Now().UnixNano())
 }
 
+// touchOutside records a lookup or dial as activity if no request is in
+// flight: within a request, Begin and end record it, and a background
+// request is no activity (spec 2.1, 6.1).
+func (t *Tunnel) touchOutside() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.inflight == 0 {
+		t.touch()
+	}
+}
+
 // LookupNetIP resolves host with the tunnel's DNS servers, inside the
 // tunnel (spec 2.1). It returns only addresses DialContext accepts, IPv4
 // first. An IP literal is returned as is if reachable. Answers are cached
@@ -455,7 +469,7 @@ func (t *Tunnel) touch() {
 // concurrent lookups of one name share one query. It starts the
 // tunnel if needed.
 func (t *Tunnel) LookupNetIP(ctx context.Context, host string) ([]netip.Addr, error) {
-	t.touch()
+	t.touchOutside()
 	r, err := t.ensure(ctx)
 	if err != nil {
 		return nil, err
@@ -514,7 +528,7 @@ func (t *Tunnel) check(addr netip.Addr) error {
 // ErrNotAllowed before anything is started or sent. It starts the tunnel
 // if needed.
 func (t *Tunnel) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
-	t.touch()
+	t.touchOutside()
 	ap, err := netip.ParseAddrPort(address)
 	if err != nil || ap.Addr().Zone() != "" {
 		return nil, &net.OpError{Op: "dial", Net: network, Err: fmt.Errorf("tunnel %q: address must be ip:port", t.cfg.Name)}

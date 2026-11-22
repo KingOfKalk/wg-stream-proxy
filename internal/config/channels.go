@@ -11,6 +11,8 @@ import (
 	"slices"
 	"strings"
 	"unicode"
+
+	"golang.org/x/net/http/httpguts"
 )
 
 // maxURLLen is the maximum upstream URL length (spec 3.4).
@@ -298,7 +300,7 @@ func (l *channelLoader) layer(prefix string, up rawUpstream, pl rawPlaylist) lay
 		switch {
 		case !ValidHeaderName(k):
 			fail("upstream.headers", "invalid header name %q", k)
-		case strings.ContainsAny(v, "\r\n\x00"):
+		case !ValidHeaderValue(v):
 			fail("upstream.headers", "invalid value for header %q", ck)
 		case ck == "Host":
 			fail("upstream.headers", "%q is not allowed: net/http sends the host of the URL, a Host header would have no effect", ck)
@@ -401,6 +403,13 @@ func ValidHeaderName(s string) bool {
 		}
 	}
 	return true
+}
+
+// ValidHeaderValue reports whether s is a valid HTTP header field value:
+// no control characters except tab (httpguts.ValidHeaderFieldValue), so
+// net/http can send it. The empty value is valid (the opt-out, spec 5.4).
+func ValidHeaderValue(s string) bool {
+	return httpguts.ValidHeaderFieldValue(s)
 }
 
 // validAttrName reports whether s can be written as name="value" in an

@@ -238,6 +238,8 @@ func (a *countingActivity) Begin() func() {
 	return func() { a.n.Add(-1) }
 }
 
+func (a *countingActivity) BeginBackground() func() { return a.Begin() }
+
 // TestUseCountsBeforeTheSwap: use counts a request on its route's tunnel
 // before it returns the generation, and returns one only if it is still
 // active after the count. A reload that swaps in between makes it take

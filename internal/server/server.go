@@ -160,12 +160,27 @@ type generation struct {
 // reload. For that, use returns a generation only if it was still active
 // after the count; else it takes the next one.
 func (s *Server) use(ctx context.Context, pick func(*generation) string) (*generation, context.Context, func()) {
+	return s.useWith(ctx, pick, (*route.Route).Begin)
+}
+
+// useBackground is use for an EPG fetch: it counts on the tunnel as a
+// background request (route.Route.BeginBackground), which keeps the
+// tunnel up and is drained like a request but is not activity for the
+// idle close (spec 2.1, 6.1).
+func (s *Server) useBackground(ctx context.Context, pick func(*generation) string) (*generation, context.Context, func()) {
+	return s.useWith(ctx, pick, (*route.Route).BeginBackground)
+}
+
+// useWith is use with begin counting the request on its route.
+func (s *Server) useWith(ctx context.Context, pick func(*generation) string,
+	begin func(*route.Route, context.Context) (context.Context, func()),
+) (*generation, context.Context, func()) {
 	for {
 		g := s.gen.Load()
 		g.users.Add(1)
 		fctx, end := ctx, func() {}
 		if rt, ok := g.routes.Route(pick(g)); ok {
-			fctx, end = rt.Begin(ctx)
+			fctx, end = begin(rt, ctx)
 		}
 		if s.gen.Load() == g {
 			return g, fctx, sync.OnceFunc(func() {

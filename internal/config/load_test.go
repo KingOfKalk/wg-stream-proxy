@@ -186,7 +186,10 @@ func TestLoadErrors(t *testing.T) {
 		{"idle zero", map[string]string{"config.toml": "[tunnels]\nidle_timeout = \"0s\"\n"}, []string{"tunnels.idle_timeout: must be positive"}},
 		{"public base url", map[string]string{"config.toml": "public_base_url = \"wsp.lan\"\n"}, []string{"public_base_url: must be an absolute http(s) URL"}},
 		{"epg url", map[string]string{"config.toml": "[epg]\nurl = \"ftp://example.com/epg.xml\"\n"}, []string{"epg.url: must be an absolute http(s) URL"}},
-		{"user agent line break", map[string]string{"config.toml": "[upstream]\nuser_agent = \"a\\nb\"\n"}, []string{"upstream.user_agent: must not contain line breaks"}},
+		{"user agent line break", map[string]string{"config.toml": "[upstream]\nuser_agent = \"a\\nb\"\n"}, []string{"upstream.user_agent: must not contain control characters"}},
+		{"user agent control character", map[string]string{"config.toml": "[upstream]\nuser_agent = \"a\\u0001b\"\n"}, []string{"upstream.user_agent: must not contain control characters"}},
+		{"user agent DEL", map[string]string{"config.toml": "[upstream]\nuser_agent = \"a\\u007fb\"\n"}, []string{"upstream.user_agent: must not contain control characters"}},
+		{"user agent NUL", map[string]string{"config.toml": "[upstream]\nuser_agent = \"a\\u0000b\"\n"}, []string{"upstream.user_agent: must not contain control characters"}},
 		{"debug listen", map[string]string{"config.toml": "[debug]\nlisten = \"nope\"\n"}, []string{"config.toml: debug.listen: invalid address \"nope\": use [host]:port"}},
 		{"debug listen port name", map[string]string{"config.toml": "[debug]\nlisten = \"127.0.0.1:http\"\n"}, []string{"debug.listen: invalid address"}},
 		{"debug listen on the default port", map[string]string{"config.toml": "[debug]\nlisten = \"127.0.0.1:2349\"\n"}, []string{"config.toml: debug.listen: must not use the port of listen (2349)"}},
@@ -248,6 +251,10 @@ func TestLoadErrors(t *testing.T) {
 		{"global Accept-Encoding header", map[string]string{"channels.d/_defaults.toml": "[defaults.upstream]\nheaders = { accept-encoding = \"gzip\" }\n"}, []string{"_defaults.toml: defaults.upstream.headers: \"Accept-Encoding\" is not allowed"}},
 		{"header name", map[string]string{gr: "", "channels.d/gr.toml": ch("[channel.upstream]", "headers = { \"Bad Header\" = \"x\" }")}, []string{"upstream.headers: invalid header name \"Bad Header\""}},
 		{"header value", map[string]string{gr: "", "channels.d/gr.toml": "[defaults.upstream]\nheaders = { X-A = \"a\\r\\nX-B: b\" }\n"}, []string{"gr.toml: defaults.upstream.headers: invalid value for header \"X-A\""}},
+		{"header value control character", map[string]string{gr: "", "channels.d/gr.toml": ch("[channel.upstream]", "headers = { X-A = \"a\\u0001b\" }")}, []string{"upstream.headers: invalid value for header \"X-A\""}},
+		{"header value DEL", map[string]string{gr: "", "channels.d/gr.toml": ch("[channel.upstream]", "headers = { X-A = \"a\\u007fb\" }")}, []string{"upstream.headers: invalid value for header \"X-A\""}},
+		{"file defaults header value control character", map[string]string{gr: "", "channels.d/gr.toml": "[defaults.upstream]\nheaders = { X-A = \"\\u001f\" }\n"}, []string{"gr.toml: defaults.upstream.headers: invalid value for header \"X-A\""}},
+		{"global header value control character", map[string]string{"channels.d/_defaults.toml": "[defaults.upstream]\nheaders = { X-A = \"a\\u0008\" }\n"}, []string{"_defaults.toml: defaults.upstream.headers: invalid value for header \"X-A\""}},
 		{"reserved attr tvg-id", map[string]string{gr: "", "channels.d/gr.toml": ch("[channel.playlist]", "attrs = { tvg-id = \"x\" }")}, []string{"playlist.attrs: \"tvg-id\" is reserved, use the dedicated field"}},
 		{"reserved attr tvg-name", map[string]string{gr: "", "channels.d/gr.toml": ch("[channel.playlist]", "attrs = { tvg-name = \"x\" }")}, []string{"\"tvg-name\" is reserved"}},
 		{"reserved attr tvg-logo", map[string]string{gr: "", "channels.d/gr.toml": ch("[channel.playlist]", "attrs = { tvg-logo = \"x\" }")}, []string{"\"tvg-logo\" is reserved"}},
@@ -696,5 +703,81 @@ func TestLoadOtherHeadersStillLoad(t *testing.T) {
 	}
 	if _, err := loadDir(writeConfigDir(t, files)); err != nil {
 		t.Errorf("Load() error = %v", err)
+	}
+}
+
+// TestHeaderValuesAccepted: tab, spaces, non-ASCII text and the empty
+// opt-out value stay valid (only control characters are rejected).
+func TestHeaderValuesAccepted(t *testing.T) {
+	dir := writeConfigDir(t, map[string]string{
+		"config.toml":        "[upstream]\nuser_agent = \"Agent\\t1 \\u00e4\"\n",
+		"tunnels/gr.conf":    "",
+		"channels.d/gr.toml": ch("[channel.upstream]", "headers = { X-A = \"a\\tb \\u00e4\", X-B = \"\" }"),
+	})
+	if _, err := loadDir(dir); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+}
+
+func TestValidHeaderValue(t *testing.T) {
+	tests := []struct {
+		in   string
+		want bool
+	}{
+		{"", true},
+		{"a b\tc", true},
+		{"\u00e4\u00ff", true},
+		{"\x00", false},
+		{"\x01", false},
+		{"\r", false},
+		{"\n", false},
+		{"\x1f", false},
+		{"\x7f", false},
+	}
+	for _, tt := range tests {
+		if got := ValidHeaderValue(tt.in); got != tt.want {
+			t.Errorf("ValidHeaderValue(%q) = %v, want %v", tt.in, got, tt.want)
+		}
+	}
+}
+
+// TestAllowPrivateUnmapped: an IPv4-mapped IPv6 prefix is stored as the
+// IPv4 prefix, as the guard unmaps addresses before matching (spec 5.3).
+func TestAllowPrivateUnmapped(t *testing.T) {
+	tests := []struct {
+		in, want string
+	}{
+		{"::ffff:10.0.0.0/104", "10.0.0.0/8"},
+		{"::ffff:192.168.1.0/120", "192.168.1.0/24"},
+		{"::ffff:192.0.2.7/128", "192.0.2.7/32"},
+		{"::ffff:0.0.0.0/96", "0.0.0.0/0"},
+		{"10.0.0.0/8", "10.0.0.0/8"},
+		{"fd00::/8", "fd00::/8"},
+		{"::fffe:0:0/95", "::fffe:0:0/95"},
+		{"::/0", "::/0"},
+		// below /96 a prefix cannot be inside ::ffff:0:0/96: the mapped
+		// base address has host bits set.
+		{"::ffff:0:0/95", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.in, func(t *testing.T) {
+			dir := writeConfigDir(t, map[string]string{
+				"config.toml": "[upstream.allow_private]\ndirect = [\"" + tt.in + "\"]\n",
+			})
+			cfg, err := loadDir(dir)
+			if tt.want == "" {
+				if err == nil || !strings.Contains(err.Error(), "host bits set") {
+					t.Fatalf("Load() error = %v, want host bits error", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			got := cfg.AllowPrivate()["direct"]
+			if len(got) != 1 || got[0].String() != tt.want {
+				t.Errorf("AllowPrivate = %v, want [%s]", got, tt.want)
+			}
+		})
 	}
 }

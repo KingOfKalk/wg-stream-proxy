@@ -200,11 +200,10 @@ func (m *Manager) SetTimeouts(connect, idle time.Duration) error {
 	if time.Duration(m.idleTimeout.Swap(int64(idle))) == idle {
 		return nil
 	}
-	now := m.opts.Clock.Now()
 	for _, t := range m.Tunnels() {
 		t.mu.Lock()
 		if t.inflight == 0 {
-			t.armIdleIn(max(0, idle-now.Sub(t.LastActivity())))
+			t.armIdle()
 		}
 		t.mu.Unlock()
 	}
