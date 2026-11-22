@@ -924,7 +924,7 @@ func waitDNSAnswered(t *testing.T, tun *Tunnel) {
 	}
 }
 
-func TestLookupPartialAnswerWhenOneTypeIsNotAnswered(t *testing.T) {
+func TestLookupPartialAnswerWhenCallerEnds(t *testing.T) {
 	peer := tunneltest.Start(t, dualStack)
 	peer.SetHost("dual.test", upstream6, upstream4)
 	tun, env := freshTunnel(t, peer)
@@ -956,21 +956,7 @@ func TestLookupPartialAnswerWhenOneTypeIsNotAnswered(t *testing.T) {
 	}
 }
 
-func TestLookupPartialAnswerAtDeadline(t *testing.T) {
-	peer := tunneltest.Start(t, dualStack)
-	peer.SetHost("dual.test", upstream6, upstream4)
-	tun, _ := startedTunnel(t, peer)
-	peer.DropDNSType(dnsmessage.TypeAAAA, true)
-
-	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
-	defer cancel()
-	got, err := tun.LookupNetIP(ctx, "dual.test")
-	if err != nil || !slices.Equal(got, []netip.Addr{upstream4}) {
-		t.Errorf("LookupNetIP = %v, %v; want [%v]", got, err, upstream4)
-	}
-}
-
-func TestLookupPartialAnswerForEverySharedCaller(t *testing.T) {
+func TestLookupPartialAnswerWhenSharedCallersEnd(t *testing.T) {
 	peer := tunneltest.Start(t, dualStack)
 	peer.SetHost("dual.test", upstream6, upstream4)
 	tun, _ := freshTunnel(t, peer)
@@ -1072,4 +1058,158 @@ func countQueries(queries []string, q string) int {
 		}
 	}
 	return n
+}
+
+// resolutionDelay is the time a lookup waits for the other types once one
+// is answered with addresses.
+const resolutionDelay = 50 * time.Millisecond
+
+// backgroundDone blocks until the client of tun has no flight in
+// progress. It fails t after 10s.
+func backgroundDone(t *testing.T, tun *Tunnel) {
+	t.Helper()
+	c := tun.run.Load().dns
+	giveUp := time.Now().Add(10 * time.Second)
+	for {
+		c.mu.Lock()
+		n := len(c.pending)
+		c.mu.Unlock()
+		if n == 0 {
+			return
+		}
+		if time.Now().After(giveUp) {
+			t.Fatalf("%d flights still running after 10s", n)
+		}
+		runtime.Gosched()
+	}
+}
+
+// A lookup returns the answered addresses dnsResolutionDelay after the
+// answer, without its ctx ending; the unanswered type keeps resolving in
+// the background and lands in the cache.
+func TestLookupResolutionDelay(t *testing.T) {
+	peer := tunneltest.Start(t, dualStack)
+	peer.SetHost("dual.test", upstream6, upstream4)
+	tun, env := startedTunnel(t, peer)
+	peer.DropDNSType(dnsmessage.TypeAAAA, true)
+
+	done := lookupAsync(t.Context(), tun, "dual.test")
+	env.clock.waitArmed(t, resolutionDelay)
+	env.clock.advance(resolutionDelay - time.Millisecond)
+	assertPending(t, done)
+	env.clock.advance(time.Millisecond)
+	r := <-done
+	if r.err != nil || !slices.Equal(r.addrs, []netip.Addr{upstream4}) {
+		t.Fatalf("LookupNetIP = %v, %v; want [%v]", r.addrs, r.err, upstream4)
+	}
+
+	// The flight goes on: a lookup that joins it gets the cached A at once.
+	again, err := tun.LookupNetIP(t.Context(), "dual.test")
+	if err != nil || !slices.Equal(again, []netip.Addr{upstream4}) {
+		t.Errorf("second LookupNetIP = %v, %v; want [%v]", again, err, upstream4)
+	}
+
+	// The server answers AAAA after all; the background flight's retry
+	// (0.5s) gets it and the flight ends.
+	peer.DropDNSType(dnsmessage.TypeAAAA, false)
+	env.clock.waitArmed(t, 500*time.Millisecond-resolutionDelay)
+	env.clock.advance(500*time.Millisecond - resolutionDelay)
+	backgroundDone(t, tun)
+	if got := env.clock.pending(); got != 0 {
+		t.Errorf("%d timers left armed", got)
+	}
+	both, err := tun.LookupNetIP(t.Context(), "dual.test")
+	if err != nil || !slices.Equal(both, []netip.Addr{upstream4, upstream6}) {
+		t.Errorf("third LookupNetIP = %v, %v; want [%v %v]", both, err, upstream4, upstream6)
+	}
+	if n := countQueries(peer.Queries(), "dual.test A"); n != 1 {
+		t.Errorf("A queries = %d, want 1", n)
+	}
+}
+
+func TestLookupResolutionDelayForEverySharedCaller(t *testing.T) {
+	peer := tunneltest.Start(t, dualStack)
+	peer.SetHost("dual.test", upstream6, upstream4)
+	tun, env := startedTunnel(t, peer)
+	peer.DropDNSType(dnsmessage.TypeAAAA, true)
+
+	const callers = 4
+	var done []<-chan lookupResult
+	for range callers {
+		done = append(done, lookupAsync(t.Context(), tun, "dual.test"))
+	}
+	waitWaiters(t, tun, "dual.test", callers)
+	env.clock.waitArmed(t, resolutionDelay)
+	env.clock.advance(resolutionDelay)
+	for i, ch := range done {
+		if r := <-ch; r.err != nil || !slices.Equal(r.addrs, []netip.Addr{upstream4}) {
+			t.Errorf("caller %d: LookupNetIP = %v, %v; want [%v]", i, r.addrs, r.err, upstream4)
+		}
+	}
+	if n := countQueries(peer.Queries(), "dual.test A"); n != 1 {
+		t.Errorf("A queries = %d, want 1 (one shared flight)", n)
+	}
+}
+
+// A background flight is bounded: connect_timeout after its start it
+// ends, and the next lookup starts a new one that asks the missing type
+// only, waiting the resolution delay for it.
+func TestLookupBackgroundFlightIsBounded(t *testing.T) {
+	peer := tunneltest.Start(t, dualStack)
+	peer.SetHost("dual.test", upstream6, upstream4)
+	peer.SetTTL(300)
+	tun, env := startedTunnel(t, peer)
+	peer.DropDNSType(dnsmessage.TypeAAAA, true)
+
+	done := lookupAsync(t.Context(), tun, "dual.test")
+	env.clock.waitArmed(t, resolutionDelay)
+	env.clock.advance(resolutionDelay)
+	if r := <-done; r.err != nil || !slices.Equal(r.addrs, []netip.Addr{upstream4}) {
+		t.Fatalf("first LookupNetIP = %v, %v; want [%v]", r.addrs, r.err, upstream4)
+	}
+	// The bound is armed for the rest of connect_timeout.
+	env.clock.waitArmed(t, testConnectTimeout-resolutionDelay)
+	env.clock.advance(testConnectTimeout - resolutionDelay)
+	backgroundDone(t, tun)
+	if got := env.clock.pending(); got != 0 {
+		t.Errorf("%d timers left armed after the bound", got)
+	}
+
+	// A is still cached; the new flight asks AAAA only, and the delay
+	// starts with it.
+	second := lookupAsync(t.Context(), tun, "dual.test")
+	env.clock.waitArmed(t, resolutionDelay)
+	assertPending(t, second)
+	env.clock.advance(resolutionDelay)
+	if r := <-second; r.err != nil || !slices.Equal(r.addrs, []netip.Addr{upstream4}) {
+		t.Errorf("second LookupNetIP = %v, %v; want [%v]", r.addrs, r.err, upstream4)
+	}
+	if n := countQueries(peer.Queries(), "dual.test A"); n != 1 {
+		t.Errorf("A queries = %d, want 1 (cached)", n)
+	}
+}
+
+// The tunnel stopping ends a background flight.
+func TestLookupBackgroundFlightEndsWhenTunnelStops(t *testing.T) {
+	peer := tunneltest.Start(t, dualStack)
+	peer.SetHost("dual.test", upstream6, upstream4)
+	m, env := newManager(t, peer.ClientTunnel(t, "gr"))
+	tun := mustTunnel(t, m, "gr")
+	if _, err := tun.LookupNetIP(t.Context(), tunneltest.ServerAddr4.String()); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	peer.DropDNSType(dnsmessage.TypeAAAA, true)
+
+	done := lookupAsync(t.Context(), tun, "dual.test")
+	env.clock.waitArmed(t, resolutionDelay)
+	env.clock.advance(resolutionDelay)
+	if r := <-done; r.err != nil || !slices.Equal(r.addrs, []netip.Addr{upstream4}) {
+		t.Fatalf("LookupNetIP = %v, %v; want [%v]", r.addrs, r.err, upstream4)
+	}
+	if err := drain(m, "gr", 0); err != nil {
+		t.Fatalf("Drain: %v", err)
+	}
+	if got := env.clock.pending(); got != 0 {
+		t.Errorf("%d timers left armed", got)
+	}
 }

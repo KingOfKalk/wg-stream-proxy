@@ -41,6 +41,11 @@ const (
 	// it goes on with the last of dnsRetryDelays.
 	dnsWarmupRounds = 32
 
+	// dnsResolutionDelay is how long a lookup waits for the other types
+	// once one is answered with addresses (spec 2.1), as the resolution
+	// delay of RFC 8305.
+	dnsResolutionDelay = 50 * time.Millisecond
+
 	// dnsUDPSize is the EDNS(0) UDP payload size offered to servers, as in
 	// Go's resolver.
 	dnsUDPSize = 1232
@@ -75,6 +80,8 @@ type dnsClient struct {
 	// the tunnel has.
 	types []dnsmessage.Type
 	clock Clock
+	// limit returns connect_timeout, the longest a flight runs.
+	limit func() time.Duration
 	// answered: a server answered a query of this client, so the DNS
 	// path through the tunnel works. Until then queries retry with
 	// dnsWarmupDelay.
@@ -92,13 +99,14 @@ type dnsClient struct {
 	pending map[string]*dnsFlight
 }
 
-func newDNSClient(n *netstack.Net, servers []netip.Addr, types []dnsmessage.Type, clock Clock) *dnsClient {
+func newDNSClient(n *netstack.Net, servers []netip.Addr, types []dnsmessage.Type, clock Clock, limit func() time.Duration) *dnsClient {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &dnsClient{
 		net:     n,
 		servers: servers,
 		types:   types,
 		clock:   clock,
+		limit:   limit,
 		ctx:     ctx,
 		cancel:  cancel,
 		cache:   dnsCache{entries: map[dnsKey]dnsEntry{}, size: dnsCacheSize},
@@ -119,10 +127,22 @@ func (c *dnsClient) close() {
 
 // dnsFlight is the query of one name shared by all lookups that want it
 // at the same time (singleflight). It runs while at least one of them
-// still waits; the last one to give up cancels it.
+// still waits; the last one to give up cancels it. Once a type has been
+// answered with addresses and dnsResolutionDelay has passed, the waiters
+// return and the flight runs on in the background, resolving the other
+// types for the cache; the lookups that join it meanwhile return the
+// cached addresses at once.
 type dnsFlight struct {
 	cancel  context.CancelFunc
+	started time.Time
 	waiters int // guarded by dnsClient.mu
+	// early is closed when the resolution delay ended with addresses in
+	// the cache; background is then true. Both guarded by dnsClient.mu.
+	early      chan struct{}
+	background bool
+	// bound ends a background flight at connect_timeout after its start,
+	// if it is not done by then (guarded by dnsClient.mu).
+	bound Timer
 	// done is closed when addrs and err are set.
 	done  chan struct{}
 	addrs []netip.Addr
@@ -159,7 +179,7 @@ func (c *dnsClient) lookup(ctx context.Context, host string) ([]netip.Addr, erro
 			return flatten(c.types, cached), nil
 		}
 		fctx, cancel := context.WithCancel(c.ctx)
-		f = &dnsFlight{cancel: cancel, done: make(chan struct{})}
+		f = &dnsFlight{cancel: cancel, started: c.clock.Now(), early: make(chan struct{}), done: make(chan struct{})}
 		c.pending[key] = f
 		c.flights.Add(1)
 		go c.fly(fctx, f, key, host, name, cached, missing)
@@ -167,19 +187,32 @@ func (c *dnsClient) lookup(ctx context.Context, host string) ([]netip.Addr, erro
 	f.waiters++
 	c.mu.Unlock()
 
-	select {
-	case <-f.done:
-		return slices.Clone(f.addrs), f.err
-	case <-ctx.Done():
-		c.leave(key, f)
-		// Every answered type is in the cache: the flight stores it as
-		// soon as it arrives, so this holds for each waiter, whether it
-		// was the last or not. Not for a tunnel that stopped or a name
-		// that does not exist.
-		if addrs := c.cachedAddrs(key); len(addrs) > 0 {
-			return addrs, nil
+	early := f.early
+	for {
+		select {
+		case <-f.done:
+			return slices.Clone(f.addrs), f.err
+		case <-early:
+			// The resolution delay ended with addresses: return them
+			// and let the flight resolve the other types for the cache.
+			early = nil
+			if addrs := c.cachedAddrs(key); len(addrs) > 0 {
+				c.leave(key, f)
+				return addrs, nil
+			}
+			// Gone from the cache (cleared by close, or evicted):
+			// wait for the end of the flight.
+		case <-ctx.Done():
+			c.leave(key, f)
+			// Every answered type is in the cache: the flight stores it
+			// as soon as it arrives, so this holds for each waiter,
+			// whether it was the last or not. Not for a tunnel that
+			// stopped or a name that does not exist.
+			if addrs := c.cachedAddrs(key); len(addrs) > 0 {
+				return addrs, nil
+			}
+			return nil, fmt.Errorf("lookup %s: %w", host, ctx.Err())
 		}
-		return nil, fmt.Errorf("lookup %s: %w", host, ctx.Err())
 	}
 }
 
@@ -199,12 +232,15 @@ func (c *dnsClient) cachedAddrs(key string) []netip.Addr {
 	return flatten(c.types, cached)
 }
 
-// leave removes a lookup whose ctx ended from flight f. The last one
-// cancels f and waits until it has stopped its timers and sockets.
+// leave removes a lookup that returns before f ends, because its ctx
+// ended or the resolution delay did. The last one cancels f and waits
+// until it has stopped its timers and sockets, unless f already
+// continues in the background: then it runs on until it is done or its
+// bound (dnsFlight.bound) ends it.
 func (c *dnsClient) leave(key string, f *dnsFlight) {
 	c.mu.Lock()
 	f.waiters--
-	last := f.waiters == 0
+	last := f.waiters == 0 && !f.background
 	if last && c.pending[key] == f {
 		delete(c.pending, key)
 	}
@@ -216,22 +252,39 @@ func (c *dnsClient) leave(key string, f *dnsFlight) {
 }
 
 // fly runs flight f: it asks the missing types, caches each answer as it
-// arrives and sets the result for all waiters. The flight ends early only
+// arrives and sets the result for all waiters. Once a type is answered
+// with addresses (also one cached before the flight), the waiters get
+// them after dnsResolutionDelay at the latest and the flight goes on in
+// the background (see dnsFlight.bound). Otherwise it ends early only
 // when its last waiter gave up or the client closed; nobody reads the
 // result of the former, and the answers it got stay cached.
 func (c *dnsClient) fly(ctx context.Context, f *dnsFlight, key, host string, name dnsmessage.Name, cached map[dnsmessage.Type][]netip.Addr, missing []dnsmessage.Type) {
 	defer c.flights.Done()
 	defer f.cancel()
-	queries, err := c.exchange(ctx, host, name, missing, func(q *dnsQuery) {
+	haveAddrs := len(flatten(c.types, cached)) > 0
+	queries, err := c.exchange(ctx, host, name, missing, haveAddrs, func(q *dnsQuery) {
 		c.mu.Lock()
 		defer c.mu.Unlock()
 		if !c.closed {
 			now := c.clock.Now()
 			c.cache.put(dnsKey{key, q.q.Type}, dnsEntry{addrs: q.addrs, expires: now.Add(clampTTL(q.ttl))}, now)
 		}
+	}, func() {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		if c.closed || f.background {
+			return
+		}
+		f.background = true
+		close(f.early)
+		// The flight lives at most connect_timeout from its start.
+		f.bound = c.clock.AfterFunc(max(c.limit()-c.clock.Now().Sub(f.started), 0), f.cancel)
 	})
 
 	c.mu.Lock()
+	if f.bound != nil {
+		f.bound.Stop()
+	}
 	if c.pending[key] == f {
 		delete(c.pending, key)
 	}
@@ -408,6 +461,10 @@ type dnsExchange struct {
 	queries []*dnsQuery
 	results chan dnsResult
 	retries chan dnsRetry
+	// delay is the resolution delay timer, once armed; delayed is
+	// signalled when it fires.
+	delay   Timer
+	delayed chan struct{}
 	conns   []net.Conn
 	readers sync.WaitGroup
 }
@@ -423,14 +480,18 @@ type dnsExchange struct {
 // not exist, or ctx's error; then some queries may be done, others not.
 // answered is called for every query that got an answer, as it does, so
 // the caller can keep it even if ctx ends before the other queries are
-// done.
-func (c *dnsClient) exchange(ctx context.Context, host string, name dnsmessage.Name, types []dnsmessage.Type, answered func(*dnsQuery)) ([]*dnsQuery, error) {
+// done. Once a query is answered with addresses (or at the start, if
+// haveAddrs: the caller has some already) and others are still open,
+// dnsResolutionDelay starts; when it ends, early is called once and the
+// exchange goes on until the others are done or ctx ends.
+func (c *dnsClient) exchange(ctx context.Context, host string, name dnsmessage.Name, types []dnsmessage.Type, haveAddrs bool, answered func(*dnsQuery), early func()) ([]*dnsQuery, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	l := &dnsExchange{
 		c:       c,
 		ctx:     ctx,
 		results: make(chan dnsResult),
 		retries: make(chan dnsRetry),
+		delayed: make(chan struct{}),
 	}
 	defer l.close(cancel)
 	for _, typ := range types {
@@ -442,11 +503,16 @@ func (c *dnsClient) exchange(ctx context.Context, host string, name dnsmessage.N
 	for i := range l.queries {
 		l.send(i)
 	}
+	if haveAddrs {
+		l.startDelay()
+	}
 
 	for pending := len(l.queries); pending > 0; {
 		select {
 		case <-ctx.Done():
 			return l.queries, ctx.Err()
+		case <-l.delayed:
+			early()
 		case r := <-l.retries:
 			if q := l.queries[r.query]; !q.done && q.rounds == r.round+1 {
 				l.send(r.query)
@@ -488,9 +554,25 @@ func (c *dnsClient) exchange(ctx context.Context, host string, name dnsmessage.N
 				answered(q)
 			}
 			pending--
+			if pending > 0 && q.err == nil && len(q.addrs) > 0 {
+				l.startDelay()
+			}
 		}
 	}
 	return l.queries, nil
+}
+
+// startDelay starts the resolution delay, unless it runs already.
+func (l *dnsExchange) startDelay() {
+	if l.delay != nil {
+		return
+	}
+	l.delay = l.c.clock.AfterFunc(dnsResolutionDelay, func() {
+		select {
+		case l.delayed <- struct{}{}:
+		case <-l.ctx.Done():
+		}
+	})
 }
 
 // queryName returns host as an absolute DNS name, if it is a valid one.
@@ -648,6 +730,9 @@ func (l *dnsExchange) exchangeTCP(server netip.AddrPort, q dnsmessage.Question) 
 // and waits for their readers.
 func (l *dnsExchange) close(cancel context.CancelFunc) {
 	cancel()
+	if l.delay != nil {
+		l.delay.Stop()
+	}
 	for _, q := range l.queries {
 		if q.timer != nil {
 			q.timer.Stop()
