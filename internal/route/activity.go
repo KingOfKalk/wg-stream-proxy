@@ -14,6 +14,10 @@ type Activity interface {
 	// Begin marks the start of a request; the returned func marks its
 	// end.
 	Begin() (end func())
+	// BeginBackground is Begin for a background request (an EPG fetch,
+	// spec 6.1): it keeps the tunnel up and is drained, but is not
+	// activity for the idle close.
+	BeginBackground() (end func())
 }
 
 // countedKey is the context key of Begin: the value is the route the
@@ -28,23 +32,33 @@ type countedKey struct{}
 // must count before its first fetch (a reload drains a retired tunnel
 // only for the requests counted on it, spec 5.6).
 func (r *Route) Begin(ctx context.Context) (context.Context, func()) {
-	return context.WithValue(ctx, countedKey{}, r), r.begin()
+	return context.WithValue(ctx, countedKey{}, r), r.begin(false)
 }
 
-// begin counts a request on the route's Activity, if any. The returned
-// func ends it; calls after the first do nothing.
-func (r *Route) begin() func() {
-	if r.activity == nil {
+// BeginBackground is Begin for a background request: an EPG fetch,
+// which is not activity for the tunnel's idle close (spec 2.1, 6.1).
+func (r *Route) BeginBackground(ctx context.Context) (context.Context, func()) {
+	return context.WithValue(ctx, countedKey{}, r), r.begin(true)
+}
+
+// begin counts a request on the route's Activity, if any, as a
+// background request if background is set. The returned func ends it;
+// calls after the first do nothing.
+func (r *Route) begin(background bool) func() {
+	switch {
+	case r.activity == nil:
 		return func() {}
+	case background:
+		return sync.OnceFunc(r.activity.BeginBackground())
 	}
 	return sync.OnceFunc(r.activity.Begin())
 }
 
-// beginFetch is begin for a Fetch with ctx: nothing if Begin already
-// counts the request on this route.
+// beginFetch is begin for a Fetch with ctx: nothing if Begin or
+// BeginBackground already counts the request on this route.
 func (r *Route) beginFetch(ctx context.Context) func() {
 	if ctx.Value(countedKey{}) == r {
 		return func() {}
 	}
-	return r.begin()
+	return r.begin(false)
 }

@@ -634,3 +634,37 @@ func TestCloseCoversPendingUpdate(t *testing.T) {
 		})
 	}
 }
+
+// TestSetTimeoutsBackground: a changed idle timeout during a background
+// request (an EPG fetch) arms nothing; its end arms the rest of the new
+// timeout since the last activity, or closes the tunnel at once if there
+// was none in it.
+func TestSetTimeoutsBackground(t *testing.T) {
+	for _, withRequest := range []bool{true, false} {
+		name := map[bool]string{true: "after a request", false: "without activity"}[withRequest]
+		t.Run(name, func(t *testing.T) {
+			l := startLifecycle(t)
+			end := l.tun.BeginBackground()
+			c := l.dial(t) // starts the tunnel
+			if withRequest {
+				l.request(t)
+			}
+			l.env.clock.advance(4 * time.Minute)
+			if err := l.m.SetTimeouts(testConnectTimeout, 10*time.Minute); err != nil {
+				t.Fatal(err)
+			}
+			if n := l.env.clock.pending(); n != 0 {
+				t.Errorf("%d timers armed while a background request is in flight, want 0", n)
+			}
+			_ = c.Close()
+			end()
+			want := time.Duration(0)
+			if withRequest {
+				want = 6 * time.Minute
+			}
+			l.env.clock.waitArmed(t, want)
+			l.env.clock.advance(want)
+			l.wantRunning(t, false, 1)
+		})
+	}
+}

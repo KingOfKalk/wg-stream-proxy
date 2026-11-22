@@ -244,7 +244,10 @@ and left out, as are the other direct imports of `cmd/wg-stream-proxy`.
   connections it left in the old pools, and nothing else keeps it.
   `Server.use` also counts each user on its route's tunnel
   (`route.Route.Begin`) until it ends, and returns a generation only if
-  it is still active after that count.
+  it is still active after that count; EPG fetches count as background
+  requests (`route.Route.BeginBackground`), which keep the tunnel up but
+  are not activity for its idle close: without channel activity within
+  `idle_timeout` the tunnel closes when the fetch ends (spec 2.1).
 - `SIGHUP` and the changes `server.Watch` sees call `Reloader.Reload`. It
   loads all files (`config.Load`, `tunnel.Parse`); if they are valid,
   `Manager.Apply` adds the new tunnel set, `route.NewSet` builds new

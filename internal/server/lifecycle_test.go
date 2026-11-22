@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/KingOfKalk/wg-stream-proxy/internal/epg"
+	"github.com/KingOfKalk/wg-stream-proxy/internal/route"
 	"github.com/KingOfKalk/wg-stream-proxy/internal/tunnel"
 	"github.com/KingOfKalk/wg-stream-proxy/internal/tunnel/tunneltest"
 )
@@ -179,5 +181,61 @@ url = "http://upstream.test/radio"
 	clk.advance(idle)
 	if n := idleCloses(); n != 2 {
 		t.Errorf("idle closes after the stream ended = %d, want 2", n)
+	}
+}
+
+// guideClock runs the guide on the tunnels' clock, so one advance moves
+// both the EPG refreshes and the idle timers.
+type guideClock struct{ c *tunnelClock }
+
+func (g guideClock) Now() time.Time { return g.c.Now() }
+
+func (g guideClock) AfterFunc(d time.Duration, f func()) route.Timer {
+	return guideTimer{g.c.AfterFunc(d, f)}
+}
+
+// guideTimer is a tunnelTimer as a route.Timer; the guide never resets
+// its timers.
+type guideTimer struct{ tunnel.Timer }
+
+func (guideTimer) Reset(time.Duration) bool { panic("guideTimer: Reset not supported") }
+
+// TestRunEPGSourceIdleClose: EPG fetches are not activity (spec 2.1,
+// 6.1). A tunnel used only by a failing EPG source, retried every 10
+// minutes, starts for each fetch and closes when it ends.
+func TestRunEPGSourceIdleClose(t *testing.T) {
+	peer := tunneltest.Start(t, tunneltest.Options{Handler: newUpstream()}) // every path 404
+	peer.SetHost("epg.test", tunneltest.ServerAddr4)
+	dir := writeConfig(t, map[string]string{
+		"config.toml": "[tunnels]\nidle_timeout = \"25m\"\n" +
+			"[[epg.source]]\nname = \"vpn\"\nurl = \"http://epg.test/epg.xml\"\ntunnel = \"gr\"\n",
+		"tunnels/gr.conf":    peer.ClientConfig(),
+		"channels.d/tv.toml": epgOneChannel,
+	})
+	clk := newTunnelClock()
+	e := startRun(t, dir, 0, func(o *RunOptions) {
+		o.TunnelClock = clk
+		o.EPGClock = guideClock{clk}
+	})
+	count := func(s string) int { return strings.Count(e.logs.String(), s) }
+
+	// The startup fetch and two retries: each starts the tunnel, fails
+	// and closes it.
+	for i := 1; i <= 3; i++ {
+		if i > 1 {
+			clk.advance(epg.RetryInterval)
+		}
+		clk.waitArmed(t, epg.RetryInterval)
+		clk.waitArmed(t, 0)
+		clk.advance(0)
+		if n := count(`msg="epg source failed`); n != i {
+			t.Fatalf("failed fetches = %d, want %d\n%s", n, i, e.logs.String())
+		}
+		if n := count(`msg="tunnel closed" tunnel=gr reason=idle`); n != i {
+			t.Fatalf("idle closes = %d, want %d\n%s", n, i, e.logs.String())
+		}
+		if n := count(`msg="tunnel started" tunnel=gr`); n != i {
+			t.Fatalf("tunnel starts = %d, want %d\n%s", n, i, e.logs.String())
+		}
 	}
 }
