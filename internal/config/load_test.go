@@ -380,6 +380,68 @@ func TestLoadDirs(t *testing.T) {
 	})
 }
 
+// TestLoadSkipsDotfiles: names starting with "." in channels.d and the
+// tunnels dir are not config files (spec 5.1): AppleDouble files from
+// macOS and Emacs lock links neither fail nor change the loaded config.
+// A dangling link with a normal name stays an error.
+func TestLoadSkipsDotfiles(t *testing.T) {
+	dir := writeConfigDir(t, map[string]string{
+		"channels.d/gr.toml":        ch(),
+		"channels.d/_defaults.toml": "[defaults.playlist]\nattrs = { x = \"y\" }\n",
+		"tunnels/gr.conf":           "",
+	})
+	base, err := loadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := json.Marshal(dumpConfig(base))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for f, content := range map[string]string{
+		"channels.d/._gr.toml":    "\x00\x05\x16\x07 not toml",
+		"channels.d/._tv.toml":    "\x00\x05\x16\x07 not toml",
+		"channels.d/.hidden.toml": ch(),
+		"tunnels/._gr.conf":       "\x00\x05\x16\x07 not wg-quick",
+		"tunnels/.Bad Name.conf":  "",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, filepath.FromSlash(f)), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, f := range []string{"channels.d/.#tv.toml", "tunnels/.#gr.conf"} {
+		if err := os.Symlink("nobody@host.1234", filepath.Join(dir, filepath.FromSlash(f))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := loadDir(dir)
+	if err != nil {
+		t.Fatalf("Load() with dotfiles: %v", err)
+	}
+	gotJSON, err := json.Marshal(dumpConfig(got))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(gotJSON) != string(want) {
+		t.Errorf("dotfiles changed the loaded config\n--- got\n%s\n--- want\n%s", gotJSON, want)
+	}
+
+	t.Run("dangling link with a normal name is an error", func(t *testing.T) {
+		if err := os.Symlink("nobody@host.1234", filepath.Join(dir, "channels.d", "tv.toml")); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := loadDir(dir); err == nil || !strings.Contains(err.Error(), "tv.toml") {
+			t.Fatalf("Load() error = %v, want an error naming tv.toml", err)
+		}
+	})
+	t.Run("reserved underscore names stay reserved", func(t *testing.T) {
+		d := writeConfigDir(t, map[string]string{"channels.d/_tv.toml": ""})
+		if _, err := loadDir(d); err == nil || !strings.Contains(err.Error(), "reserved file name") {
+			t.Fatalf("Load() error = %v, want reserved file name", err)
+		}
+	})
+}
+
 func TestLoadOverrides(t *testing.T) {
 	dir := writeConfigDir(t, map[string]string{
 		"config.toml": "listen = \":1000\"\nlog_level = \"warn\"\nlog_format = \"json\"\npublic_base_url = \"http://a.example.com\"\n",

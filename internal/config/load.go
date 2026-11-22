@@ -123,7 +123,11 @@ func loadTunnels(dir string) ([]Tunnel, []error) {
 }
 
 // listFiles returns the regular files (symlinks followed) in dir with the
-// given suffix, sorted, non-recursively. A missing dir is empty.
+// given suffix, sorted, non-recursively. A missing dir is empty. Names
+// starting with "." are not config files and are skipped (spec 5.1):
+// AppleDouble files (._tv.toml) and editor lock links (.#tv.toml). Load
+// and Fingerprint (the file watcher) both list through here, so they
+// always see the same file set.
 func listFiles(dir, suffix string) ([]string, []error) {
 	entries, err := os.ReadDir(dir)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -135,7 +139,7 @@ func listFiles(dir, suffix string) ([]string, []error) {
 	var files []string
 	var errs []error
 	for _, e := range entries {
-		if !strings.HasSuffix(e.Name(), suffix) {
+		if strings.HasPrefix(e.Name(), ".") || !strings.HasSuffix(e.Name(), suffix) {
 			continue
 		}
 		p := filepath.Join(dir, e.Name())
