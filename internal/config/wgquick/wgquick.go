@@ -109,6 +109,26 @@ func (t *Tunnel) Allows(addr netip.Addr) bool {
 	return false
 }
 
+// hasAddressOf reports whether the tunnel has an interface address of the
+// family of addr (IPv4-mapped IPv6 counts as IPv4).
+func (t *Tunnel) hasAddressOf(addr netip.Addr) bool {
+	is4 := addr.Unmap().Is4()
+	for _, p := range t.Addresses {
+		if p.Addr().Is4() == is4 {
+			return true
+		}
+	}
+	return false
+}
+
+// Reaches reports whether addr can be reached through the tunnel: it is
+// inside AllowedIPs and the tunnel has an interface address of its
+// family. The DNS servers of the tunnel are filtered with this rule, at
+// runtime and for the warnings of Parse.
+func (t *Tunnel) Reaches(addr netip.Addr) bool {
+	return t.hasAddressOf(addr) && t.Allows(addr)
+}
+
 // Equal reports whether t and u are the same tunnel: same name and same
 // parsed values. Comments, formatting and key case of the files do not
 // count. A nil u is never equal.
@@ -156,8 +176,10 @@ func canonical(names ...string) map[string]string {
 }
 
 type parser struct {
-	t          *Tunnel
-	warns      []Warning
+	t     *Tunnel
+	warns []Warning
+	// dnsLines are the file lines of t.DNS, for the warnings of finish.
+	dnsLines   []int
 	sec        section
 	interfaces int
 	peers      int
@@ -345,6 +367,7 @@ func (p *parser) list(n int, name, value string) error {
 				return p.errorf(n, "invalid DNS")
 			}
 			p.t.DNS = append(p.t.DNS, addr.Unmap())
+			p.dnsLines = append(p.dnsLines, n)
 		}
 	}
 	return nil
@@ -375,6 +398,25 @@ func (p *parser) finish() error {
 	}
 	if len(p.t.DNS) == 0 {
 		p.warn(0, "no DNS server: upstream host names cannot be resolved")
+		return nil
+	}
+	reachable := 0
+	for i, a := range p.t.DNS {
+		switch {
+		case p.t.Reaches(a):
+			reachable++
+		case !p.t.hasAddressOf(a):
+			family := "IPv6"
+			if a.Is4() {
+				family = "IPv4"
+			}
+			p.warn(p.dnsLines[i], fmt.Sprintf("DNS server %s ignored: tunnel has no %s address", a, family))
+		default:
+			p.warn(p.dnsLines[i], fmt.Sprintf("DNS server %s ignored: outside AllowedIPs", a))
+		}
+	}
+	if reachable == 0 {
+		p.warn(0, "no reachable DNS server: upstream host names cannot be resolved")
 	}
 	return nil
 }
