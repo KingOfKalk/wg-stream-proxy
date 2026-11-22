@@ -12,7 +12,7 @@ Companion to [spec.md](spec.md). All variants use the same config layout (spec 5
 
 ## Standalone
 
-Every release has a binary for `linux/amd64`, `linux/arm64` and `darwin/arm64` ([`binaries.yml`](../.github/workflows/binaries.yml)): `wg-stream-proxy_<version>_<os>_<arch>.tar.gz` (the binary, `LICENSE`, `README.md`) and `SHA256SUMS`; no Go toolchain needed. Download, verify and unpack (set the version and the target `<os>_<arch>`):
+Every release from v0.5.4 on has a binary for `linux/amd64`, `linux/arm64` and `darwin/arm64` ([`binaries.yml`](../.github/workflows/binaries.yml)): `wg-stream-proxy_<version>_<os>_<arch>.tar.gz` (the binary, `LICENSE`, `README.md`) and `SHA256SUMS`; no Go toolchain needed. Download, verify and unpack (set the version and the target `<os>_<arch>`):
 
 <!-- x-release-please-start-version -->
 ```bash
