@@ -695,7 +695,7 @@ func (t *Tunnel) startDevice() (*running, error) {
 	r := &running{
 		dev: device.NewDevice(tun, conn.NewDefaultBind(), wgLogger(m.opts.Logger, t.cfg.Name)),
 		net: tnet,
-		dns: newDNSClient(tnet, t.dns, t.dnsTypes, m.opts.Clock),
+		dns: newDNSClient(tnet, t.dns, t.dnsTypes, m.opts.Clock, m.connect),
 	}
 	// IpcSet errors may quote the configuration: never pass them on
 	// (wgLogger drops wireguard-go's own log line of them).
