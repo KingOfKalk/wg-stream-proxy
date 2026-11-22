@@ -26,3 +26,10 @@ services:
       test: ["CMD", "/wg-stream-proxy", "healthcheck"]
       interval: 30s
       timeout: 5s
+    # Keeps the log across restarts and reboots, at most 50 MB (docs/deploy.md);
+    # a recreated container starts with an empty log.
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+        max-file: "5"
