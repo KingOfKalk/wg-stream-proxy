@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/KingOfKalk/wg-stream-proxy/compare/v0.5.4...v0.6.0) (2026-11-22)
+
+
+### Features
+
+* **release:** release binaries for linux/amd64, linux/arm64 and darwin/arm64 ([#204](https://github.com/KingOfKalk/wg-stream-proxy/issues/204)) ([3a4e075](https://github.com/KingOfKalk/wg-stream-proxy/commit/3a4e07561f8444c6c3af0db34c49aaafbca31c02))
+
 ## [0.5.4](https://github.com/KingOfKalk/wg-stream-proxy/compare/v0.5.3...v0.5.4) (2026-11-22)
 
 
