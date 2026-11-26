@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.6.1](https://github.com/KingOfKalk/wg-stream-proxy/compare/v0.6.0...v0.6.1) (2026-11-26)
+
+
+### Bug Fixes
+
+* **deps:** bump distroless/static from `aafe993` to `8ce6dd8` ([#207](https://github.com/KingOfKalk/wg-stream-proxy/issues/207)) ([70cee25](https://github.com/KingOfKalk/wg-stream-proxy/commit/70cee25af34aacb6ec8048154020cf2f96b0727b))
+
+
+### Chores
+
+* **deps:** bump actions/create-github-app-token from 3.3.0 to 3.4.0 ([#206](https://github.com/KingOfKalk/wg-stream-proxy/issues/206)) ([cdf37cf](https://github.com/KingOfKalk/wg-stream-proxy/commit/cdf37cf7d1fbed73471fdeafabf08b5418530591))
+
 ## [0.6.0](https://github.com/KingOfKalk/wg-stream-proxy/compare/v0.5.4...v0.6.0) (2026-11-22)
 
 
